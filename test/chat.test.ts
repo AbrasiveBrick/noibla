@@ -78,13 +78,14 @@ test('private messages: only the two participants, via history or live events; c
     assert.ok(!JSON.stringify(c.received).includes(secret));
     assert.ok(!c.received.some((e) => e.type === 'dm.message'));
 
-    // Operator sees that a DM happened, never its content or recipient.
+    // The operator dashboard shows private conversations in full (sender, recipient, text).
     const st = await w.operator();
-    const json = JSON.stringify(st);
-    assert.ok(!json.includes(secret) && !json.includes('bring the pickaxe'));
     const sent = st.events.filter((e: any) => e.type === 'dm.sent');
     assert.equal(sent.length, 3);
-    assert.deepEqual(Object.keys(sent[0].data).sort(), ['name', 'playerId']);
+    assert.equal(sent[0].data.text, secret);
+    assert.equal(sent[0].data.playerId, alpha.playerId);
+    assert.equal(sent[0].data.toId, bravo.playerId);
+    assert.equal(sent[0].data.conversationId, hist.conversationId);
 
     // A reconnecting client with the same token sees the same persisted history.
     const again = attach(w.url, b.botToken);

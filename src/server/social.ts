@@ -146,8 +146,8 @@ function dmSend(g: Game, p: Player, payload: Record<string, any>) {
   const message = dmRow(g, { id: Number(res.lastInsertRowid), conversation_id: convId, from_id: p.id, to_id: to, text, ts });
   markRead(g, p.id, convId, message.id);
   g.emit('dm.message', { kind: 'dm', a: p.id, b: to }, { message }, {});
-  // Operator sees only that a private message was sent: no content, no recipient.
-  g.emit('dm.sent', { kind: 'operator' }, { playerId: p.id, name: p.name }, { actor: p });
+  // The operator dashboard shows private conversations in full. Other players never see them.
+  g.emit('dm.sent', { kind: 'operator' }, { playerId: p.id, name: p.name, toId: to, toName: target!.name, conversationId: convId, messageId: message.id, text }, { actor: p });
   g.setLastAction(p, 'dm', 'sent a private message');
   return { message };
 }
