@@ -3,7 +3,7 @@
 // When both lock, both submissions transfer atomically, whatever they contain.
 // If the lock deadline passes first, reservations return and nothing moves.
 
-import { TRADE_SILVER_FEE, type ItemStack } from '../shared/catalog.ts';
+import { TRADE_SILVER_FEE, baseOf, type ItemStack } from '../shared/catalog.ts';
 import type { TradeReceipt, TradeView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Player, Trade } from './types.ts';
@@ -124,8 +124,7 @@ function setSubmission(g: Game, p: Player, t: Trade, items: ItemStack[]) {
   g.markTrade(t);
   g.markPlayer(p);
   if (prev) addItems(p.inventory, toStacks(prev.items));
-  removeItems(p.inventory, items);
-  t.subs[p.id] = { items: toBag(items), locked: false, lockedAt: null };
+  t.subs[p.id] = { items: toBag(removeItems(p.inventory, items)), locked: false, lockedAt: null };
 }
 
 function submit(g: Game, p: Player, payload: Record<string, any>) {
@@ -217,8 +216,8 @@ function settle(g: Game, t: Trade) {
   for (const [from, to] of [[a, b], [b, a]]) {
     for (const [item, qty] of Object.entries(t.subs[from.id].items)) {
       if (qty <= 0) continue;
-      questProgress(g, from, 'deliver', item, qty);
-      questProgress(g, to, 'procure', item, qty);
+      questProgress(g, from, 'deliver', baseOf(item), qty);
+      questProgress(g, to, 'procure', baseOf(item), qty);
     }
   }
   for (const p of [a, b]) g.setLastAction(p, 'trade', `trade settled (received ${describe(toStacks(t.subs[other(t, p.id)].items))})`);

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { ITEMS, type ItemStack } from '../shared/catalog.ts';
+import { baseOf, isUnique, itemDef, type ItemStack } from '../shared/catalog.ts';
 import type { ErrorCode } from '../shared/protocol.ts';
 import { TRANSIENT_ERRORS } from '../shared/protocol.ts';
 
@@ -96,7 +96,7 @@ export function stacks(input: unknown, key = 'items', allowEmpty = true): ItemSt
   for (const s of arr) {
     if (!s || typeof s !== 'object') fail('BAD_REQUEST', `${key} entries must be { item, qty }`);
     const { item, qty } = s as Record<string, unknown>;
-    if (typeof item !== 'string' || !ITEMS[item]) fail('BAD_REQUEST', `unknown item "${String(item)}"`);
+    if (typeof item !== 'string' || !itemDef(item) || (isUnique(item) && !/^[a-z_]+#[0-9a-f]{8,16}$/.test(item))) fail('BAD_REQUEST', `unknown item "${String(item)}"`);
     if (typeof qty !== 'number' || !Number.isInteger(qty) || qty < 1 || qty > 1_000_000) fail('BAD_REQUEST', `qty for ${String(item)} must be a positive integer`);
     merged[item as string] = (merged[item as string] ?? 0) + (qty as number);
   }
@@ -115,29 +115,52 @@ export function toBag(list: ItemStack[]): Bag {
   return b;
 }
 
+/**
+ * How many of `item` the bag can supply. A unique id (`iron_sword#…`) counts only itself; a base id (`iron_sword`)
+ * counts the plain stack plus every unique of that base, so "1× iron_sword" can be paid with a crafted sword.
+ */
+export function available(bag: Bag, item: string): number {
+  if (isUnique(item)) return bag[item] ?? 0;
+  let n = bag[item] ?? 0;
+  for (const [k, q] of Object.entries(bag)) if (q > 0 && isUnique(k) && baseOf(k) === item) n += q;
+  return n;
+}
+
 export function hasItems(bag: Bag, list: ItemStack[], times = 1): boolean {
-  return list.every((s) => (bag[s.item] ?? 0) >= s.qty * times);
+  return list.every((s) => available(bag, s.item) >= s.qty * times);
 }
 
 export function missing(bag: Bag, list: ItemStack[], times = 1): string {
-  return list.filter((s) => (bag[s.item] ?? 0) < s.qty * times).map((s) => `${s.item} (have ${bag[s.item] ?? 0}, need ${s.qty * times})`).join(', ');
+  return list.filter((s) => available(bag, s.item) < s.qty * times).map((s) => `${s.item} (have ${available(bag, s.item)}, need ${s.qty * times})`).join(', ');
 }
 
-export function removeItems(bag: Bag, list: ItemStack[], times = 1) {
+/** Removes items and returns the concrete stacks taken (base ids may be paid with uniques of that base: plain stack first, then uniques by id). */
+export function removeItems(bag: Bag, list: ItemStack[], times = 1): ItemStack[] {
   if (!hasItems(bag, list, times)) fail('NOT_ENOUGH_ITEMS', `missing ${missing(bag, list, times)}`);
+  const taken: Bag = {};
+  const take = (k: string, n: number) => { bag[k] -= n; if (bag[k] <= 0) delete bag[k]; taken[k] = (taken[k] ?? 0) + n; };
   for (const s of list) {
-    bag[s.item] -= s.qty * times;
-    if (bag[s.item] <= 0) delete bag[s.item];
+    let need = s.qty * times;
+    const plain = Math.min(need, bag[s.item] ?? 0);
+    if (plain > 0) { take(s.item, plain); need -= plain; }
+    if (need > 0 && !isUnique(s.item)) {
+      for (const k of Object.keys(bag).filter((k) => isUnique(k) && baseOf(k) === s.item).sort()) {
+        if (need <= 0) break;
+        const n = Math.min(need, bag[k]);
+        take(k, n); need -= n;
+      }
+    }
   }
+  return toStacks(taken);
 }
 
 export function addItems(bag: Bag, list: ItemStack[], times = 1) {
   for (const s of list) bag[s.item] = (bag[s.item] ?? 0) + s.qty * times;
 }
 
-/** True when `sent` covers every promised quantity. */
+/** True when `sent` covers every promised quantity (a promised base id is covered by uniques of that base). */
 export function covers(sent: Bag, promised: Bag): boolean {
-  return Object.entries(promised).every(([item, qty]) => (sent[item] ?? 0) >= qty);
+  return Object.entries(promised).every(([item, qty]) => available(sent, item) >= qty);
 }
 
 export function describe(list: ItemStack[]): string {

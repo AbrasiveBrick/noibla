@@ -239,7 +239,7 @@
   const SNAP_GAP_MS = 150_000; // longer than ~2 snapshot intervals: the server was down, leave the strip blank
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const nm = (id) => items[id] || id;
+  const nm = (id) => items[id] || (id.includes('#') ? `${items[id.split('#')[0]] || id.split('#')[0]} #${id.split('#')[1].slice(0, 4)}` : id);
   const stacks = (list) => (list && list.length) ? list.map((s) => `${s.qty}× ${esc(nm(s.item))}`).join(', ') : '<span class="muted">nothing</span>';
   const t = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
   const ago = (ts) => { const s = Math.max(0, Math.round((Date.now() - ts) / 1000)); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`; };
