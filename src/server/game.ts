@@ -3,6 +3,7 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { MOB_TYPES, NODE_TYPES, STARTER_KIT, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } from '../shared/catalog.ts';
+import { generateMap, nearestWalkable, regionAt, type WorldMap } from '../shared/map.ts';
 import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/protocol.ts';
 import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
@@ -18,6 +19,8 @@ export interface GameOptions {
   /** World speed multiplier: all action durations are divided by it. */
   speed?: number;
   seed?: number;
+  /** Seed of the procedurally generated map. Used only when the database has no map yet (a new world); afterwards the stored seed wins. Default: random. */
+  mapSeed?: number;
   /** Operator credential for the dashboard. Must differ from any bot token. */
   operatorToken?: string;
   now?: () => number;
@@ -45,6 +48,8 @@ export class Game {
   readonly operatorToken: string;
   readonly now: () => number;
   readonly log: (line: string) => void;
+  /** The world map, generated once per world from a persisted seed. */
+  readonly map: WorldMap;
 
   readonly players = new Map<string, Player>();
   readonly mobs = new Map<string, Mob>();
@@ -84,6 +89,13 @@ export class Game {
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
     this.commands = { ...worldCommands, ...socialCommands, ...tradeCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
+    // Procedural map: generated when the world is created; the seed is stored so restarts rebuild the same map.
+    let mapSeed = Number(this.store.getMeta('map_seed') ?? NaN);
+    if (!Number.isFinite(mapSeed)) {
+      mapSeed = (opts.mapSeed ?? randomBytes(4).readUInt32BE(0)) >>> 0;
+      this.store.setMeta('map_seed', String(mapSeed));
+    }
+    this.map = generateMap(mapSeed, Object.values(ZONES).map((z) => ({ region: z.id, nodes: z.nodes, mobs: z.mobs })));
     this.load();
     bindUniques(this.uniques);
     backfillEconomyLedger(this.store);
@@ -99,7 +111,7 @@ export class Game {
 
   private load() {
     for (const row of this.store.all<{ id: string; name: string; token_hash: string; data: string }>('SELECT id, name, token_hash, data FROM players')) {
-      const p = JSON.parse(row.data) as Player;
+      const p = this.migratePlayer(JSON.parse(row.data));
       // Players from before the tool slot get the starter tool kit once.
       if (!p.toolKit) { for (const k of STARTER_KIT) p.inventory[k.item] = (p.inventory[k.item] ?? 0) + k.qty; p.toolKit = true; this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id); }
       this.players.set(p.id, p);
@@ -112,6 +124,7 @@ export class Game {
     }
     for (const row of this.store.all<{ data: string }>('SELECT data FROM loot_bags')) {
       const b = JSON.parse(row.data) as LootBag;
+      if (b.x === undefined || b.y === undefined) { b.x = this.map.anchors[b.zone].x; b.y = this.map.anchors[b.zone].y; }
       this.bags.set(b.id, b);
     }
     for (const row of this.store.all<{ data: string }>('SELECT data FROM trades')) {
@@ -120,20 +133,22 @@ export class Game {
     }
   }
 
+  /** Saves from before the map existed have a zone (or a zone-to-zone trip) but no position. */
+  private migratePlayer(p: Player & { travel: any }): Player {
+    if (p.travel && !Array.isArray(p.travel.path)) { p.zone = p.travel.to; p.travel = null; }
+    const zone: ZoneId = p.zone && ZONES[p.zone] ? p.zone : 'town';
+    if (!p.pos) p.pos = { ...this.map.anchors[zone] };
+    else if (!p.travel) p.pos = nearestWalkable(this.map, p.pos);
+    p.zone = regionAt(this.map, p.pos);
+    return p;
+  }
+
   private spawnWorld() {
-    for (const zone of Object.values(ZONES)) {
-      for (const spawn of zone.nodes) {
-        for (let i = 1; i <= spawn.count; i++) {
-          const id = `n_${zone.id}_${spawn.type}_${i}`;
-          this.nodes.set(id, { id, type: spawn.type, zone: zone.id, charges: NODE_TYPES[spawn.type].maxCharges, nextChargeAt: 0 });
-        }
-      }
-      for (const spawn of zone.mobs) {
-        for (let i = 1; i <= spawn.count; i++) {
-          const id = `m_${zone.id}_${spawn.type}_${i}`;
-          this.mobs.set(id, { id, type: spawn.type, zone: zone.id, hp: MOB_TYPES[spawn.type].hp, aggro: {}, targetId: null, nextAttackAt: 0, deadUntil: 0 });
-        }
-      }
+    for (const n of this.map.nodes) {
+      this.nodes.set(n.id, { id: n.id, type: n.type, zone: n.region, x: n.x, y: n.y, charges: NODE_TYPES[n.type].maxCharges, nextChargeAt: 0 });
+    }
+    for (const s of this.map.mobSpawns) {
+      this.mobs.set(s.id, { id: s.id, type: s.type, zone: s.region, x: s.x, y: s.y, home: { x: s.x, y: s.y }, hp: MOB_TYPES[s.type].hp, aggro: {}, targetId: null, nextAttackAt: 0, deadUntil: 0 });
     }
   }
 
@@ -236,8 +251,8 @@ export class Game {
     const p = this.players.get(sub.playerId);
     if (!p) return false;
     switch (vis.kind) {
-      case 'zone': return p.travel === null && p.zone === vis.zone;
-      case 'forum': return p.travel === null && p.zone === 'town';
+      case 'zone': return p.zone === vis.zone;
+      case 'forum': return p.zone === 'town';
       case 'player': return vis.playerId === p.id;
       case 'dm': return vis.a === p.id || vis.b === p.id;
       case 'operator': return false;
@@ -270,7 +285,7 @@ export class Game {
     const token = `bot_${randomBytes(24).toString('hex')}`;
     const now = this.now();
     const p: Player = {
-      id: newId('p'), name, createdAt: now, zone: 'town', travel: null, hp: BASE_HP,
+      id: newId('p'), name, createdAt: now, zone: 'town', pos: { ...this.map.spawn }, travel: null, hp: BASE_HP,
       inventory: { silver: STARTING_SILVER, ...Object.fromEntries(STARTER_KIT.map((s) => [s.item, s.qty])) }, bank: {}, equipment: {}, toolKit: true, skills: {},
       busyUntil: 0, cooldowns: {}, evadeUntil: 0, braceUntil: 0, lastCombatAt: 0, combatLockUntil: 0, lastRegenAt: 0, wear: {},
       quests: {}, stats: { kills: 0, deaths: 0 }, lastAction: { type: 'register', summary: 'arrived in Brightwater', at: now }, lastSeenAt: now,

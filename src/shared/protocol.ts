@@ -2,15 +2,16 @@
 // Commands:  POST /api/command   { commandId, type, payload }  ->  CommandResponse
 // Events:    GET  /api/events    (Server-Sent Events, one JSON GameEvent per message)
 
-import type { AbilityId, ItemStack, Safety, Slot, StationId, ZoneId, CATALOG } from './catalog.ts';
+import type { AbilityId, ItemStack, Safety, Slot, ZoneId, CATALOG } from './catalog.ts';
+import type { MAP_RULES, PlaceId, Pos, WorldMap } from './map.ts';
 
-export type { ItemStack, ZoneId };
+export type { ItemStack, ZoneId, Pos, PlaceId, WorldMap };
 
 export type ErrorCode =
   | 'BAD_REQUEST' | 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'UNKNOWN_COMMAND'
   | 'IDEMPOTENCY_CONFLICT' | 'RATE_LIMITED'
   | 'BUSY' | 'TRAVELING' | 'COMBAT_LOCKED' | 'ON_COOLDOWN'
-  | 'WRONG_ZONE' | 'NOT_ADJACENT' | 'NO_STATION' | 'SAFE_ZONE'
+  | 'WRONG_ZONE' | 'NOT_ADJACENT' | 'NO_STATION' | 'OUT_OF_RANGE' | 'SAFE_ZONE'
   | 'DEPLETED' | 'TOOL_REQUIRED' | 'SKILL_TOO_LOW' | 'FOCUS_REQUIRED'
   | 'NOT_ENOUGH_ITEMS' | 'NOT_EQUIPPABLE' | 'INVALID_TARGET' | 'TARGET_DEAD' | 'ABILITY_UNAVAILABLE'
   | 'QUEST_STATE' | 'TRADE_STATE' | 'TRADE_EXPIRED' | 'NAME_TAKEN' | 'INTERNAL';
@@ -37,13 +38,18 @@ export type CommandResponse<R = unknown> =
 /** `level` is what counts for rules: the full `trainedLevel` when the skill is focused, else capped at catalog.focus.unfocusedLevelCap. */
 export interface SkillView { xp: number; level: number; trainedLevel: number; focused: boolean }
 export interface AbilityView { id: AbilityId; kind: 'attack' | 'buff'; readyInMs: number; source: string }
-export interface TravelView { from: ZoneId; to: ZoneId; arriveAt: number; arriveInMs: number }
+/** A walk in progress. `from`/`to` are the regions at the start and at the destination tile `dest`. */
+export interface TravelView { from: ZoneId; to: ZoneId; dest: Pos; target?: string; arriveAt: number; arriveInMs: number }
 export interface QuestProgress { questId: string; status: 'active' | 'complete' | 'claimed'; progress: number; goal: number }
 
 export interface SelfView {
   id: string;
   name: string;
-  zone: ZoneId | null;
+  /** The region you are in (town, wilds or frontier). Always set, also while walking. */
+  zone: ZoneId;
+  /** Live map position (tiles, 0.1 precision while walking). */
+  pos: Pos;
+  /** The walk in progress, or null when standing still. */
   travel: TravelView | null;
   hp: number;
   maxHp: number;
@@ -69,8 +75,14 @@ export interface FocusView { skills: string[]; slots: number; unfocusedLevelCap:
 /** Equipped item state. Unique items add their item level, rarity, corruption and readable affix lines. */
 export interface GearWearView { item: string; wear: number; broken: boolean; repairCost: number; ilvl?: number; rarity?: Rarity; corrupted?: boolean; affixes?: string[] }
 
-export interface NodeView { id: string; type: string; item: string; tier: number; charges: number; maxCharges: number; nextChargeInMs: number }
-export interface MobView { id: string; type: string; name: string; hp: number; maxHp: number; alive: boolean; respawnInMs: number; targetId: string | null }
+/** Where something is relative to you. `inRange`: close enough to gather / attack / loot / use it right now. */
+export interface Located { x: number; y: number; distance: number; inRange: boolean }
+export interface PlaceView extends Located { id: PlaceId }
+export interface NodeView extends Located { id: string; type: string; item: string; tier: number; region: ZoneId; charges: number; maxCharges: number; nextChargeInMs: number }
+/** Dead mobs are shown at their home tile, where they respawn. */
+export interface MobView extends Located { id: string; type: string; name: string; region: ZoneId; hp: number; maxHp: number; alive: boolean; respawnInMs: number; targetId: string | null }
+export interface OtherPlayerView extends Located { id: string; name: string; region: ZoneId; walking: boolean; hpPct: number; equipment: Partial<Record<Slot, string>>; inCombat: boolean }
+export interface LootBagView extends Located { id: string; region: ZoneId; ownerId: string; ownerName: string; items: ItemStack[]; expiresInMs: number }
 export type Rarity = 'normal' | 'magic' | 'rare';
 /** One rolled modifier on a unique item (see catalog().affixes). */
 export interface AffixRoll { id: string; tier: number; value: number }
@@ -93,15 +105,19 @@ export interface UniqueItem {
   craftedAt: number;
 }
 
-export interface OtherPlayerView { id: string; name: string; hpPct: number; equipment: Partial<Record<Slot, string>>; inCombat: boolean }
-export interface LootBagView { id: string; ownerId: string; ownerName: string; items: ItemStack[]; expiresInMs: number }
 
+/**
+ * Your region's rules plus everything within `viewRadius` tiles of you (in any region), nearest first.
+ * (Named `zone` for compatibility: regions were zones before the world became a map.)
+ */
 export interface ZoneView {
   id: ZoneId;
   name: string;
   safety: Safety;
   adjacent: ZoneId[];
-  stations: StationId[];
+  viewRadius: number;
+  /** Bank, crafting stations, quest board and shop within view. Use one within catalog.map.range.place tiles. */
+  places: PlaceView[];
   hasBank: boolean;
   hasForum: boolean;
   hasQuestBoard: boolean;
@@ -115,10 +131,12 @@ export interface ZoneView {
 export interface Observation {
   now: number;
   self: SelfView;
-  zone: ZoneView | null;
+  zone: ZoneView;
   unreadDms: number;
   openTrades: number;
 }
+
+export type MapCatalog = WorldMap & typeof MAP_RULES;
 
 // ---------- Chat ----------
 
@@ -219,11 +237,16 @@ type Empty = Record<string, never>;
 export interface Commands {
   // World & observation
   observe: { payload: Empty; result: Observation };
-  catalog: { payload: Empty; result: typeof CATALOG };
+  /** `map`: the procedurally generated world map of this server plus the fixed MAP_RULES. */
+  catalog: { payload: Empty; result: typeof CATALOG & { map: MapCatalog } };
   'player.lookup': { payload: { name: string }; result: { playerId: string; name: string } };
-  'player.get': { payload: { playerId: string }; result: { id: string; name: string; online: boolean; zone: ZoneId | null; createdAt: number } };
+  'player.get': { payload: { playerId: string }; result: { id: string; name: string; online: boolean; zone: ZoneId | null; pos: Pos | null; createdAt: number } };
   // Movement
-  move: { payload: { to: ZoneId }; result: { travel: TravelView } };
+  /**
+   * Walk somewhere. `to`: a region (walks to its anchor), a place (bank, forge, …), or the id of a node, mob, loot bag
+   * or player (walks into interaction range). Or exact tile coordinates { x, y }. `travel` is null when already there.
+   */
+  move: { payload: { to: string } | { x: number; y: number }; result: { travel: TravelView | null; pos: Pos; distance: number } };
   // Skills: gathering, refining, crafting
   gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number } };
   /** `bonus`: extra outputs from focused specialization (already included in `output.qty`). */

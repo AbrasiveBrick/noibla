@@ -1,5 +1,6 @@
 // Server entrypoint.
-//   PORT=7777 OPERATOR_PORT=7778 WORLD_SPEED=1 DB_PATH=data/world.db OPERATOR_TOKEN=... node src/server/main.ts
+//   PORT=7777 OPERATOR_PORT=7778 WORLD_SPEED=1 DB_PATH=data/world.db OPERATOR_TOKEN=... [MAP_SEED=123] node src/server/main.ts
+// The map is generated procedurally when a new world (database) is created; MAP_SEED fixes it, otherwise it is random.
 // Bots get PORT only. The dashboard and /operator/state live on OPERATOR_PORT.
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -26,7 +27,8 @@ export async function startServer(opts: Partial<GameOptions> & { port?: number; 
   const dbPath = opts.dbPath ?? process.env.DB_PATH ?? 'data/world.db';
   const operatorToken = opts.operatorToken ?? resolveOperatorToken(dbPath);
   if (operatorToken.startsWith('bot_')) throw new Error('operator token must not look like a bot token');
-  const game = new Game({ ...opts, dbPath, operatorToken, speed: opts.speed ?? Number(process.env.WORLD_SPEED ?? '1') });
+  const mapSeed = opts.mapSeed ?? (process.env.MAP_SEED ? Number(process.env.MAP_SEED) : undefined);
+  const game = new Game({ ...opts, dbPath, operatorToken, speed: opts.speed ?? Number(process.env.WORLD_SPEED ?? '1'), ...(mapSeed !== undefined ? { mapSeed } : {}) });
   game.start();
   const listen = async (server: Server, port: number, host: string) => {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve(); }); });

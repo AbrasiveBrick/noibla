@@ -25,9 +25,9 @@ function participantsOf(convId: string): [string, string] | null {
 
 function nameOf(g: Game, id: string) { return g.players.get(id)?.name ?? 'unknown'; }
 
-function requireInZone(g: Game, p: Player): ZoneId {
-  if (p.travel || !p.zone) fail('TRAVELING', 'zone channels are unavailable while traveling', p.travel ? p.travel.arriveAt - g.now() : undefined);
-  return p.zone!;
+/** Region chat: you hear and speak in the region you are in, also while walking. */
+function requireInZone(_g: Game, p: Player): ZoneId {
+  return p.zone;
 }
 
 // ---------- zone channels ----------
@@ -56,7 +56,7 @@ function chatHistory(g: Game, p: Player, payload: Record<string, any>) {
   const m = /^zone:(town|wilds|frontier)$/.exec(channel);
   if (!m) fail('NOT_FOUND', `unknown channel "${channel}"`);
   const zone = requireInZone(g, p);
-  if (m![1] !== zone) fail('FORBIDDEN', `you can only read the channel of the zone you are in (zone:${zone})`);
+  if (m![1] !== zone) fail('FORBIDDEN', `you can only read the channel of the region you are in (zone:${zone})`);
   const rows = g.store.all('SELECT id, channel, author_id, text, ts FROM chat_messages WHERE channel = ? AND id < ? ORDER BY id DESC LIMIT ?', channel, beforeId, limit);
   return { channel, messages: rows.reverse().map((r) => chatRow(g, r)) };
 }

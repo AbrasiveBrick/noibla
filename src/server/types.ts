@@ -1,4 +1,5 @@
 import type { AbilityId, SkillId, Slot, ZoneId } from '../shared/catalog.ts';
+import type { Pos } from '../shared/map.ts';
 import type { GameEvent } from '../shared/protocol.ts';
 import type { Bag } from './util.ts';
 import type { Game } from './game.ts';
@@ -7,8 +8,11 @@ export interface Player {
   id: string;
   name: string;
   createdAt: number;
-  zone: ZoneId | null;
-  travel: { from: ZoneId; to: ZoneId; departAt: number; arriveAt: number } | null;
+  /** Current region (derived from the position, kept up to date by the tick). */
+  zone: ZoneId;
+  /** Position on the map. While walking, the live position follows `travel.path` and this holds the last known one. */
+  pos: Pos;
+  travel: Walk | null;
   hp: number;
   inventory: Bag;
   bank: Bag;
@@ -35,10 +39,28 @@ export interface Player {
   focusDroppedAt?: number;
 }
 
+/** A walk along a path of tiles. The position at time t is pointAlong(path, (t - departAt) / msPerTile). */
+export interface Walk {
+  from: ZoneId;
+  to: ZoneId;
+  path: Pos[];
+  departAt: number;
+  arriveAt: number;
+  /** Scaled by world speed. */
+  msPerTile: number;
+  /** What the walk was aimed at (a region, place, node, mob, bag or player id), when given. */
+  target?: string;
+}
+
 export interface Mob {
   id: string;
   type: string;
   zone: ZoneId;
+  x: number;
+  y: number;
+  home: Pos;
+  /** Last tick that moved this mob (in memory only). */
+  movedAt?: number;
   hp: number;
   aggro: Record<string, number>;
   targetId: string | null;
@@ -50,6 +72,8 @@ export interface ResourceNode {
   id: string;
   type: string;
   zone: ZoneId;
+  x: number;
+  y: number;
   charges: number;
   nextChargeAt: number;
 }
@@ -57,6 +81,9 @@ export interface ResourceNode {
 export interface LootBag {
   id: string;
   zone: ZoneId;
+  /** Optional: bags saved before the map existed have none (placed at the region anchor on load). */
+  x?: number;
+  y?: number;
   ownerId: string;
   ownerName: string;
   items: Bag;

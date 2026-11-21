@@ -120,6 +120,8 @@ try {
   const stJson = JSON.stringify(st);
   const allTexts = dms.map((m) => m.text);
   const opDms = st.events.filter((e: GameEvent) => e.type === 'dm.sent').map((e: GameEvent) => e.data.text);
+  const cat = await clients.Producer.catalog();
+  expect('the map was generated for this world and the dashboard sees it with every bot\'s position', JSON.stringify(st.map.tiles) === JSON.stringify(cat.map.tiles) && st.bots.every((b: any) => Number.isFinite(b.pos?.x) && Number.isFinite(b.pos?.y)) && st.entities.mobs.length === cat.map.mobSpawns.length, `seed ${cat.map.seed}, ${cat.map.width}×${cat.map.height}`);
   expect('dashboard shows private message contents to the operator', allTexts.every((t) => opDms.includes(t)) && allTexts.some((t) => stJson.includes(t)), `${allTexts.length} DMs shown`);
   const lockFail = st.failures.find((f: any) => f.type === 'trade.lock');
   expect('trade.lock failure shows its real reason in the debug view', !!lockFail && lockFail.code === 'TRADE_STATE' && !/redacted/.test(lockFail.reason), lockFail?.reason);

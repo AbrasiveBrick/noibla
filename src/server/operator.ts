@@ -6,7 +6,8 @@ import { ITEMS, QUESTS, SKILLS, ZONES, levelFor, type SkillId } from '../shared/
 import type { GameEvent } from '../shared/protocol.ts';
 import { REPEAT_THRESHOLD, type Game } from './game.ts';
 import type { Store } from './store.ts';
-import { gearView, maxHp } from './world.ts';
+import { gearView, maxHp, posOf } from './world.ts';
+import { MOB_TYPES, NODE_TYPES } from '../shared/catalog.ts';
 import type { SnapshotData } from './types.ts';
 import { silverFee } from './trade.ts';
 import { toStacks } from './util.ts';
@@ -107,7 +108,8 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
     name: p.name,
     online: g.isOnline(p.id),
     zone: p.zone,
-    travel: p.travel ? { from: p.travel.from, to: p.travel.to, arriveInMs: Math.max(0, p.travel.arriveAt - now) } : null,
+    pos: (({ x, y }) => ({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 }))(posOf(g, p)),
+    travel: p.travel ? { from: p.travel.from, to: p.travel.to, dest: p.travel.path[p.travel.path.length - 1], target: p.travel.target ?? null, arriveInMs: Math.max(0, p.travel.arriveAt - now) } : null,
     hp: p.hp,
     maxHp: maxHp(p),
     equipment: { ...p.equipment },
@@ -148,6 +150,16 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
     now,
     speed: g.speed,
     zones: Object.values(ZONES).map((z) => ({ id: z.id, name: z.name, safety: z.safety })),
+    /** The generated map (static per world) and live positions of mobs, nodes and loot bags. Bots are in `bots[].pos`. */
+    map: g.map,
+    entities: {
+      mobs: [...g.mobs.values()].map((m) => {
+        const alive = m.hp > 0 && m.deadUntil <= now;
+        return { id: m.id, type: m.type, name: MOB_TYPES[m.type]?.name ?? m.type, x: Math.round((alive ? m.x : m.home.x) * 10) / 10, y: Math.round((alive ? m.y : m.home.y) * 10) / 10, alive, hp: m.hp, maxHp: MOB_TYPES[m.type]?.hp ?? 0, targetId: alive ? m.targetId : null };
+      }),
+      nodes: [...g.nodes.values()].map((n) => ({ id: n.id, type: n.type, item: NODE_TYPES[n.type]?.item ?? n.type, x: n.x, y: n.y, charges: n.charges, maxCharges: NODE_TYPES[n.type]?.maxCharges ?? 0 })),
+      bags: [...g.bags.values()].map((b) => ({ id: b.id, x: b.x ?? 0, y: b.y ?? 0, ownerName: b.ownerName, items: toStacks(b.items) })),
+    },
     items: Object.fromEntries(Object.values(ITEMS).map((i) => [i.id, i.name])),
     bots,
     events,

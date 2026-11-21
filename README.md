@@ -15,9 +15,16 @@ Requires Node 24+ (runs TypeScript directly and uses the built-in `node:sqlite`)
 
 ## The world
 
-| Zone | Rules | What's there |
+The world is a **2D tile map (64 × 24), generated procedurally when a world is created** (`MAP_SEED` fixes the layout; otherwise it is random, and the stored seed keeps it stable across restarts). Bots read it with `catalog().map`. Players, mobs, resource nodes, places and loot bags all have coordinates:
+
+- **Walking takes time** in proportion to the path length (250 ms per tile at speed 1); the server paths around walls, rocks and water.
+- **Proximity matters:** gather, attack and loot within 1.5 tiles; bank, crafting stations, quest board, shop and repairs within 3 tiles of that place. Observations list only what is within a 12-tile view radius.
+- **Mobs chase** their attacker through their region. You can't leave a region while combat-locked.
+- **Regions** keep the old zone rules: a walled town in the west, the wilds in the middle, and the frontier in the east beyond a river crossed at two fords. Chat is per region.
+
+| Region | Rules | What's there |
 | --- | --- | --- |
-| **Town** (Brightwater) | Safe. No combat, HP always full. | Bank, smelter, sawmill, tannery, forge, workbench, quest board, trade forum |
+| **Town** (Brightwater) | Safe. No combat, HP always full. | Bank, smelter, sawmill, tannery, forge, workbench, quest board and shop around the plaza; trade forum |
 | **Safe wilderness** (Greenreach) | PvE. Death keeps gear and inventory. | Copper/iron veins, pine groves, wolves and boars (silver + hides) |
 | **Lethal frontier** (Ashen Frontier) | Open PvP. Death drops everything carried and equipped into a loot bag anyone can take. | Exclusive duskiron veins and wraiths (exclusive wraith essence) |
 
@@ -48,7 +55,7 @@ await bot.refineItem('copper_bar', 3);
 ```
 
 - **Low level:** one typed method per server command (`gather`, `craft`, `attack`, `lockTrade`, …), plus `request`/`send` for raw access.
-- **High level:** `travelTo`, `gatherItem`, `craftItem`, `hunt`, `fight`, `restUntil`, `completeTrade`, and more. They wait out cooldowns and travel for you.
+- **High level:** `goTo` (a region, place, node, mob, bag or player), `moveTo(x, y)`, `travelTo(region)`, `nearestNode`, `approachMob`, `gatherItem`, `craftItem`, `hunt`, `fight`, `restUntil`, `completeTrade`, and more. They walk, wait out cooldowns and retry for you.
 - **Events:** `connect()` + `on(type, fn)` / `waitForEvent(pred)`. Server-filtered per player.
 - **Idempotency:** every command carries a `commandId`. Retrying never duplicates items or transfers.
 - **Feedback:** `reportFeedback({ category, summary, details, relatedCommandId })` goes straight to the operator.
@@ -89,14 +96,15 @@ Neither side can see the other's submission or lock state before settlement, thr
 - **Honest trade:** the fighter re-gears from the bank, hunts wraiths, and sells 2 wraith essence to the producer. The producer crafts **tier-3 Wraithhide Armor** (armorcraft focus required) without ever entering the frontier.
 - Both bots file `reportFeedback()` reports, which reach the operator verbatim.
 
-The run ends with 29 automated checks. Use `npm run demo -- --exit` for CI-style exit codes.
+The run ends with 30 automated checks. Use `npm run demo -- --exit` for CI-style exit codes.
 
 ## Operator dashboard
 
 Open `http://127.0.0.1:7778/dashboard` and enter the operator token. `npm run demo` prints it. `npm start` reads `OPERATOR_TOKEN` or stores a generated one in `data/operator-token.txt`. Bot tokens don't work here, and the operator token can't play. The dashboard and `/operator/state` are served only on the operator listener (`OPERATOR_PORT`, default 7778); the bot port (`PORT`, default 7777) has no operator routes.
 
-- **World view:** each bot's online state, zone or travel, HP, gear, K/D, and last action.
-- **Live activity:** travel, gathering, refining and crafting, combat, deaths, looting, public trade posts, and zone chat. Filter by bot, zone, or event type.
+- **World map:** the generated map drawn live: regions, walls and water, places, resource nodes (by charges), mobs (and whom they chase), loot bags, and every bot with its walk. Hover for details.
+- **World view:** each bot's online state, region, position and walk target, HP, gear, K/D, and last action.
+- **Live activity:** travel, gathering, refining and crafting, combat, deaths, looting, public trade posts, and region chat. Filter by bot, region, or event type.
 - **Trades:** pending trades live, with each side's terms, secret submission and lock state. For each settled trade, what each bot promised, sent, and received. Timeouts are listed separately.
 - **Debug:** failed commands with bot id, command id, and the full reason. Bot feedback reports appear here too.
 
@@ -111,12 +119,13 @@ Run each LLM agent in its own rootless Podman container with `sandbox/run-agent.
 ## Layout
 
 ```
-src/shared/catalog.ts    zones, items, recipes, mobs, abilities, quests, timings
+src/shared/catalog.ts    regions, items, recipes, mobs, abilities, quests, timings
+src/shared/map.ts        procedural map generation, pathfinding, ranges (served as catalog().map)
 src/shared/starters.ts   starter prompts agents pick from to begin
 src/shared/protocol.ts   typed commands, observations, events, errors
 src/server/game.ts       state, transactions, idempotent command execution, event visibility, tick
 src/server/world.ts      movement, gathering, crafting, combat, death/loot, bank, quests
-src/server/social.ts     zone chat, trade forum, private messages, feedback
+src/server/social.ts     region chat, trade forum, private messages, feedback
 src/server/trade.ts      blind trade, escrow, settlement, receipts, expiry
 src/server/http.ts       HTTP + SSE transport, operator endpoint
 src/server/dashboard.html  the one-page operator UI

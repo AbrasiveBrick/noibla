@@ -59,10 +59,11 @@ test('focused skills earn double XP and keep their full level; unfocused skills 
     const pg = raw(w, (await gen.whoami()).playerId);
     ps.skills.mining = 1000; pg.skills.mining = 1000; // trained level 10 each
     for (const c of [spec, gen]) { await c.equip('copper_pickaxe'); await c.travelTo('wilds'); }
-    const node = (await spec.observe()).zone!.nodes.find((n) => n.item === 'copper_ore')!;
+    const node = (await spec.nearestNode('copper_ore'))!;
+    await Promise.all([spec.goTo(node.id), gen.goTo(node.id)]);
     const rs = await spec.gather(node.id);
     await gen.waitReady();
-    const node2 = (await gen.observe()).zone!.nodes.find((n) => n.item === 'copper_ore' && n.charges > 0)!;
+    const node2 = (await gen.observe()).zone.nodes.find((n) => n.item === 'copper_ore' && n.charges > 0 && n.inRange)!;
     const rg = await gen.gather(node2.id);
     assert.equal(rs.xp, XP.gather(1) * FOCUS.xpMult);
     assert.equal(rg.xp, XP.gather(1));
@@ -93,7 +94,8 @@ test('focused gathering and crafting yield bonus output', async () => {
     assert.equal(focused.output.qty, 8);
     await c.equip('copper_pickaxe');
     await c.travelTo('wilds');
-    const node = (await c.observe()).zone!.nodes.find((n) => n.item === 'copper_ore')!;
+    const node = (await c.nearestNode('copper_ore'))!;
+    await c.goTo(node.id);
     const g = await c.gather(node.id);
     assert.equal(g.qty, 1 + FOCUS.maxBonusYield, 'a level-20 focused gatherer triples yield');
   } finally { await w.close(); }

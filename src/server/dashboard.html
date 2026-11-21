@@ -113,6 +113,9 @@
   .key i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
   .p-town { fill: var(--town); background: var(--town); } .p-wilds { fill: var(--wild); background: var(--wild); } .p-frontier { fill: var(--lethal); background: var(--lethal); }
   .p-travel { fill: var(--warn); background: var(--warn); } .p-off { fill: var(--line); background: var(--line); }
+  .mapwrap { padding: 10px 14px; }
+  #mapCanvas { display: block; border-radius: 4px; max-width: 100%; }
+  .maplegend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 0 14px 10px; font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -136,6 +139,13 @@
     <div class="status" id="status">connecting…</div>
   </header>
   <main>
+    <section class="span2">
+      <h2>World map <span class="count muted" id="mapMeta"></span></h2>
+      <div class="body mapwrap"><canvas id="mapCanvas" aria-label="Live world map: regions, players, mobs, resource nodes, places and loot bags"></canvas></div>
+      <div class="maplegend"><span class="key"><i class="p-town"></i>town (safe)</span><span class="key"><i class="p-wilds"></i>wilds (PvE)</span><span class="key"><i class="p-frontier"></i>frontier (lethal PvP)</span>
+        <span class="key">● bot</span><span class="key" style="color:var(--bad)">● mob</span><span class="key">◆ resource node</span><span class="key">▢ place (B bank, Q quests, $ shop, Sm/Sw/Ta/Fo/Wb stations)</span><span class="key" style="color:#9b6b2f">■ loot bag</span>
+        <span class="muted mono" id="mapTip">hover the map</span></div>
+    </section>
     <section>
       <h2>World view <span class="count muted" id="worldCount"></span></h2>
       <div class="body"><table><thead><tr><th>Bot</th><th>Where</th><th>HP</th><th>Gear</th><th>K/D</th><th>Last did</th></tr></thead><tbody id="world"></tbody></table></div>
@@ -336,7 +346,8 @@
     // world view
     $('world').innerHTML = s.bots.map((b) => {
       const pct = Math.round((b.hp / b.maxHp) * 100);
-      const where = b.travel ? `<span class="zone transit">${esc(b.travel.from)} → ${esc(b.travel.to)}</span>` : zoneTag(b.zone);
+      const xy = b.pos ? `<div class="mono muted">(${b.pos.x}, ${b.pos.y})</div>` : '';
+      const where = (b.travel ? `${zoneTag(b.zone)} <span class="muted">→ ${esc(b.travel.target || `(${b.travel.dest.x}, ${b.travel.dest.y})`)}</span>` : zoneTag(b.zone)) + xy;
       const fr = b.failureRate, rate = fr.attempts ? fr.failures / fr.attempts : 0;
       const chip = fr.failures ? `<span class="chip ${fr.failures >= 3 && rate >= 0.5 ? 'bad' : fr.failures >= 3 && rate >= 0.2 ? 'warn' : ''}" title="${fr.failures} failed of ${fr.attempts} write attempts in the last ${Math.round(fr.windowMs / 60000)} min">${Math.round(rate * 100)}% fail</span>` : '';
       const gear = [b.equipment.weapon, b.equipment.armor, b.equipment.tool].filter(Boolean).map(nm).map(esc).join(', ') || '<span class="muted">none</span>';
@@ -347,6 +358,7 @@
         <td>${b.lastAction ? `${esc(b.lastAction.summary)}<div class="muted">${ago(b.lastAction.at)}</div>` : ''}</td></tr>${open ? botCard(b, s.now) : ''}`;
     }).join('') || '<tr><td colspan="6" class="empty">No bots registered yet.</td></tr>';
     renderPresence(s);
+    renderMap(s);
     $('worldCount').textContent = `${s.bots.length} bots`;
 
     // filter options
@@ -438,6 +450,94 @@
   }
 
   /** One strip per bot over the run, from snapshots: zone color when online, travel and offline in their own colors. */
+  // ---------- world map (canvas) ----------
+  const PLACE_LABEL = { bank: 'B', quest_board: 'Q', shop: '$', smelter: 'Sm', sawmill: 'Sw', tannery: 'Ta', forge: 'Fo', workbench: 'Wb' };
+  const NODE_COLOR = { copper_ore: '#c8743a', iron_ore: '#8a929e', pine_log: '#3f8f4f', duskiron_ore: '#8e5bd6' };
+  let mapHits = [];
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function renderMap(s) {
+    const m = s.map, cv = $('mapCanvas');
+    if (!m || !cv) return;
+    const wrap = cv.parentElement;
+    const cell = Math.max(6, Math.floor((wrap.clientWidth - 2) / m.width));
+    const W = cell * m.width, H = cell * m.height, dpr = window.devicePixelRatio || 1;
+    if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const col = { town: cssVar('--town'), wilds: cssVar('--wild'), frontier: cssVar('--lethal'), ink: cssVar('--ink'), panel: cssVar('--panel'), muted: cssVar('--muted'), soft: cssVar('--soft'), warn: cssVar('--warn'), bad: cssVar('--bad'), good: cssVar('--good') };
+    const regionOf = (x) => (m.regions.find((r) => x >= r.x0 && x <= r.x1) || m.regions[0]).id;
+    const cx = (x) => (x + 0.5) * cell, cy = (y) => (y + 0.5) * cell;
+    g.fillStyle = col.panel; g.fillRect(0, 0, W, H);
+    for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width; x++) {
+      const ch = m.tiles[y][x];
+      if (ch === '#') g.fillStyle = col.muted;
+      else if (ch === '~') g.fillStyle = '#3b7dd8';
+      else if (ch === '=') g.fillStyle = '#b08a52';
+      else if (ch === '+') g.fillStyle = col.warn;
+      else { g.fillStyle = col[regionOf(x)]; g.globalAlpha = 0.12; }
+      g.fillRect(x * cell, y * cell, cell, cell);
+      g.globalAlpha = 1;
+    }
+    for (const r of m.regions.slice(1)) { g.strokeStyle = col[r.id]; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(r.x0 * cell, 0); g.lineTo(r.x0 * cell, H); g.stroke(); g.setLineDash([]); }
+    g.font = `600 ${Math.max(10, cell)}px system-ui, sans-serif`; g.textBaseline = 'top';
+    for (const r of m.regions) { g.fillStyle = col[r.id]; g.globalAlpha = 0.8; g.fillText(r.id, r.x0 * cell + 4, 3); g.globalAlpha = 1; }
+    mapHits = [];
+    const hit = (x, y, text) => mapHits.push({ x, y, text });
+    // places
+    g.font = `600 ${Math.max(8, cell * 0.62)}px system-ui, sans-serif`; g.textBaseline = 'middle'; g.textAlign = 'center';
+    for (const p of m.places) {
+      g.fillStyle = col.panel; g.strokeStyle = col.town; g.lineWidth = 1.5;
+      g.fillRect(p.x * cell + 1, p.y * cell + 1, cell - 2, cell - 2); g.strokeRect(p.x * cell + 1, p.y * cell + 1, cell - 2, cell - 2);
+      g.fillStyle = col.town; g.fillText(PLACE_LABEL[p.id] || p.id[0], cx(p.x), cy(p.y));
+      hit(p.x, p.y, p.id);
+    }
+    // nodes
+    for (const n of s.entities.nodes) {
+      const r = cell * 0.38;
+      g.globalAlpha = 0.35 + 0.65 * (n.maxCharges ? n.charges / n.maxCharges : 1);
+      g.fillStyle = NODE_COLOR[n.item] || col.muted;
+      g.beginPath(); g.moveTo(cx(n.x), cy(n.y) - r); g.lineTo(cx(n.x) + r, cy(n.y)); g.lineTo(cx(n.x), cy(n.y) + r); g.lineTo(cx(n.x) - r, cy(n.y)); g.closePath(); g.fill();
+      g.globalAlpha = 1;
+      hit(n.x, n.y, `${nm(n.item)} node ${n.id} · ${n.charges}/${n.maxCharges} charges`);
+    }
+    // loot bags
+    for (const b of s.entities.bags) {
+      g.fillStyle = '#9b6b2f'; g.fillRect(cx(b.x) - cell * 0.3, cy(b.y) - cell * 0.3, cell * 0.6, cell * 0.6);
+      hit(b.x, b.y, `loot bag of ${b.ownerName}: ${b.items.map((i) => `${i.qty}× ${nm(i.item)}`).join(', ')}`);
+    }
+    const botPos = new Map(s.bots.map((b) => [b.id, b.pos]));
+    // mobs
+    for (const mob of s.entities.mobs) {
+      g.beginPath(); g.arc(cx(mob.x), cy(mob.y), cell * 0.3, 0, Math.PI * 2);
+      g.strokeStyle = col.bad; g.lineWidth = 1.5;
+      if (mob.alive) { g.fillStyle = col.bad; g.globalAlpha = 0.75; g.fill(); g.globalAlpha = 1; } else { g.setLineDash([2, 2]); g.stroke(); g.setLineDash([]); }
+      const tp = mob.targetId && botPos.get(mob.targetId);
+      if (tp) { g.strokeStyle = col.bad; g.beginPath(); g.moveTo(cx(mob.x), cy(mob.y)); g.lineTo(cx(tp.x), cy(tp.y)); g.stroke(); }
+      hit(mob.x, mob.y, `${mob.name} ${mob.id} · ${mob.alive ? `${mob.hp}/${mob.maxHp} hp` : 'dead (respawning)'}${mob.targetId ? ' · fighting' : ''}`);
+    }
+    // bots
+    g.font = `600 ${Math.max(10, cell * 0.75)}px system-ui, sans-serif`; g.textAlign = 'left'; g.textBaseline = 'bottom';
+    for (const b of s.bots) {
+      if (!b.pos) continue;
+      if (b.travel) { g.strokeStyle = col.ink; g.globalAlpha = 0.5; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(cx(b.pos.x), cy(b.pos.y)); g.lineTo(cx(b.travel.dest.x), cy(b.travel.dest.y)); g.stroke(); g.setLineDash([]); g.globalAlpha = 1; }
+      g.beginPath(); g.arc(cx(b.pos.x), cy(b.pos.y), cell * 0.42, 0, Math.PI * 2);
+      g.fillStyle = b.online ? col.ink : col.panel; g.fill(); g.strokeStyle = col.ink; g.lineWidth = 2; g.stroke();
+      g.fillStyle = col.ink; g.fillText(b.name, cx(b.pos.x) + cell * 0.5, cy(b.pos.y) - cell * 0.3);
+      hit(b.pos.x, b.pos.y, `${b.name} · ${b.hp}/${b.maxHp} hp · ${b.zone} (${b.pos.x}, ${b.pos.y})${b.travel ? ` → ${b.travel.target || `(${b.travel.dest.x}, ${b.travel.dest.y})`}` : ''}${b.online ? '' : ' · offline'}`);
+    }
+    g.textAlign = 'start';
+    $('mapMeta').textContent = `seed ${m.seed} · ${m.width}×${m.height} tiles · ${s.entities.mobs.filter((x) => x.alive).length}/${s.entities.mobs.length} mobs alive`;
+    cv.dataset.cell = cell;
+  }
+  $('mapCanvas').addEventListener('mousemove', (e) => {
+    const cv = $('mapCanvas'), cell = Number(cv.dataset.cell || 10), r = cv.getBoundingClientRect();
+    const x = (e.clientX - r.left) / cell - 0.5, y = (e.clientY - r.top) / cell - 0.5;
+    let best = null, bd = 0.9;
+    for (const h of mapHits) { const d = Math.hypot(h.x - x, h.y - y); if (d < bd) { bd = d; best = h; } }
+    const tip = $('mapTip');
+    tip.textContent = best ? best.text : `(${Math.round(x)}, ${Math.round(y)})`;
+  });
+
   function renderPresence(s) {
     let t0 = Infinity;
     for (const list of snaps.values()) if (list.length) t0 = Math.min(t0, list[0].ts);

@@ -103,7 +103,7 @@ test('economy: per-bot silver, circulation, and a cumulative ledger that moves o
     pa.inventory.copper_sword = 1;
     await a.equip('copper_sword');
     await a.travelTo('wilds');
-    const wolf = (await a.observe()).zone!.mobs.find((m) => m.type === 'wolf' && m.alive)!;
+    const wolf = await a.approachMob('wolf');
     await a.fight(wolf.id);
     const kill = (await w.operator()).events.find((e: any) => e.type === 'combat.kill' && e.data.killerId === pa.id);
     const looted = kill.data.loot.filter((s: any) => s.item === 'silver').reduce((n: number, s: any) => n + s.qty, 0);
@@ -182,7 +182,7 @@ test('failureSummary groups by bot, command and code, and flags a current streak
     const c = await w.bot('Stubborn');
     const id = (await c.whoami()).playerId;
     await c.travelTo('wilds');
-    const iron = (await c.observe()).zone!.nodes.find((n) => n.item === 'iron_ore')!;
+    const iron = (await c.nearestNode('iron_ore'))!;
     for (let i = 0; i < 2; i++) await c.request('gather', { nodeId: iron.id });
     await c.request('move', { to: 'nowhere' as any });
     for (let i = 0; i < REPEAT_THRESHOLD; i++) await c.request('gather', { nodeId: iron.id });

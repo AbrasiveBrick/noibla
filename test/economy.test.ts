@@ -21,7 +21,7 @@ test('skill levels cap at 99; combat XP is a fraction of damage; the damage bonu
     p.focus = ['swords']; // unfocused skills count only FOCUS.unfocusedLevelCap levels
     await c.equip('copper_sword');
     await c.travelTo('wilds');
-    const wolf = (await c.observe()).zone!.mobs.find((m) => m.type === 'wolf' && m.alive)!;
+    const wolf = await c.approachMob('wolf');
     const hit = await c.attack(wolf.id, 'slash');
     const expected = Math.round(8 * (1 + COMBAT.damageBonusPerLevel * COMBAT.damageBonusMaxLevel));
     assert.equal(hit.damage, expected);
@@ -39,7 +39,7 @@ test('gear wears out, breaks at half strength, and repair in town costs silver',
     await c.equip('copper_sword');
     p.wear = { copper_sword: WEAR.max - WEAR.perAttack };
     await c.travelTo('wilds');
-    const wolf = (await c.observe()).zone!.mobs.find((m) => m.type === 'wolf' && m.alive)!;
+    const wolf = await c.approachMob('wolf');
     const first = await c.attack(wolf.id, 'slash');
     assert.equal(first.weaponWear, WEAR.max);
     assert.equal(first.damage, 8, 'the attack that breaks the weapon still lands at full power');
@@ -95,7 +95,7 @@ test('errors carry hints, and repeating the same failure is flagged', async () =
     const c = await w.bot('Stubborn');
     delete raw(w, (await c.whoami()).playerId).inventory.copper_pickaxe;
     await c.travelTo('wilds');
-    const iron = (await c.observe()).zone!.nodes.find((n) => n.item === 'iron_ore')!;
+    const iron = (await c.nearestNode('iron_ore'))!;
     const results = [];
     for (let i = 0; i < 3; i++) results.push(await c.request('gather', { nodeId: iron.id }));
     const errs = results.map((r) => (!r.ok ? r.error : null));

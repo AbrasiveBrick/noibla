@@ -347,12 +347,11 @@ export const SKILLS: SkillId[] = ['mining', 'woodcutting', 'smelting', 'woodwork
 
 /** Base durations in milliseconds at world speed 1. The server divides them by its speed factor. */
 export const TIMING = {
-  travelMs: 3000,
   gatherMs: 1500,
   refineMs: 1200,
   craftMs: 2000,
   globalCooldownMs: 1000,
-  /** No travel within this long after dealing or taking damage. */
+  /** No leaving your region (town, wilds, frontier) within this long after dealing or taking damage. Walking inside it is allowed. Walking speed: catalog.map.msPerTile. */
   combatLockMs: 5000,
   outOfCombatMs: 4000,
   regenIntervalMs: 1000,

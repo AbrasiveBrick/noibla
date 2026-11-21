@@ -90,8 +90,10 @@ export async function runFighter(c: GameClient, facts: Facts) {
   say(`carrying ${await c.count('duskiron_ore')} duskiron ore; hunting wraiths`);
   let fleeCommandId: string | undefined;
   for (let i = 0; i < 6 && !ambusher && !died; i++) {
-    const obs = await c.restUntil(0.9);
-    const wraith = obs.zone!.mobs.find((m) => m.type === 'wraith' && m.alive && !m.targetId);
+    await c.restUntil(0.9);
+    if (ambusher || died) break;
+    // Walk to the nearest free wraith (from the map when none is in view).
+    const wraith = await c.approachMob('wraith', { timeoutMs: 20_000 }).catch(() => null);
     if (!wraith) { await sleep(100); continue; }
     await c.fight(wraith.id, { onTick: async () => (ambusher || died ? 'stop' : 'continue') });
   }
