@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, player_id TEXT NOT NULL, category TEXT NOT NULL,
   summary TEXT NOT NULL, details TEXT NOT NULL, context TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS economy_ledger (kind TEXT PRIMARY KEY, qty INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS failures_player ON failures(player_id, id);
 `;
 
 export class Store {
@@ -93,6 +95,11 @@ export class Store {
 
   getMeta(key: string): string | undefined { return this.get<{ value: string }>('SELECT value FROM meta WHERE key = ?', key)?.value; }
   setMeta(key: string, value: string) { this.run('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value); }
+
+  /** Adds qty to a cumulative silver ledger counter (observation only; never read by game rules). */
+  ledger(kind: string, qty: number) {
+    if (qty > 0) this.run('INSERT INTO economy_ledger(kind, qty) VALUES(?, ?) ON CONFLICT(kind) DO UPDATE SET qty = qty + excluded.qty', kind, qty);
+  }
 
   close() { this.db.close(); }
 }

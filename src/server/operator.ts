@@ -4,12 +4,92 @@
 
 import { ITEMS, ZONES } from '../shared/catalog.ts';
 import type { GameEvent } from '../shared/protocol.ts';
-import type { Game } from './game.ts';
+import { REPEAT_THRESHOLD, type Game } from './game.ts';
+import type { Store } from './store.ts';
 import { maxHp } from './world.ts';
+import { silverFee } from './trade.ts';
 import { toStacks } from './util.ts';
+
+/** Commands and failures counted for the per-bot failure rate. */
+const RATE_WINDOW_MS = 10 * 60_000;
+const LEDGER_KINDS = { created: ['mobs', 'quests'], destroyed: ['death', 'repair', 'shop', 'tradeFee'] } as const;
+
+const silverOf = (stacks: { item: string; qty: number }[] | undefined) => (stacks ?? []).reduce((n, s) => n + (s.item === 'silver' ? s.qty : 0), 0);
+
+/**
+ * Seeds the cumulative silver ledger once from whatever events are still retained,
+ * so a world that predates the ledger starts from its history rather than zero.
+ * shop/repair events are pruned after a day, so older sinks of those kinds are missing.
+ */
+export function backfillEconomyLedger(store: Store) {
+  if (store.getMeta('economy_since') !== undefined) return;
+  store.transaction(() => {
+    const first = store.get<{ ts: number | null }>('SELECT MIN(ts) AS ts FROM events')?.ts;
+    const rows = store.all<{ type: string; data: string }>("SELECT type, data FROM events WHERE type IN ('combat.kill', 'quest', 'player.death', 'shop', 'repair', 'trade.closed')");
+    for (const r of rows) {
+      const d = (JSON.parse(r.data) as GameEvent).data as any;
+      if (r.type === 'combat.kill') store.ledger('created.mobs', silverOf(d.loot));
+      else if (r.type === 'quest' && d.status === 'claimed') store.ledger('created.quests', silverOf(d.reward));
+      else if (r.type === 'player.death') store.ledger('destroyed.death', d.silverLost ?? 0);
+      else if (r.type === 'shop' || r.type === 'repair') store.ledger(`destroyed.${r.type}`, d.paid ?? 0);
+      else if (r.type === 'trade.closed' && d.outcome === 'settled') {
+        for (const party of d.parties ?? []) store.ledger('destroyed.tradeFee', party.silverFee ?? silverFee({ silver: silverOf(party.received) }));
+      }
+    }
+    store.setMeta('economy_since', String(first ?? Date.now()));
+  });
+}
+
+function economy(g: Game, circulation: { carried: number; banked: number }) {
+  const rows = new Map(g.store.all<{ kind: string; qty: number }>('SELECT kind, qty FROM economy_ledger').map((r) => [r.kind, r.qty]));
+  const side = (k: 'created' | 'destroyed') => Object.fromEntries(LEDGER_KINDS[k].map((n) => [n, rows.get(`${k}.${n}`) ?? 0]));
+  return {
+    since: Number(g.store.getMeta('economy_since') ?? 0),
+    created: side('created') as Record<(typeof LEDGER_KINDS)['created'][number], number>,
+    destroyed: side('destroyed') as Record<(typeof LEDGER_KINDS)['destroyed'][number], number>,
+    circulation: { ...circulation, total: circulation.carried + circulation.banked },
+  };
+}
+
+/** Repeated failures grouped by (bot, command type, code), with a streak flag when a bot's latest failures are that same pair back to back. */
+function failureSummary(g: Game) {
+  const groups = g.store.all<any>(`SELECT player_id, type, code, COUNT(*) AS n, MIN(ts) AS first, MAX(ts) AS last, MAX(id) AS last_id
+    FROM failures GROUP BY player_id, type, code ORDER BY n DESC, last DESC LIMIT 100`);
+  const reasons = g.store.all<{ id: number; reason: string }>(`SELECT id, reason FROM failures WHERE id IN (${groups.map((x) => Number(x.last_id)).join(',') || 'NULL'})`);
+  const reasonOf = new Map(reasons.map((r) => [r.id, r.reason]));
+  const streaks = new Map<string, number>();
+  for (const { player_id } of g.store.all<{ player_id: string }>('SELECT DISTINCT player_id FROM failures')) {
+    // As in Game.failure, a successful write breaks the streak (read-only successes are not logged, so they cannot).
+    const lastOk = g.store.get<{ at: number | null }>('SELECT MAX(at) AS at FROM commands WHERE player_id = ?', player_id)?.at ?? 0;
+    const recent = g.store.all<{ type: string; code: string }>('SELECT type, code FROM failures WHERE player_id = ? AND ts > ? ORDER BY id DESC LIMIT 20', player_id, lastOk);
+    let n = 0;
+    while (n < recent.length && recent[n].type === recent[0].type && recent[n].code === recent[0].code) n++;
+    if (n >= REPEAT_THRESHOLD) streaks.set(`${player_id}|${recent[0].type}|${recent[0].code}`, n);
+  }
+  return groups.map((x) => {
+    const streak = streaks.get(`${x.player_id}|${x.type}|${x.code}`) ?? 0;
+    return {
+      playerId: x.player_id, name: g.players.get(x.player_id)?.name ?? '?', type: x.type, code: x.code,
+      count: x.n, firstTs: x.first, lastTs: x.last, latestReason: reasonOf.get(Number(x.last_id)) ?? '', streak: streak > 0, streakLength: streak,
+    };
+  });
+}
+
+/** Per bot: failures and attempts (successful writes plus failures) in the last RATE_WINDOW_MS. */
+function failureRates(g: Game, now: number) {
+  const since = now - RATE_WINDOW_MS;
+  const fails = new Map(g.store.all<{ player_id: string; n: number }>('SELECT player_id, COUNT(*) AS n FROM failures WHERE ts >= ? GROUP BY player_id', since).map((r) => [r.player_id, r.n]));
+  const oks = new Map(g.store.all<{ player_id: string; n: number }>('SELECT player_id, COUNT(*) AS n FROM commands WHERE at >= ? GROUP BY player_id', since).map((r) => [r.player_id, r.n]));
+  return (id: string) => {
+    const failures = fails.get(id) ?? 0;
+    const attempts = failures + (oks.get(id) ?? 0);
+    return { failures, attempts, windowMs: RATE_WINDOW_MS };
+  };
+}
 
 export function operatorState(g: Game, sinceEventId: number) {
   const now = g.now();
+  const rateOf = failureRates(g, now);
   const bots = [...g.players.values()].map((p) => ({
     id: p.id,
     name: p.name,
@@ -23,7 +103,10 @@ export function operatorState(g: Game, sinceEventId: number) {
     deaths: p.stats.deaths,
     lastAction: p.lastAction,
     lastSeenAt: p.lastSeenAt,
+    silver: { carried: p.inventory.silver ?? 0, banked: p.bank.silver ?? 0 },
+    failureRate: rateOf(p.id),
   }));
+  const circulation = bots.reduce((c, b) => ({ carried: c.carried + b.silver.carried, banked: c.banked + b.silver.banked }), { carried: 0, banked: 0 });
   const closed = g.store.all<{ data: string }>("SELECT data FROM events WHERE type = 'trade.closed' ORDER BY id DESC LIMIT 200").map((r) => (JSON.parse(r.data) as GameEvent).data);
   const pendingTrades = [...g.trades.values()]
     .filter((t) => t.status === 'proposed' || t.status === 'agreed')
@@ -58,6 +141,11 @@ export function operatorState(g: Game, sinceEventId: number) {
       pendingCount: pendingTrades.length,
     },
     failures,
+    failureSummary: failureSummary(g),
+    forumAds: g.store.all<any>('SELECT id, author_id, title, created_at FROM forum_threads ORDER BY id DESC LIMIT 30').map((t) => ({
+      id: t.id, authorId: t.author_id, authorName: g.players.get(t.author_id)?.name ?? '?', title: t.title, createdAt: t.created_at,
+    })),
+    economy: economy(g, circulation),
     feedback,
   };
 }

@@ -173,6 +173,7 @@ function storeReceipts(g: Game, t: Trade, outcome: 'settled' | 'expired') {
     g.store.run('INSERT INTO receipts(id, owner_id, trade_id, counterparty_id, at, data) VALUES(?, ?, ?, ?, ?, ?)', r.id, id, t.id, r.counterpartyId, r.at, JSON.stringify(r));
     // Each receipt goes only to its owner.
     g.emit(outcome === 'settled' ? 'trade.settled' : 'trade.expired', { kind: 'player', playerId: id }, { tradeId: t.id, receipt: r }, {});
+    g.store.ledger('destroyed.tradeFee', r.silverFee ?? 0);
     const p = g.players.get(id)!;
     return {
       id, name: p.name,
@@ -181,6 +182,7 @@ function storeReceipts(g: Game, t: Trade, outcome: 'settled' | 'expired') {
       received: r.actual.youReceived,
       keptWord: r.youKeptWord,
       locked: !!t.subs[id]?.locked,
+      silverFee: r.silverFee ?? 0,
     };
   });
   // Operator view, emitted only once the trade is closed.

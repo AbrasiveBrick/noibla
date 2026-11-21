@@ -422,6 +422,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
       killed = true;
       loot = rollLoot(g, mob.type);
       addItems(p.inventory, loot);
+      g.store.ledger('created.mobs', silverIn(loot));
       mob.deadUntil = now + g.ms(mdef.respawnMs);
       mob.aggro = {};
       mob.targetId = null;
@@ -442,6 +443,10 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
   g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: v.id, targetName: v.name, ability, damage: res.damage, dodged: res.dodged, targetHpPct: Math.round((v.hp / maxHp(v)) * 100), pvp: true }, { zone, actor: p });
   g.setLastAction(p, 'combat', res.killed ? `killed ${v.name}` : `attacking ${v.name}`);
   return { ability, targetId: v.id, damage: res.damage, dodged: res.dodged, targetHp: res.killed ? 0 : v.hp, killed: res.killed, loot: [], xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}) };
+}
+
+function silverIn(stacks: ItemStack[]): number {
+  return stacks.reduce((n, s) => n + (s.item === 'silver' ? s.qty : 0), 0);
 }
 
 function rollLoot(g: Game, mobType: string): ItemStack[] {
@@ -465,6 +470,7 @@ export function killPlayer(g: Game, victim: Player, source: { kind: 'mob' | 'pla
   // Part of the carried silver is destroyed on every death (a sink); banked silver is safe.
   const silverLost = Math.floor((victim.inventory.silver ?? 0) * DEATH_SILVER_LOSS);
   if (silverLost > 0) removeItems(victim.inventory, [{ item: 'silver', qty: silverLost }]);
+  g.store.ledger('destroyed.death', silverLost);
   if (z.fullLoot) {
     const items: Record<string, number> = { ...victim.inventory };
     for (const it of Object.values(victim.equipment)) if (it) items[it] = (items[it] ?? 0) + 1;
@@ -580,6 +586,7 @@ function questClaim(g: Game, p: Player, payload: Record<string, any>) {
   }
   q!.status = 'claimed';
   addItems(p.inventory, def!.reward);
+  g.store.ledger('created.quests', silverIn(def!.reward));
   g.emit('quest', { kind: 'operator' }, { playerId: p.id, name: p.name, questId, status: 'claimed', reward: def!.reward }, { zone: 'town', actor: p });
   g.setLastAction(p, 'quest', `claimed ${def!.name} (${describe(def!.reward)})`);
   g.markPlayer(p);
@@ -607,6 +614,7 @@ function shopBuy(g: Game, p: Player, payload: Record<string, any>) {
   const cost = price! * qty;
   payFromInventory(p, cost, `${qty}× ${item}`);
   addItems(p.inventory, [{ item, qty }]);
+  g.store.ledger('destroyed.shop', cost);
   g.emit('shop', { kind: 'operator' }, { playerId: p.id, name: p.name, item, qty, paid: cost }, { zone: 'town', actor: p });
   g.setLastAction(p, 'shop', `bought ${qty}× ${item} for ${cost} silver`);
   g.markPlayer(p);
@@ -629,6 +637,7 @@ function repair(g: Game, p: Player, payload: Record<string, any>) {
   payFromInventory(p, total, 'this repair');
   for (const j of jobs) delete p.wear![j.item];
   p.hp = maxHp(p);
+  g.store.ledger('destroyed.repair', total);
   g.emit('repair', { kind: 'operator' }, { playerId: p.id, name: p.name, repaired: jobs, paid: total }, { zone: 'town', actor: p });
   g.setLastAction(p, 'repair', `repaired ${jobs.map((j) => j.item).join(', ')} for ${total} silver`);
   g.markPlayer(p);
