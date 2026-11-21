@@ -56,7 +56,9 @@ export function gearMultiplier(p: Player, slot: Slot): number {
 
 export function repairCost(item: string, wear: number): number {
   if (wear <= 0) return 0;
-  return Math.ceil(((WEAR.repairCostByTier[itemDef(item)?.tier ?? 0] ?? 0) * wear) / WEAR.max);
+  const u = REGISTRY.get(item);
+  const mult = u ? WEAR.rarityRepairMult[u.rarity] + (u.corrupted ? WEAR.corruptedExtra : 0) : 1;
+  return Math.ceil(((WEAR.repairCostByTier[itemDef(item)?.tier ?? 0] ?? 0) * mult * wear) / WEAR.max);
 }
 
 export function gearView(p: Player): Partial<Record<Slot, GearWearView>> {
@@ -93,7 +95,7 @@ export function isFocused(p: Player, s: SkillId): boolean { return !!p.focus?.in
 export function skillLevel(p: Player, s: SkillId): number { return effectiveLevel(p.skills[s] ?? 0, isFocused(p, s)); }
 
 /** Adds XP (multiplied when the skill is focused) and returns the amount granted. */
-function gainXp(p: Player, s: SkillId, xp: number): number {
+export function gainXp(p: Player, s: SkillId, xp: number): number {
   const gained = Math.max(0, Math.round(xp * (isFocused(p, s) ? FOCUS.xpMult : 1)));
   p.skills[s] = (p.skills[s] ?? 0) + gained;
   return gained;
@@ -129,6 +131,7 @@ export function equippedToolTier(p: Player, job: ToolJob): number {
 
 /** Fails with TOOL_REQUIRED unless the matching tool of a high enough tier is equipped. Returns the busy-time multiplier (broken tools are slow). */
 function requireTool(g: Game, p: Player, job: ToolJob, tier: number, what: string): number {
+  if (!TOOL_FAMILIES[job]) return 1;
   const need = requiredToolTier(tier);
   const have = equippedToolTier(p, job);
   if (have < need) {
@@ -167,7 +170,7 @@ const at = (x: number, y: number) => `(${x}, ${y})`;
 function rangeHint(id: string) { return `walk there first: move { to: '${id}' } (SDK: goTo('${id}'))`; }
 
 /** Places (bank, stations, quest board, shop) need you within MAP_RULES.range.place of them. */
-function requirePlace(g: Game, p: Player, placeId: PlaceId, what: string, code: 'OUT_OF_RANGE' | 'NO_STATION' = 'OUT_OF_RANGE'): void {
+export function requirePlace(g: Game, p: Player, placeId: PlaceId, what: string, code: 'OUT_OF_RANGE' | 'NO_STATION' = 'OUT_OF_RANGE'): void {
   const place = placeOf(g.map, placeId)!;
   requireArrived(g, p);
   if (code === 'OUT_OF_RANGE') requireZone(g, p, regionAt(g.map, place), what);
@@ -388,6 +391,7 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   if (node!.charges === def.maxCharges) node!.nextChargeAt = now + g.ms(TIMING.nodeRegenMs);
   node!.charges--;
   addItems(p.inventory, [{ item: def.item, qty }]);
+  const shard = findShard(g, p);
   const xp = gainXp(p, def.skill, XP.gather(def.tier));
   const busy = g.ms(TIMING.gatherMs * Math.max(0.5, 1 - 0.05 * level) * slow * (1 - pct(affixSum(p, ['tool'], 'gather_speed'))));
   p.busyUntil = now + busy;
@@ -396,7 +400,16 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   g.emit('gather', { kind: 'zone', zone }, { playerId: p.id, name: p.name, nodeId, item: def.item, qty }, { zone, actor: p });
   g.setLastAction(p, 'gather', `gathered ${qty}× ${def.item}`);
   g.markPlayer(p);
-  return { item: def.item, qty, xp, skill: def.skill, level: skillLevel(p, def.skill), busyMs: busy };
+  return { item: def.item, qty, xp, skill: def.skill, level: skillLevel(p, def.skill), busyMs: busy, ...(shard ? { shards: shard } : {}) };
+}
+
+/** Gathering tools with shard_find may turn up an orb shard. */
+function findShard(g: Game, p: Player): number {
+  const chance = affixSum(p, ['tool'], 'shard_find');
+  if (chance <= 0 || g.rng() >= chance / 100) return 0;
+  addItems(p.inventory, [{ item: 'orb_shard', qty: 1 }]);
+  g.store.ledger('shards.created.found', 1);
+  return 1;
 }
 
 function toolHint(p: Player, job: ToolJob, minTier: number): string {
@@ -455,6 +468,7 @@ function makeItem(kind: 'refine' | 'craft') {
     p.busyUntil = g.now() + busy;
     addWear(g, p, 'tool', WEAR.perToolUse * count);
     if (kind === 'craft') questProgress(g, p, 'craft', output.item, output.qty);
+    if (itemDef(output.item)?.kind === 'orb') g.store.ledger('orbs.created.crafted', output.qty);
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
     g.markPlayer(p);
@@ -663,6 +677,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
       if (mdef.drops.some((d) => d.skin)) {
         if (equippedToolTier(p, 'skinning') >= requiredToolTier(mdef.tier)) {
           addWear(g, p, 'tool', WEAR.perToolUse);
+          if (findShard(g, p)) loot = toStacks(Object.fromEntries([...loot, { item: 'orb_shard', qty: 1 }].reduce((m, s) => m.set(s.item, (m.get(s.item) ?? 0) + s.qty), new Map<string, number>())));
           const dd = affixSum(p, ['tool'], 'double_drop');
           if (dd > 0 && g.rng() < dd / 100) {
             const extra = loot.filter((s) => mdef.drops.some((d) => d.skin && d.item === s.item));
@@ -673,6 +688,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
         else note = `no hides: equip a skinning knife (tier ${requiredToolTier(mdef.tier)}+) in the tool slot to skin ${mdef.name}s`;
       }
       g.store.ledger('created.mobs', silverIn(loot));
+      for (const s of loot) if (itemDef(s.item)?.kind === 'orb') g.store.ledger('orbs.created.mobs', s.qty);
       mob.deadUntil = now + g.ms(mdef.respawnMs);
       mob.aggro = {};
       mob.targetId = null;
@@ -890,6 +906,7 @@ function shopBuy(g: Game, p: Player, payload: Record<string, any>) {
   payFromInventory(p, cost, `${qty}× ${item}`);
   addItems(p.inventory, [{ item, qty }]);
   g.store.ledger('destroyed.shop', cost);
+  if (itemDef(item)?.kind === 'orb') g.store.ledger('orbs.created.shop', qty);
   g.emit('shop', { kind: 'operator' }, { playerId: p.id, name: p.name, item, qty, paid: cost }, { zone: 'town', actor: p });
   g.setLastAction(p, 'shop', `bought ${qty}× ${item} for ${cost} silver`);
   g.markPlayer(p);

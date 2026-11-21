@@ -9,6 +9,7 @@ import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
 import type { UniqueItem } from '../shared/protocol.ts';
 import type { CommandDef, LootBag, Mob, Player, ResourceNode, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
+import { orbCommands } from './orbs.ts';
 import { bindUniques, worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
 import { tradeCommands, tradeTick } from './trade.ts';
@@ -87,7 +88,7 @@ export class Game {
     this.tickMs = opts.tickMs ?? 25;
     this.lastSnapshotAt = this.store.get<{ ts: number | null }>('SELECT MAX(ts) AS ts FROM snapshots')?.ts ?? -Infinity;
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
-    this.commands = { ...worldCommands, ...socialCommands, ...tradeCommands };
+    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     // Procedural map: generated when the world is created; the seed is stored so restarts rebuild the same map.
     let mapSeed = Number(this.store.getMeta('map_seed') ?? NaN);

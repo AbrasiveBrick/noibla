@@ -194,7 +194,7 @@ function rng(seed: number): () => number {
 
 export interface SpawnSpec { region: ZoneId; nodes: { type: string; count: number }[]; mobs: { type: string; count: number }[] }
 
-const PLACE_IDS: PlaceId[] = ['bank', 'quest_board', 'shop', 'smelter', 'sawmill', 'tannery', 'forge', 'workbench'];
+const PLACE_IDS: PlaceId[] = ['bank', 'quest_board', 'shop', 'smelter', 'sawmill', 'tannery', 'forge', 'workbench', 'altar'];
 /** Offsets around the plaza, all within MAP_RULES.range.place. */
 const PLACE_RING: [number, number][] = [[0, -3], [3, 0], [0, 3], [-3, 0], [2, -2], [2, 2], [-2, 2], [-2, -2], [1, -2], [-1, 2]];
 

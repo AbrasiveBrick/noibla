@@ -40,7 +40,8 @@ export const FOCUS_RULE =
 
 /** Shared rule text: job tools. */
 export const TOOL_RULE =
-  'Tools: every job needs its own tool in your tool slot (pickaxe, axe, skinning knife for hides, tongs, saw, needle, hammer for all forging). You start with a copper kit; tier-3 work needs iron tools from a toolcrafter.';
+  'Tools: every job needs its own tool in your tool slot (pickaxe, axe, skinning knife for hides, tongs, saw, needle, hammer for all forging). You start with a copper kit; tier-3 work needs iron tools from a toolcrafter. ' +
+  'Crafted gear is unique and can be modified with orbs at the altar (affixes for every job); hire an enchanter through a blind trade rather than paying full fees yourself.';
 
 /** Shared rule text rendered with every starter: how the map works. */
 export const MAP_RULE =
@@ -313,6 +314,30 @@ export const STARTERS: StarterPrompt[] = [
       "reportFeedback({ category, summary, details, relatedCommandId }) for anything confusing",
     ],
     milestone: { description: 'Use each command family at least once and file at least one feedback report.' },
+  },
+  {
+    id: 'gear_tinkerer',
+    title: 'Gear Tinkerer',
+    archetype: 'crafter',
+    risk: 'low',
+    zones: ['town', 'wilds'],
+    focus: ['enchanting', 'toolcraft', 'weaponcraft'],
+    summary: 'Salvage gear into shards, fuse orbs at the altar, and sell affix rolls to other players.',
+    prompt:
+      'Crafted gear is unique and can carry affixes: combat stats on weapons and armor, speed and yield on gathering tools, saved inputs on refining tools, item level and orb odds on hammers. ' +
+      'Orbs add and reroll affixes at the altar in town, and every use burns a silver fee that grows with each modification of the same item. ' +
+      'Your goal is to become the modder others hire. Focus enchanting (the orb-fusing skill; it also lowers your altar fees and improves your odds), salvage spare crafted gear into orb shards, ' +
+      'fuse 10 shards into an orb, and roll an affix onto a tool. Then advertise: players send you their gear through a blind trade with your fee, you modify it and send it back. ' +
+      'Work within a silver budget: harsh odds mean most rolls miss. Never use a Vaal Orb on something you cannot afford to lose. ' + CHAT_RULE,
+    firstSteps: [
+      "setFocus(['enchanting', 'toolcraft', 'weaponcraft']) in town",
+      "travelTo('wilds'), gatherItem('copper_ore', 12), gatherItem('pine_log', 4), hunt('wolf', 3) for silver and orb drops",
+      "travelTo('town'), refineItem('copper_bar', 6), refineItem('pine_plank', 2), craftItem('copper_sword', 2)",
+      "salvage() a spare sword for orb shards; craftItem('orb_transmute', 1) once you hold 10 shards (or buy one with shop.buy)",
+      "modifyItem(itemId, 'transmute') on a crafted tool or sword, then rerollUntil(itemId, 'damage', { maxSilver: 60 })",
+      "post a [WTS] modding ad on the forum and settle a commission through a blind trade",
+    ],
+    milestone: { description: 'Own a magic or rare item you modified yourself and hold at least one orb.', items: ['orb_shard', 'orb_transmute'] },
   },
 ];
 

@@ -5,14 +5,15 @@ import { STARTERS } from './starters.ts';
 
 export type ZoneId = 'town' | 'wilds' | 'frontier';
 export type Safety = 'safe' | 'safe-wild' | 'lethal';
-export type StationId = 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench';
+export type StationId = 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench' | 'altar';
 export type Slot = 'weapon' | 'armor' | 'tool';
 export const SLOTS: Slot[] = ['weapon', 'armor', 'tool'];
-export type ItemKind = 'currency' | 'resource' | 'material' | 'tool' | 'weapon' | 'armor';
+export type ItemKind = 'currency' | 'resource' | 'material' | 'tool' | 'weapon' | 'armor' | 'orb';
 export type SkillId =
   | 'mining' | 'woodcutting'
   | 'smelting' | 'woodworking' | 'tanning'
   | 'toolcraft' | 'weaponcraft' | 'armorcraft'
+  | 'enchanting'
   | 'swords' | 'unarmed';
 /** What a tool is for. `skinning` is the hide harvest when you kill a beast; the rest are skills. */
 export type ToolJob = SkillId | 'skinning';
@@ -66,6 +67,16 @@ export const ITEMS: Record<string, ItemDef> = {
   duskiron_bar: { id: 'duskiron_bar', name: 'Duskiron Bar', kind: 'material', tier: 3, description: 'Smelted from frontier duskiron ore.' },
   pine_plank: { id: 'pine_plank', name: 'Pine Plank', kind: 'material', tier: 1, description: 'Sawn pine.' },
   leather: { id: 'leather', name: 'Leather', kind: 'material', tier: 1, description: 'Tanned hide.' },
+  orb_shard: { id: 'orb_shard', name: 'Orb Shard', kind: 'material', tier: 1, description: 'Salvaged from unique gear or found by gathering tools with shard_find; dropped by mobs. Enchanters fuse 10 into an orb.' },
+  // Currency orbs: modify unique gear at the altar in town with item.modify (see ORBS).
+  orb_transmute: { id: 'orb_transmute', name: 'Orb of Transmutation', kind: 'orb', tier: 1, description: 'Normal → magic with one affix.' },
+  orb_augment: { id: 'orb_augment', name: 'Orb of Augmentation', kind: 'orb', tier: 1, description: 'Adds an affix to a magic item with room for one.' },
+  orb_alteration: { id: 'orb_alteration', name: 'Orb of Alteration', kind: 'orb', tier: 1, description: 'Rerolls a magic item: new 1–2 affixes.' },
+  orb_scour: { id: 'orb_scour', name: 'Orb of Scouring', kind: 'orb', tier: 2, description: 'Removes every affix: back to normal.' },
+  orb_annul: { id: 'orb_annul', name: 'Orb of Annulment', kind: 'orb', tier: 2, description: 'Removes one random affix.' },
+  orb_regal: { id: 'orb_regal', name: 'Regal Orb', kind: 'orb', tier: 3, description: 'Magic → rare, adding one affix. Drops only from frontier wraiths (or enchanted from wraith essence).' },
+  orb_chaos: { id: 'orb_chaos', name: 'Chaos Orb', kind: 'orb', tier: 3, description: 'Rerolls a rare item: new 3–4 affixes. Drops only from frontier wraiths (or enchanted from wraith essence).' },
+  orb_vaal: { id: 'orb_vaal', name: 'Vaal Orb', kind: 'orb', tier: 3, description: 'Corrupts: ~25% one affix upgrades a tier, ~25% bricked (all affixes destroyed), ~50% unchanged. Corrupted items can never be modified again.' },
   // Tools: equip one in the tool slot. Each job needs its own tool family (see TOOL_FAMILIES).
   copper_pickaxe: { id: 'copper_pickaxe', name: 'Copper Pickaxe', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['mining'], description: 'Tier 1. Mines veins (wilds and frontier).' },
   iron_pickaxe: { id: 'iron_pickaxe', name: 'Iron Pickaxe', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['mining'], description: 'Tier 2. Mines veins (wilds and frontier).' },
@@ -171,13 +182,22 @@ export const RECIPES: Record<string, RecipeDef> = {
   // Armor
   leather_jerkin: recipe({ id: 'leather_jerkin', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 1, minLevel: 0, inputs: [{ item: 'leather', qty: 3 }], output: { item: 'leather_jerkin', qty: 1 } }),
   iron_mail: recipe({ id: 'iron_mail', kind: 'craft', station: 'forge', skill: 'armorcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'leather', qty: 2 }], output: { item: 'iron_mail', qty: 1 } }),
+  // Orbs (enchanting at the altar): fuse orb shards. Regal, Chaos and Vaal also need wraith essence and an enchanting focus.
+  orb_transmute: recipe({ id: 'orb_transmute', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 1, minLevel: 0, inputs: [{ item: 'orb_shard', qty: 10 }], output: { item: 'orb_transmute', qty: 1 } }),
+  orb_augment: recipe({ id: 'orb_augment', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 1, minLevel: 0, inputs: [{ item: 'orb_shard', qty: 10 }], output: { item: 'orb_augment', qty: 1 } }),
+  orb_alteration: recipe({ id: 'orb_alteration', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 1, minLevel: 1, inputs: [{ item: 'orb_shard', qty: 10 }], output: { item: 'orb_alteration', qty: 1 } }),
+  orb_scour: recipe({ id: 'orb_scour', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 2, minLevel: 1, inputs: [{ item: 'orb_shard', qty: 10 }, { item: 'leather', qty: 1 }], output: { item: 'orb_scour', qty: 1 } }),
+  orb_annul: recipe({ id: 'orb_annul', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 2, minLevel: 2, inputs: [{ item: 'orb_shard', qty: 10 }, { item: 'iron_bar', qty: 1 }], output: { item: 'orb_annul', qty: 1 } }),
+  orb_regal: recipe({ id: 'orb_regal', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 3, minLevel: 3, requiresFocus: true, inputs: [{ item: 'orb_shard', qty: 10 }, { item: 'wraith_essence', qty: 1 }], output: { item: 'orb_regal', qty: 1 } }),
+  orb_chaos: recipe({ id: 'orb_chaos', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 3, minLevel: 3, requiresFocus: true, inputs: [{ item: 'orb_shard', qty: 10 }, { item: 'wraith_essence', qty: 1 }], output: { item: 'orb_chaos', qty: 1 } }),
+  orb_vaal: recipe({ id: 'orb_vaal', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 3, minLevel: 3, requiresFocus: true, inputs: [{ item: 'orb_shard', qty: 10 }, { item: 'wraith_essence', qty: 2 }], output: { item: 'orb_vaal', qty: 1 } }),
   wraithhide_armor: recipe({ id: 'wraithhide_armor', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'wraith_essence', qty: 2 }, { item: 'leather', qty: 3 }, { item: 'iron_bar', qty: 1 }], output: { item: 'wraithhide_armor', qty: 1 } }),
 };
 
-/** One tool family per job. The tool-slot item must belong to the job's family. */
+/** One tool family per job ('' = no tool needed). Enchanting needs none, but a modder's equipped hammer affixes (mod_odds, orb_fee) count at the altar. The tool-slot item must belong to the job's family. */
 export const TOOL_FAMILIES: Record<ToolJob, string> = {
   mining: 'pickaxe', woodcutting: 'axe', skinning: 'skinning_knife', smelting: 'tongs', woodworking: 'saw', tanning: 'needle',
-  toolcraft: 'hammer', weaponcraft: 'hammer', armorcraft: 'hammer', swords: '', unarmed: '',
+  toolcraft: 'hammer', weaponcraft: 'hammer', armorcraft: 'hammer', swords: '', unarmed: '', enchanting: '',
 };
 
 /** Tool tier a job of tier T needs. */
@@ -278,9 +298,9 @@ export const NODE_TYPES: Record<string, NodeDef> = {
 export interface DropDef { item: string; min: number; max: number; chance: number; skin?: boolean }
 export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number }
 export const MOB_TYPES: Record<string, MobDef> = {
-  wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1, skin: true }], respawnMs: 6000 },
-  boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1, skin: true }], respawnMs: 6000 },
-  wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }], respawnMs: 8000 },
+  wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1, skin: true }, { item: 'orb_shard', min: 1, max: 1, chance: 0.12 }, { item: 'orb_transmute', min: 1, max: 1, chance: 0.02 }, { item: 'orb_alteration', min: 1, max: 1, chance: 0.015 }], respawnMs: 6000 },
+  boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1, skin: true }, { item: 'orb_shard', min: 1, max: 2, chance: 0.15 }, { item: 'orb_augment', min: 1, max: 1, chance: 0.02 }, { item: 'orb_scour', min: 1, max: 1, chance: 0.005 }, { item: 'orb_annul', min: 1, max: 1, chance: 0.004 }], respawnMs: 6000 },
+  wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }, { item: 'orb_shard', min: 1, max: 3, chance: 0.3 }, { item: 'orb_regal', min: 1, max: 1, chance: 0.03 }, { item: 'orb_chaos', min: 1, max: 1, chance: 0.03 }, { item: 'orb_vaal', min: 1, max: 1, chance: 0.02 }], respawnMs: 8000 },
 };
 
 export interface ZoneDef {
@@ -303,7 +323,7 @@ export interface ZoneDef {
 export const ZONES: Record<ZoneId, ZoneDef> = {
   town: {
     id: 'town', name: 'Brightwater (Town)', safety: 'safe', description: 'No combat. Bank, crafting stations, quest board, trade forum.',
-    adjacent: ['wilds'], stations: ['smelter', 'sawmill', 'tannery', 'forge', 'workbench'], hasBank: true, hasForum: true, hasQuestBoard: true,
+    adjacent: ['wilds'], stations: ['smelter', 'sawmill', 'tannery', 'forge', 'workbench', 'altar'], hasBank: true, hasForum: true, hasQuestBoard: true,
     pvp: false, fullLoot: false, nodes: [], mobs: [],
   },
   wilds: {
@@ -343,7 +363,7 @@ export const QUESTS: Record<string, QuestDef> = {
   ore_buyer: { id: 'ore_buyer', name: 'Ore Buyer', description: 'Receive 6 iron ore from other players through settled trades.', objective: { kind: 'procure', target: 'iron_ore', count: 6 }, reward: [{ item: 'silver', qty: 25 }] },
 };
 
-export const SKILLS: SkillId[] = ['mining', 'woodcutting', 'smelting', 'woodworking', 'tanning', 'toolcraft', 'weaponcraft', 'armorcraft', 'swords', 'unarmed'];
+export const SKILLS: SkillId[] = ['mining', 'woodcutting', 'smelting', 'woodworking', 'tanning', 'toolcraft', 'weaponcraft', 'armorcraft', 'enchanting', 'swords', 'unarmed'];
 
 /** Base durations in milliseconds at world speed 1. The server divides them by its speed factor. */
 export const TIMING = {
@@ -427,6 +447,35 @@ export const WEAR = {
   perToolUse: 0.5,
   brokenMultiplier: 0.5,
   repairCostByTier: { 1: 10, 2: 30, 3: 80 } as Record<number, number>,
+  /** Repair cost multiplier by rarity of a unique item (corrupted adds `corruptedExtra`). */
+  rarityRepairMult: { normal: 1, magic: 1.5, rare: 2.5 } as Record<RarityId, number>,
+  corruptedExtra: 0.5,
+};
+
+export type OrbId = 'transmute' | 'augment' | 'alteration' | 'regal' | 'chaos' | 'scour' | 'annul' | 'vaal';
+/**
+ * Orb use (`item.modify` at the altar in town). Each use consumes one orb and pays a silver fee that is destroyed:
+ * `baseFee × (1 + feeGrowth × item.mods)`, reduced by the modder's equipped hammer `orb_fee` affix and enchanting level
+ * (`feeCutPerLevel` per effective level, up to `maxFeeCut`). Luck = hammer `mod_odds`% + `luckPerLevel` × enchanting level
+ * (capped at `maxLuck`): it shifts affix tiers upward and makes Vaal safer.
+ */
+export const ORBS = {
+  items: { transmute: 'orb_transmute', augment: 'orb_augment', alteration: 'orb_alteration', regal: 'orb_regal', chaos: 'orb_chaos', scour: 'orb_scour', annul: 'orb_annul', vaal: 'orb_vaal' } as Record<OrbId, string>,
+  baseFee: { transmute: 4, augment: 6, alteration: 4, regal: 20, chaos: 25, scour: 4, annul: 15, vaal: 30 } as Record<OrbId, number>,
+  feeGrowth: 0.5,
+  feeCutPerLevel: 0.02,
+  maxFeeCut: 0.6,
+  luckPerLevel: 0.01,
+  maxLuck: 0.5,
+  /** Vaal outcome odds before luck: better, bricked (luck moves bricked odds into better). */
+  vaal: { better: 0.25, bricked: 0.25 },
+  /** Chance an Alteration rolls a second affix, and a Chaos a fourth. */
+  extraAffixChance: 0.35,
+  /** Orbs crafted from this many shards. */
+  shardsPerOrb: 10,
+  /** Shards from salvaging a unique: tier shards + one per affix (+2 if rare). */
+  salvage: { perTier: { 1: 1, 2: 2, 3: 4 } as Record<number, number>, perAffix: 1, rareBonus: 2 },
+  station: 'altar' as StationId,
 };
 
 /** NPC shop in town. Buy-only and priced above the player market, so it caps prices and removes silver. */
@@ -441,9 +490,14 @@ export const SHOP: Record<string, number> = {
   copper_sword: 60,
   leather_jerkin: 80,
   iron_pickaxe: 300,
+  // Orbs: only the two basic ones, priced well above what enchanters charge.
+  orb_transmute: 150,
+  orb_augment: 250,
 };
 
 export const XP = {
+  /** Orb use at the altar trains enchanting. */
+  modify: 6,
   gather: (tier: number) => 5 * tier * tier,
   refine: (tier: number) => 4 * tier * tier,
   craft: (tier: number) => 10 * tier * tier,
@@ -472,4 +526,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, starterKit: STARTER_KIT, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, starterKit: STARTER_KIT, orbs: ORBS, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };

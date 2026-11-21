@@ -7,12 +7,12 @@
 // command can never duplicate items or transfers.
 
 import { randomUUID } from 'node:crypto';
-import { baseOf, itemDef, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, type ToolJob, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
+import { baseOf, itemDef, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, type ToolJob, type OrbId, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
 import { findPath, pathLength, type PlaceId, type Pos } from '../shared/map.ts';
 import {
   TRANSIENT_ERRORS,
   type ApiError, type CommandResponse, type CommandType, type EventType, type FeedbackCategory, type GameEvent,
-  type MapCatalog, type MobView, type Observation, type PayloadOf, type ResultOf, type TradeReceipt, type TradeStatus,
+  type MapCatalog, type MobView, type Observation, type PayloadOf, type ResultOf, type TradeReceipt, type TradeStatus, type UniqueItem,
 } from '../shared/protocol.ts';
 
 export class CommandError extends Error {
@@ -157,6 +157,12 @@ export class GameClient {
   equip(item: string, opts?: SendOptions) { return this.send('equip', { item }, opts); }
   /** Public details (base, item level, rarity, affixes) of any unique item id. */
   inspect(item: string, opts?: SendOptions) { return this.send('item.inspect', { item }, opts); }
+  /** Uses one orb on a unique you carry or wear, within range of the town altar (goTo('altar') first); pays the altar fee. Retrying the same commandId never spends a second orb. */
+  modifyItem(item: string, orb: OrbId, opts?: SendOptions) { return this.send('item.modify', { item, orb }, opts); }
+  /** Salvages a carried unique into orb shards, within range of the town altar. */
+  salvage(item: string, opts?: SendOptions) { return this.send('item.salvage', { item }, opts); }
+  /** Fee, fee cut, luck and max affix tier for using `orb` on `item` right now. */
+  quoteModify(item: string, orb: OrbId, opts?: SendOptions) { return this.send('item.quote', { item, orb }, opts); }
   unequip(slot: Slot, opts?: SendOptions) { return this.send('unequip', { slot }, opts); }
   attack(targetId: string, ability?: AbilityId, opts?: SendOptions) { return this.send('attack', ability ? { targetId, ability } : { targetId }, opts); }
   useAbility(ability: AbilityId, targetId?: string, opts?: SendOptions) { return this.send('ability.use', targetId ? { ability, targetId } : { ability }, opts); }
@@ -568,6 +574,37 @@ export class GameClient {
         throw new CommandError(resp.error, 'attack', resp.commandId);
       }
     }
+  }
+
+  /**
+   * Rerolls `item` with Alteration (magic) or Chaos (rare) until it has `affix` (at `minTier`+), or until the next
+   * roll would push spent silver past `maxSilver`, or orbs run out. Transmutes a normal item first when using alteration.
+   * Returns the final item and what was spent; `hit` says whether the affix landed.
+   */
+  async rerollUntil(item: string, affix: string, o: { maxSilver: number; minTier?: number; orb?: 'alteration' | 'chaos'; maxRolls?: number }): Promise<{ hit: boolean; item: UniqueItem; silverSpent: number; orbsUsed: number; stopReason: 'hit' | 'budget' | 'no_orbs' | 'max_rolls' }> {
+    const orb = o.orb ?? 'alteration';
+    const has = (u: UniqueItem) => u.affixes.some((a) => a.id === affix && a.tier >= (o.minTier ?? 1));
+    let u = (await this.inspect(item)).item;
+    await this.goTo('altar');
+    let silverSpent = 0, orbsUsed = 0;
+    const step = async (use: OrbId) => {
+      const r = await this.modifyItem(u.id, use);
+      silverSpent += r.fee; orbsUsed++; u = r.item;
+    };
+    while (!has(u)) {
+      if (orbsUsed >= (o.maxRolls ?? 200)) return { hit: false, item: u, silverSpent, orbsUsed, stopReason: 'max_rolls' };
+      const use: OrbId = orb === 'alteration' && u.rarity === 'normal' ? 'transmute' : orb;
+      const q = await this.quoteModify(u.id, use);
+      if (silverSpent + q.fee > o.maxSilver) return { hit: false, item: u, silverSpent, orbsUsed, stopReason: 'budget' };
+      if ((await this.count(`orb_${use}`)) < 1) return { hit: false, item: u, silverSpent, orbsUsed, stopReason: 'no_orbs' };
+      await step(use);
+      // A magic item with room for one more affix: try Augmentation before rerolling.
+      if (!has(u) && use === 'alteration' && u.affixes.length < 2 && (await this.count('orb_augment')) > 0) {
+        const qa = await this.quoteModify(u.id, 'augment');
+        if (silverSpent + qa.fee <= o.maxSilver) await step('augment');
+      }
+    }
+    return { hit: true, item: u, silverSpent, orbsUsed, stopReason: 'hit' };
   }
 
   /**

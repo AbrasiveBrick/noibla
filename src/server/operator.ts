@@ -14,7 +14,7 @@ import { toStacks } from './util.ts';
 
 /** Commands and failures counted for the per-bot failure rate. */
 const RATE_WINDOW_MS = 10 * 60_000;
-const LEDGER_KINDS = { created: ['mobs', 'quests'], destroyed: ['death', 'repair', 'shop', 'tradeFee'] } as const;
+const LEDGER_KINDS = { created: ['mobs', 'quests'], destroyed: ['death', 'repair', 'shop', 'tradeFee', 'orbFee'] } as const;
 
 const silverOf = (stacks: { item: string; qty: number }[] | undefined) => (stacks ?? []).reduce((n, s) => n + (s.item === 'silver' ? s.qty : 0), 0);
 
@@ -50,6 +50,12 @@ function economy(g: Game, circulation: { carried: number; banked: number }) {
     created: side('created') as Record<(typeof LEDGER_KINDS)['created'][number], number>,
     destroyed: side('destroyed') as Record<(typeof LEDGER_KINDS)['destroyed'][number], number>,
     circulation: { ...circulation, total: circulation.carried + circulation.banked },
+    /** Orb and shard flows (counts of items, not silver). */
+    orbs: {
+      created: { mobs: rows.get('orbs.created.mobs') ?? 0, crafted: rows.get('orbs.created.crafted') ?? 0, shop: rows.get('orbs.created.shop') ?? 0 },
+      used: Object.fromEntries([...rows].filter(([k]) => k.startsWith('orbs.used.')).map(([k, v]) => [k.slice('orbs.used.'.length), v])) as Record<string, number>,
+      shards: { salvage: rows.get('shards.created.salvage') ?? 0, found: rows.get('shards.created.found') ?? 0 },
+    },
   };
 }
 
