@@ -6,13 +6,16 @@ import { STARTERS } from './starters.ts';
 export type ZoneId = 'town' | 'wilds' | 'frontier';
 export type Safety = 'safe' | 'safe-wild' | 'lethal';
 export type StationId = 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench';
-export type Slot = 'weapon' | 'armor';
+export type Slot = 'weapon' | 'armor' | 'tool';
+export const SLOTS: Slot[] = ['weapon', 'armor', 'tool'];
 export type ItemKind = 'currency' | 'resource' | 'material' | 'tool' | 'weapon' | 'armor';
 export type SkillId =
   | 'mining' | 'woodcutting'
   | 'smelting' | 'woodworking' | 'tanning'
   | 'toolcraft' | 'weaponcraft' | 'armorcraft'
   | 'swords' | 'unarmed';
+/** What a tool is for. `skinning` is the hide harvest when you kill a beast; the rest are skills. */
+export type ToolJob = SkillId | 'skinning';
 export type AbilityId = 'punch' | 'slash' | 'heavy_strike' | 'evade' | 'brace';
 
 export interface ItemStack { item: string; qty: number }
@@ -31,9 +34,10 @@ export interface ItemDef {
   defense?: number;
   /** Armor: extra max HP. */
   hpBonus?: number;
-  /** Tools: gathering tier. A node of tier T needs a tool of tier >= T-1 (bare hands are tier 0). */
+  /** Tools: tier. A job of tier T (node, recipe, beast) needs the matching tool of tier >= max(1, T-1) equipped in the tool slot. */
   toolTier?: number;
-  toolFor?: SkillId;
+  /** Tools: the job(s) this tool does. */
+  toolFor?: ToolJob[];
   /** Abilities granted while equipped. */
   abilities?: AbilityId[];
   weaponSkill?: SkillId;
@@ -55,9 +59,28 @@ export const ITEMS: Record<string, ItemDef> = {
   duskiron_bar: { id: 'duskiron_bar', name: 'Duskiron Bar', kind: 'material', tier: 3, description: 'Smelted from frontier duskiron ore.' },
   pine_plank: { id: 'pine_plank', name: 'Pine Plank', kind: 'material', tier: 1, description: 'Sawn pine.' },
   leather: { id: 'leather', name: 'Leather', kind: 'material', tier: 1, description: 'Tanned hide.' },
-  // Tools (carried in inventory; the best one is used automatically)
-  copper_pickaxe: { id: 'copper_pickaxe', name: 'Copper Pickaxe', kind: 'tool', tier: 1, toolTier: 1, toolFor: 'mining', description: 'Mines up to tier 2 veins.' },
-  iron_pickaxe: { id: 'iron_pickaxe', name: 'Iron Pickaxe', kind: 'tool', tier: 2, toolTier: 2, toolFor: 'mining', description: 'Mines up to tier 3 veins (duskiron).' },
+  // Tools: equip one in the tool slot. Each job needs its own tool family (see TOOL_FAMILIES).
+  copper_pickaxe: { id: 'copper_pickaxe', name: 'Copper Pickaxe', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['mining'], description: 'Tier 1. Mines veins (wilds and frontier).' },
+  iron_pickaxe: { id: 'iron_pickaxe', name: 'Iron Pickaxe', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['mining'], description: 'Tier 2. Mines veins (wilds and frontier).' },
+  duskiron_pickaxe: { id: 'duskiron_pickaxe', name: 'Duskiron Pickaxe', kind: 'tool', tier: 3, slot: 'tool', toolTier: 3, toolFor: ['mining'], description: 'Tier 3. Mines veins (wilds and frontier).' },
+  copper_axe: { id: 'copper_axe', name: 'Copper Axe', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['woodcutting'], description: 'Tier 1. Chops pine groves.' },
+  iron_axe: { id: 'iron_axe', name: 'Iron Axe', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['woodcutting'], description: 'Tier 2. Chops pine groves.' },
+  duskiron_axe: { id: 'duskiron_axe', name: 'Duskiron Axe', kind: 'tool', tier: 3, slot: 'tool', toolTier: 3, toolFor: ['woodcutting'], description: 'Tier 3. Chops pine groves.' },
+  copper_skinning_knife: { id: 'copper_skinning_knife', name: 'Copper Skinning Knife', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['skinning'], description: 'Tier 1. Skins beasts you kill: without one equipped they drop no hides.' },
+  iron_skinning_knife: { id: 'iron_skinning_knife', name: 'Iron Skinning Knife', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['skinning'], description: 'Tier 2. Skins beasts you kill: without one equipped they drop no hides.' },
+  duskiron_skinning_knife: { id: 'duskiron_skinning_knife', name: 'Duskiron Skinning Knife', kind: 'tool', tier: 3, slot: 'tool', toolTier: 3, toolFor: ['skinning'], description: 'Tier 3. Skins beasts you kill: without one equipped they drop no hides.' },
+  copper_tongs: { id: 'copper_tongs', name: 'Copper Tongs', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['smelting'], description: 'Tier 1. Smelts ore into bars at the smelter.' },
+  iron_tongs: { id: 'iron_tongs', name: 'Iron Tongs', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['smelting'], description: 'Tier 2. Smelts ore into bars at the smelter.' },
+  duskiron_tongs: { id: 'duskiron_tongs', name: 'Duskiron Tongs', kind: 'tool', tier: 3, slot: 'tool', toolTier: 3, toolFor: ['smelting'], description: 'Tier 3. Smelts ore into bars at the smelter.' },
+  copper_saw: { id: 'copper_saw', name: 'Copper Saw', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['woodworking'], description: 'Tier 1. Saws logs into planks at the sawmill.' },
+  iron_saw: { id: 'iron_saw', name: 'Iron Saw', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['woodworking'], description: 'Tier 2. Saws logs into planks at the sawmill.' },
+  duskiron_saw: { id: 'duskiron_saw', name: 'Duskiron Saw', kind: 'tool', tier: 3, slot: 'tool', toolTier: 3, toolFor: ['woodworking'], description: 'Tier 3. Saws logs into planks at the sawmill.' },
+  copper_hammer: { id: 'copper_hammer', name: 'Copper Hammer', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['toolcraft', 'weaponcraft', 'armorcraft'], description: 'Tier 1. Forges tools, weapons and armor.' },
+  iron_hammer: { id: 'iron_hammer', name: 'Iron Hammer', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['toolcraft', 'weaponcraft', 'armorcraft'], description: 'Tier 2. Forges tools, weapons and armor.' },
+  duskiron_hammer: { id: 'duskiron_hammer', name: 'Duskiron Hammer', kind: 'tool', tier: 3, slot: 'tool', toolTier: 3, toolFor: ['toolcraft', 'weaponcraft', 'armorcraft'], description: 'Tier 3. Forges tools, weapons and armor.' },
+  copper_needle: { id: 'copper_needle', name: 'Copper Needle', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['tanning'], description: 'Tier 1. Tans hides into leather at the tannery.' },
+  iron_needle: { id: 'iron_needle', name: 'Iron Needle', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['tanning'], description: 'Tier 2. Tans hides into leather at the tannery.' },
+  duskiron_needle: { id: 'duskiron_needle', name: 'Duskiron Needle', kind: 'tool', tier: 3, slot: 'tool', toolTier: 3, toolFor: ['tanning'], description: 'Tier 3. Tans hides into leather at the tannery.' },
   // Weapons
   copper_sword: { id: 'copper_sword', name: 'Copper Sword', kind: 'weapon', tier: 1, slot: 'weapon', power: 8, weaponSkill: 'swords', abilities: ['slash', 'heavy_strike'], description: 'Starter sword.' },
   iron_sword: { id: 'iron_sword', name: 'Iron Sword', kind: 'weapon', tier: 2, slot: 'weapon', power: 12, weaponSkill: 'swords', abilities: ['slash', 'heavy_strike'], description: 'Solid sword.' },
@@ -112,9 +135,28 @@ export const RECIPES: Record<string, RecipeDef> = {
   duskiron_bar: recipe({ id: 'duskiron_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_ore', qty: 2 }, { item: 'iron_bar', qty: 1 }], output: { item: 'duskiron_bar', qty: 1 } }),
   pine_plank: recipe({ id: 'pine_plank', kind: 'refine', station: 'sawmill', skill: 'woodworking', tier: 1, minLevel: 0, inputs: [{ item: 'pine_log', qty: 2 }], output: { item: 'pine_plank', qty: 1 } }),
   leather: recipe({ id: 'leather', kind: 'refine', station: 'tannery', skill: 'tanning', tier: 1, minLevel: 0, inputs: [{ item: 'rough_hide', qty: 2 }], output: { item: 'leather', qty: 1 } }),
-  // Tools
+  // Tools (toolcraft at the forge). Duskiron tools are tier-3 specialist recipes.
   copper_pickaxe: recipe({ id: 'copper_pickaxe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_pickaxe', qty: 1 } }),
   iron_pickaxe: recipe({ id: 'iron_pickaxe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_pickaxe', qty: 1 } }),
+  duskiron_pickaxe: recipe({ id: 'duskiron_pickaxe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_pickaxe', qty: 1 } }),
+  copper_axe: recipe({ id: 'copper_axe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_axe', qty: 1 } }),
+  iron_axe: recipe({ id: 'iron_axe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_axe', qty: 1 } }),
+  duskiron_axe: recipe({ id: 'duskiron_axe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_axe', qty: 1 } }),
+  copper_skinning_knife: recipe({ id: 'copper_skinning_knife', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 1 }, { item: 'leather', qty: 1 }], output: { item: 'copper_skinning_knife', qty: 1 } }),
+  iron_skinning_knife: recipe({ id: 'iron_skinning_knife', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 1 }, { item: 'leather', qty: 1 }], output: { item: 'iron_skinning_knife', qty: 1 } }),
+  duskiron_skinning_knife: recipe({ id: 'duskiron_skinning_knife', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 1 }, { item: 'leather', qty: 1 }], output: { item: 'duskiron_skinning_knife', qty: 1 } }),
+  copper_tongs: recipe({ id: 'copper_tongs', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_tongs', qty: 1 } }),
+  iron_tongs: recipe({ id: 'iron_tongs', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_tongs', qty: 1 } }),
+  duskiron_tongs: recipe({ id: 'duskiron_tongs', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_tongs', qty: 1 } }),
+  copper_saw: recipe({ id: 'copper_saw', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 1 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_saw', qty: 1 } }),
+  iron_saw: recipe({ id: 'iron_saw', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 1 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_saw', qty: 1 } }),
+  duskiron_saw: recipe({ id: 'duskiron_saw', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 1 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_saw', qty: 1 } }),
+  copper_hammer: recipe({ id: 'copper_hammer', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_hammer', qty: 1 } }),
+  iron_hammer: recipe({ id: 'iron_hammer', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_hammer', qty: 1 } }),
+  duskiron_hammer: recipe({ id: 'duskiron_hammer', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_hammer', qty: 1 } }),
+  copper_needle: recipe({ id: 'copper_needle', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 1 }, { item: 'leather', qty: 1 }], output: { item: 'copper_needle', qty: 1 } }),
+  iron_needle: recipe({ id: 'iron_needle', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 1 }, { item: 'leather', qty: 1 }], output: { item: 'iron_needle', qty: 1 } }),
+  duskiron_needle: recipe({ id: 'duskiron_needle', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 1 }, { item: 'leather', qty: 1 }], output: { item: 'duskiron_needle', qty: 1 } }),
   // Weapons
   copper_sword: recipe({ id: 'copper_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 3 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_sword', qty: 1 } }),
   iron_sword: recipe({ id: 'iron_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_sword', qty: 1 } }),
@@ -125,6 +167,18 @@ export const RECIPES: Record<string, RecipeDef> = {
   wraithhide_armor: recipe({ id: 'wraithhide_armor', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'wraith_essence', qty: 2 }, { item: 'leather', qty: 3 }, { item: 'iron_bar', qty: 1 }], output: { item: 'wraithhide_armor', qty: 1 } }),
 };
 
+/** One tool family per job. The tool-slot item must belong to the job's family. */
+export const TOOL_FAMILIES: Record<ToolJob, string> = {
+  mining: 'pickaxe', woodcutting: 'axe', skinning: 'skinning_knife', smelting: 'tongs', woodworking: 'saw', tanning: 'needle',
+  toolcraft: 'hammer', weaponcraft: 'hammer', armorcraft: 'hammer', swords: '', unarmed: '',
+};
+
+/** Tool tier a job of tier T needs. */
+export const requiredToolTier = (tier: number): number => Math.max(1, tier - 1);
+
+/** Every new player starts with one copper tool of each family. Better tools come from toolcrafters. */
+export const STARTER_KIT: ItemStack[] = ['pickaxe', 'axe', 'skinning_knife', 'tongs', 'saw', 'hammer', 'needle'].map((f) => ({ item: `copper_${f}`, qty: 1 }));
+
 export interface NodeDef { id: string; name: string; item: string; tier: number; skill: SkillId; maxCharges: number }
 export const NODE_TYPES: Record<string, NodeDef> = {
   copper_vein: { id: 'copper_vein', name: 'Copper Vein', item: 'copper_ore', tier: 1, skill: 'mining', maxCharges: 10 },
@@ -133,11 +187,12 @@ export const NODE_TYPES: Record<string, NodeDef> = {
   duskiron_vein: { id: 'duskiron_vein', name: 'Duskiron Vein', item: 'duskiron_ore', tier: 3, skill: 'mining', maxCharges: 6 },
 };
 
-export interface DropDef { item: string; min: number; max: number; chance: number }
+/** `skin`: only drops when the killer has a skinning knife equipped (tier >= requiredToolTier(mob tier)). */
+export interface DropDef { item: string; min: number; max: number; chance: number; skin?: boolean }
 export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number }
 export const MOB_TYPES: Record<string, MobDef> = {
-  wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1 }], respawnMs: 6000 },
-  boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1 }], respawnMs: 6000 },
+  wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1, skin: true }], respawnMs: 6000 },
+  boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1, skin: true }], respawnMs: 6000 },
   wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }], respawnMs: 8000 },
 };
 
@@ -273,7 +328,8 @@ export const DEATH_SILVER_LOSS = 0.25;
 export const TRADE_SILVER_FEE = 0.02;
 
 /**
- * Gear wear. Equipped weapons wear per attack, equipped armor per hit taken. At `max` the item is broken:
+ * Gear wear. Equipped weapons wear per attack, equipped armor per hit taken, the equipped tool per use.
+ * A broken tool still works, but its actions take 1/`brokenMultiplier` times as long. At `max` the item is broken:
  * its power, defense and HP bonus are multiplied by `brokenMultiplier` until repaired in town.
  * A full repair (from `max` wear) costs `repairCostByTier[tier]` silver; partial wear costs proportionally (rounded up).
  */
@@ -281,6 +337,8 @@ export const WEAR = {
   max: 100,
   perAttack: 0.25,
   perHitTaken: 1,
+  /** Equipped tool, per gather or per recipe unit made. */
+  perToolUse: 0.5,
   brokenMultiplier: 0.5,
   repairCostByTier: { 1: 10, 2: 30, 3: 80 } as Record<number, number>,
 };
@@ -288,6 +346,12 @@ export const WEAR = {
 /** NPC shop in town. Buy-only and priced above the player market, so it caps prices and removes silver. */
 export const SHOP: Record<string, number> = {
   copper_pickaxe: 60,
+  copper_axe: 60,
+  copper_skinning_knife: 50,
+  copper_tongs: 60,
+  copper_saw: 50,
+  copper_hammer: 60,
+  copper_needle: 50,
   copper_sword: 60,
   leather_jerkin: 80,
   iron_pickaxe: 300,
@@ -322,4 +386,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, starterKit: STARTER_KIT };

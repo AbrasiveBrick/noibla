@@ -50,6 +50,8 @@ test('gathering, refining, crafting improve through use and respect tools and sk
     const iron = o.zone!.nodes.find((n) => n.item === 'iron_ore')!;
     const noTool = await c.request('gather', { nodeId: iron.id });
     assert.equal(!noTool.ok && noTool.error.code, 'TOOL_REQUIRED');
+    assert.match(!noTool.ok ? noTool.error.hint ?? '' : '', /equip\("copper_pickaxe"\)/);
+    await c.equip('copper_pickaxe');
     const vein = o.zone!.nodes.find((n) => n.item === 'copper_ore')!;
     const g1 = await c.request('gather', { nodeId: vein.id }, { commandId: 'g-1' });
     const g2 = await c.request('gather', { nodeId: vein.id }, { commandId: 'g-1' });

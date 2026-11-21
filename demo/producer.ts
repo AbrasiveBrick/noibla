@@ -26,15 +26,15 @@ export async function runProducer(c: GameClient, facts: Facts, ledgerFile?: stri
   await c.acceptQuest('ore_run');
   await c.acceptQuest('apprentice_smith');
   await c.travelTo('wilds');
-  say('in the wilds: mining copper and cutting pine (bare hands work on tier 1 nodes)');
+  say('in the wilds: mining copper and cutting pine with the starter copper pickaxe and axe');
   await c.gatherItem('copper_ore', 10);
-  await c.gatherItem('pine_log', 10);
+  await c.gatherItem('pine_log', 12);
 
   // --- First tools and weapon ---
   await c.travelTo('town');
   await c.refineItem('copper_bar', 5);
-  await c.refineItem('pine_plank', 5);
-  await c.craftItem('copper_pickaxe', 1);
+  await c.refineItem('pine_plank', 6);
+  await c.craftItem('copper_pickaxe', 1); // a spare to sell; the starter kit already has one
   await c.craftItem('copper_sword', 1);
   await c.equip('copper_sword');
   await c.claimQuest('ore_run');
@@ -43,7 +43,7 @@ export async function runProducer(c: GameClient, facts: Facts, ledgerFile?: stri
 
   // --- Iron and hides ---
   await c.travelTo('wilds');
-  const ironMined = await c.gatherItem('iron_ore', 18);
+  const ironMined = await c.gatherItem('iron_ore', 22);
   say(`mined ${ironMined} iron ore with the copper pickaxe; hunting boars for hides and silver`);
   let hides = await c.count('rough_hide');
   let boars = 0;
@@ -56,13 +56,14 @@ export async function runProducer(c: GameClient, facts: Facts, ledgerFile?: stri
 
   // --- Refine and craft the kit ---
   await c.travelTo('town');
-  await c.refineItem('iron_bar', 9);
+  await c.refineItem('iron_bar', 11);
   await c.refineItem('leather', 8);
   await c.craftItem('leather_jerkin', 1);
   await c.equip('leather_jerkin');
   await c.craftItem('iron_sword', 2);
   await c.craftItem('iron_mail', 1);
   await c.craftItem('iron_pickaxe', 1);
+  await c.craftItem('iron_hammer', 1); // tier-3 crafting needs an iron hammer in the tool slot
   const obs = await c.observe();
   say(`crafted ${fmt(KIT)} · weaponcraft L${obs.self.skills.weaponcraft.level}, armorcraft L${obs.self.skills.armorcraft.level}, smelting L${obs.self.skills.smelting.level}`);
 

@@ -81,7 +81,7 @@ test('the town shop sells fixed-price tools for carried silver', async () => {
     p.inventory.silver = 100;
     const res = await c.buy('copper_pickaxe');
     assert.equal(res.paid, 60);
-    assert.equal(await c.count('copper_pickaxe'), 1);
+    assert.equal(await c.count('copper_pickaxe'), 2, 'the starter kit pickaxe plus the bought one');
     assert.equal(await c.count('silver'), 40);
     const nope = await c.request('shop.buy', { item: 'duskiron_sword' });
     assert.equal(!nope.ok && nope.error.code, 'NOT_FOUND');
@@ -93,6 +93,7 @@ test('errors carry hints, and repeating the same failure is flagged', async () =
   const w = await world();
   try {
     const c = await w.bot('Stubborn');
+    delete raw(w, (await c.whoami()).playerId).inventory.copper_pickaxe;
     await c.travelTo('wilds');
     const iron = (await c.observe()).zone!.nodes.find((n) => n.item === 'iron_ore')!;
     const results = [];

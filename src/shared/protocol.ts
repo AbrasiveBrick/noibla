@@ -266,6 +266,8 @@ export interface AttackResult {
   busyMs: number;
   /** Wear of the equipped weapon after this attack, when one is equipped. */
   weaponWear?: number;
+  /** Why a kill dropped less than usual (for example no skinning knife equipped). */
+  note?: string;
 }
 
 // ---------- Events ----------

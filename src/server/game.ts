@@ -2,7 +2,7 @@
 // execution, event visibility, and the world tick.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { MOB_TYPES, NODE_TYPES, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } from '../shared/catalog.ts';
+import { MOB_TYPES, NODE_TYPES, STARTER_KIT, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } from '../shared/catalog.ts';
 import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/protocol.ts';
 import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
@@ -95,6 +95,8 @@ export class Game {
   private load() {
     for (const row of this.store.all<{ id: string; name: string; token_hash: string; data: string }>('SELECT id, name, token_hash, data FROM players')) {
       const p = JSON.parse(row.data) as Player;
+      // Players from before the tool slot get the starter tool kit once.
+      if (!p.toolKit) { for (const k of STARTER_KIT) p.inventory[k.item] = (p.inventory[k.item] ?? 0) + k.qty; p.toolKit = true; this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id); }
       this.players.set(p.id, p);
       this.nameIndex.set(p.name.toLowerCase(), p.id);
       this.tokenIndex.set(row.token_hash, p.id);
@@ -250,7 +252,7 @@ export class Game {
     const now = this.now();
     const p: Player = {
       id: newId('p'), name, createdAt: now, zone: 'town', travel: null, hp: BASE_HP,
-      inventory: { silver: STARTING_SILVER }, bank: {}, equipment: {}, skills: {},
+      inventory: { silver: STARTING_SILVER, ...Object.fromEntries(STARTER_KIT.map((s) => [s.item, s.qty])) }, bank: {}, equipment: {}, toolKit: true, skills: {},
       busyUntil: 0, cooldowns: {}, evadeUntil: 0, braceUntil: 0, lastCombatAt: 0, combatLockUntil: 0, lastRegenAt: 0, wear: {},
       quests: {}, stats: { kills: 0, deaths: 0 }, lastAction: { type: 'register', summary: 'arrived in Brightwater', at: now }, lastSeenAt: now,
     };

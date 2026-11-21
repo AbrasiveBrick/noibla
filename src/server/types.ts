@@ -13,6 +13,8 @@ export interface Player {
   inventory: Bag;
   bank: Bag;
   equipment: Partial<Record<Slot, string>>;
+  /** Received the starter tool kit (players from before the tool slot get it on load). */
+  toolKit?: boolean;
   skills: Partial<Record<SkillId, number>>;
   busyUntil: number;
   cooldowns: Partial<Record<AbilityId, number>>;

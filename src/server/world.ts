@@ -2,7 +2,7 @@
 // equipment, combat, death & loot, banking, quests.
 
 import {
-  ABILITIES, BASE_HP, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
+  ABILITIES, BASE_HP, SLOTS, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
   effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
 import type { AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, ZoneView } from '../shared/protocol.ts';
@@ -27,7 +27,7 @@ function defense(p: Player): number {
 /** Wear is tracked per item id, so unequipping and re-equipping keeps it. */
 function wearOf(p: Player, item: string): number { return p.wear?.[item] ?? 0; }
 
-function gearMultiplier(p: Player, slot: Slot): number {
+export function gearMultiplier(p: Player, slot: Slot): number {
   const item = p.equipment[slot];
   return item && wearOf(p, item) >= WEAR.max ? WEAR.brokenMultiplier : 1;
 }
@@ -39,7 +39,7 @@ export function repairCost(item: string, wear: number): number {
 
 export function gearView(p: Player): Partial<Record<Slot, GearWearView>> {
   const out: Partial<Record<Slot, GearWearView>> = {};
-  for (const slot of ['weapon', 'armor'] as Slot[]) {
+  for (const slot of SLOTS) {
     const item = p.equipment[slot];
     if (!item) continue;
     const wear = wearOf(p, item);
@@ -96,13 +96,21 @@ export function abilitiesOf(p: Player): { id: AbilityId; source: string }[] {
   return out;
 }
 
-function bestTool(p: Player, skill: SkillId): number {
-  let tier = 0;
-  for (const [item, qty] of Object.entries(p.inventory)) {
-    const def = ITEMS[item];
-    if (qty > 0 && def?.kind === 'tool' && def.toolFor === skill) tier = Math.max(tier, def.toolTier ?? 0);
+/** Tier of the equipped tool when it does `job`, else 0. */
+export function equippedToolTier(p: Player, job: ToolJob): number {
+  const def = p.equipment.tool ? ITEMS[p.equipment.tool] : undefined;
+  return def?.toolFor?.includes(job) ? def.toolTier ?? 0 : 0;
+}
+
+/** Fails with TOOL_REQUIRED unless the matching tool of a high enough tier is equipped. Returns the busy-time multiplier (broken tools are slow). */
+function requireTool(g: Game, p: Player, job: ToolJob, tier: number, what: string): number {
+  const need = requiredToolTier(tier);
+  const have = equippedToolTier(p, job);
+  if (have < need) {
+    const equipped = p.equipment.tool ? `you have ${p.equipment.tool} equipped` : 'your tool slot is empty';
+    fail('TOOL_REQUIRED', `${what} needs a tier ${need}+ ${TOOL_FAMILIES[job]} equipped in the tool slot; ${equipped}`, undefined, toolHint(p, job, need));
   }
-  return tier;
+  return gearMultiplier(p, 'tool') < 1 ? 1 / WEAR.brokenMultiplier : 1;
 }
 
 // ---------- guards ----------
@@ -227,16 +235,16 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   const def = NODE_TYPES[node!.type];
   const now = g.now();
   if (node!.charges <= 0) fail('DEPLETED', `${def.name} is depleted`, node!.nextChargeAt - now);
-  const tool = bestTool(p, def.skill);
-  if (tool < def.tier - 1) fail('TOOL_REQUIRED', `${def.name} (tier ${def.tier}) needs a tier ${def.tier - 1}+ ${def.skill} tool; best carried is tier ${tool}`, undefined, toolHint(def.skill, def.tier - 1));
+  const slow = requireTool(g, p, def.skill, def.tier, `${def.name} (tier ${def.tier})`);
   const level = skillLevel(p, def.skill);
   const qty = 1 + rollBonus(g, Math.min(FOCUS.maxBonusYield, FOCUS.bonusYieldPerLevel * level));
   if (node!.charges === def.maxCharges) node!.nextChargeAt = now + g.ms(TIMING.nodeRegenMs);
   node!.charges--;
   addItems(p.inventory, [{ item: def.item, qty }]);
   const xp = gainXp(p, def.skill, XP.gather(def.tier));
-  const busy = g.ms(TIMING.gatherMs * Math.max(0.5, 1 - 0.05 * level));
+  const busy = g.ms(TIMING.gatherMs * Math.max(0.5, 1 - 0.05 * level) * slow);
   p.busyUntil = now + busy;
+  addWear(g, p, 'tool', WEAR.perToolUse);
   questProgress(g, p, 'gather', def.item, qty);
   g.emit('gather', { kind: 'zone', zone }, { playerId: p.id, name: p.name, nodeId, item: def.item, qty }, { zone, actor: p });
   g.setLastAction(p, 'gather', `gathered ${qty}× ${def.item}`);
@@ -244,16 +252,18 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   return { item: def.item, qty, xp, skill: def.skill, level: skillLevel(p, def.skill), busyMs: busy };
 }
 
-function toolHint(skill: SkillId, minTier: number): string {
-  const tool = Object.values(ITEMS)
-    .filter((i) => i.kind === 'tool' && i.toolFor === skill && (i.toolTier ?? 0) >= minTier)
-    .sort((a, b) => (a.toolTier ?? 0) - (b.toolTier ?? 0))[0];
-  if (!tool) return `no ${skill} tool of tier ${minTier}+ exists`;
+function toolHint(p: Player, job: ToolJob, minTier: number): string {
+  const family = TOOL_FAMILIES[job];
+  const fits = (item: string) => { const d = ITEMS[item]; return !!d?.toolFor?.includes(job) && (d.toolTier ?? 0) >= minTier; };
+  const carried = Object.keys(p.inventory).filter((i) => (p.inventory[i] ?? 0) > 0 && fits(i)).sort((a, b) => (ITEMS[a].toolTier ?? 0) - (ITEMS[b].toolTier ?? 0))[0];
+  if (carried) return `you carry ${carried}: equip it first with equip("${carried}") (the SDK helpers gatherItem/refineItem/craftItem do this for you).`;
+  const tool = Object.values(ITEMS).filter((i) => fits(i.id)).sort((a, b) => (a.toolTier ?? 0) - (b.toolTier ?? 0))[0];
+  if (!tool) return `no ${family} of tier ${minTier}+ exists`;
   const r = RECIPES[tool.id];
   const ways = [`buy one from another player`];
   if (r) ways.unshift(`craft it (recipe "${r.id}" at the ${r.station} in town: ${describe(r.inputs)}; needs ${r.skill} level ${r.minLevel})`);
   if (SHOP[tool.id] !== undefined) ways.push(`buy it in town with shop.buy for ${SHOP[tool.id]} silver`);
-  return `carry a ${tool.id} (tier ${tool.toolTier}) in your inventory. Gathering this node again will fail until you do. Ways to get one: ${ways.join('; ')}.`;
+  return `equip a ${tool.id} (tier ${tool.toolTier}) or better in the tool slot. This will fail until you do. Ways to get one: ${ways.join('; ')}.`;
 }
 
 // ---------- refining & crafting ----------
@@ -277,6 +287,7 @@ function makeItem(kind: 'refine' | 'craft') {
           : `your ${FOCUS.slots} focus slots are full (${p.focus!.join(', ')}); buy ${r!.output.item} from a ${r!.skill} specialist, or swap a focus skill with focus.set`);
     }
     if (level < r!.minLevel) fail('SKILL_TOO_LOW', `${recipeId} needs ${r!.skill} level ${r!.minLevel}; you are level ${level}`);
+    const slow = requireTool(g, p, r!.skill, r!.tier, `${recipeId} (tier ${r!.tier})`);
     if (!hasItems(p.inventory, r!.inputs, count)) fail('NOT_ENOUGH_ITEMS', `missing ${missing(p.inventory, r!.inputs, count)}`);
     removeItems(p.inventory, r!.inputs, count);
     let bonus = 0;
@@ -288,8 +299,9 @@ function makeItem(kind: 'refine' | 'craft') {
     addItems(p.inventory, [output]);
     const xp = gainXp(p, r!.skill, XP[kind](r!.tier) * count);
     const base = kind === 'refine' ? TIMING.refineMs : TIMING.craftMs;
-    const busy = g.ms(base * count * Math.max(0.5, 1 - 0.05 * level));
+    const busy = g.ms(base * count * Math.max(0.5, 1 - 0.05 * level) * slow);
     p.busyUntil = g.now() + busy;
+    addWear(g, p, 'tool', WEAR.perToolUse * count);
     if (kind === 'craft') questProgress(g, p, 'craft', output.item, output.qty);
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
@@ -318,7 +330,7 @@ function equip(g: Game, p: Player, payload: Record<string, any>) {
 
 function unequip(g: Game, p: Player, payload: Record<string, any>) {
   const slot = reqStr(payload, 'slot', 10) as Slot;
-  if (slot !== 'weapon' && slot !== 'armor') fail('BAD_REQUEST', 'slot must be weapon or armor');
+  if (!SLOTS.includes(slot)) fail('BAD_REQUEST', `slot must be one of ${SLOTS.join(', ')}`);
   const prev = p.equipment[slot];
   if (!prev) fail('BAD_REQUEST', `nothing equipped in ${slot}`);
   delete p.equipment[slot];
@@ -447,10 +459,15 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: mob.id, targetName: mdef.name, ability, damage, targetHp: mob.hp }, { zone, actor: p });
     let loot: ItemStack[] = [];
     let killed = false;
+    let note: string | undefined;
     if (mob.hp <= 0) {
       killed = true;
-      loot = rollLoot(g, mob.type);
+      loot = rollLoot(g, mob.type, p);
       addItems(p.inventory, loot);
+      if (mdef.drops.some((d) => d.skin)) {
+        if (equippedToolTier(p, 'skinning') >= requiredToolTier(mdef.tier)) addWear(g, p, 'tool', WEAR.perToolUse);
+        else note = `no hides: equip a skinning knife (tier ${requiredToolTier(mdef.tier)}+) in the tool slot to skin ${mdef.name}s`;
+      }
       g.store.ledger('created.mobs', silverIn(loot));
       mob.deadUntil = now + g.ms(mdef.respawnMs);
       mob.aggro = {};
@@ -462,7 +479,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     } else {
       g.setLastAction(p, 'combat', `fighting ${mdef.name}`);
     }
-    return { ability, targetId: mob.id, damage, dodged: false, targetHp: mob.hp, killed, loot, xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}) };
+    return { ability, targetId: mob.id, damage, dodged: false, targetHp: mob.hp, killed, loot, xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}), ...(note ? { note } : {}) };
   }
 
   const v = victim!;
@@ -477,12 +494,14 @@ function silverIn(stacks: ItemStack[]): number {
   return stacks.reduce((n, s) => n + (s.item === 'silver' ? s.qty : 0), 0);
 }
 
-function rollLoot(g: Game, mobType: string): ItemStack[] {
+function rollLoot(g: Game, mobType: string, p: Player): ItemStack[] {
   const def = MOB_TYPES[mobType];
+  const canSkin = equippedToolTier(p, 'skinning') >= requiredToolTier(def.tier);
   const out: Record<string, number> = {};
   const [lo, hi] = def.silver;
   out.silver = lo + Math.floor(g.rng() * (hi - lo + 1));
   for (const d of def.drops) {
+    if (d.skin && !canSkin) continue;
     if (g.rng() <= d.chance) out[d.item] = (out[d.item] ?? 0) + d.min + Math.floor(g.rng() * (d.max - d.min + 1));
   }
   return toStacks(out);
@@ -672,9 +691,9 @@ function shopBuy(g: Game, p: Player, payload: Record<string, any>) {
 
 function repair(g: Game, p: Player, payload: Record<string, any>) {
   const slotArg = payload.slot === undefined ? undefined : reqStr(payload, 'slot', 10);
-  if (slotArg !== undefined && slotArg !== 'weapon' && slotArg !== 'armor') fail('BAD_REQUEST', 'slot must be weapon or armor');
+  if (slotArg !== undefined && !SLOTS.includes(slotArg as Slot)) fail('BAD_REQUEST', `slot must be one of ${SLOTS.join(', ')}`);
   requireZone(g, p, 'town', 'repairs');
-  const slots: Slot[] = slotArg ? [slotArg as Slot] : ['weapon', 'armor'];
+  const slots: Slot[] = slotArg ? [slotArg as Slot] : SLOTS;
   const jobs: { slot: Slot; item: string; wearRemoved: number; cost: number }[] = [];
   for (const slot of slots) {
     const item = p.equipment[slot];
