@@ -631,7 +631,7 @@ function questClaim(g: Game, p: Player, payload: Record<string, any>) {
   const q = p.quests[questId];
   if (!q || q.status !== 'complete') {
     fail('QUEST_STATE', `quest ${questId} is ${q?.status ?? 'not accepted'}`, undefined,
-      !q ? `accept it first with quest.accept` : q.status === 'claimed' ? 'the reward was already paid' : `progress ${Math.min(q.progress, def!.objective.count)}/${def!.objective.count}: ${def!.description} Only kills, gathers and crafts after accepting count. Claim it once progress reaches the goal.`);
+      !q ? `accept it first with quest.accept` : q.status === 'claimed' ? 'the reward was already paid' : `progress ${Math.min(q.progress, def!.objective.count)}/${def!.objective.count}: ${def!.description} Only kills, gathers, crafts and settled trades after accepting count. Claim it once progress reaches the goal.`);
   }
   q!.status = 'claimed';
   addItems(p.inventory, def!.reward);
