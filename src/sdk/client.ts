@@ -7,7 +7,7 @@
 // command can never duplicate items or transfers.
 
 import { randomUUID } from 'node:crypto';
-import { MAX_CRAFT_BATCH, zonePath, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
+import { ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, zonePath, type ToolJob, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
 import {
   TRANSIENT_ERRORS,
   type ApiError, type CommandResponse, type CommandType, type EventType, type FeedbackCategory, type GameEvent,
@@ -335,7 +335,23 @@ export class GameClient {
     }
   }
 
-  /** Gathers from nodes in the current zone until `qty` more of `item` were collected. */
+  /**
+   * Makes sure a tool for `job` of tier >= requiredToolTier(tier) is in the tool slot, equipping the best carried one if needed.
+   * Returns the equipped tool id, or null when you carry none that fits (the next command then fails with TOOL_REQUIRED and a hint).
+   */
+  async equipToolFor(job: ToolJob, tier = 1): Promise<string | null> {
+    const need = requiredToolTier(tier);
+    const obs = await this.observe();
+    const fits = (id?: string) => { const d = id ? ITEMS[id] : undefined; return !!d?.toolFor?.includes(job) && (d.toolTier ?? 0) >= need; };
+    const cur = obs.self.equipment.tool;
+    if (fits(cur)) return cur!;
+    const best = obs.self.inventory.filter((s) => s.qty > 0 && fits(s.item)).sort((a, b) => (ITEMS[b.item].toolTier ?? 0) - (ITEMS[a.item].toolTier ?? 0))[0];
+    if (!best) return null;
+    await this.sendWhenReady('equip', { item: best.item });
+    return best.item;
+  }
+
+  /** Gathers from nodes in the current zone until `qty` more of `item` were collected. Equips a matching tool first. */
   async gatherItem(item: string, qty: number, o: { timeoutMs?: number } = {}): Promise<number> {
     const deadline = Date.now() + (o.timeoutMs ?? 120_000);
     let got = 0;
@@ -346,6 +362,8 @@ export class GameClient {
       if (!nodes.length) throw new Error(`no ${item} nodes in ${obs.self.zone}`);
       const node = nodes.find((n) => n.charges > 0);
       if (!node) { await sleep(Math.min(...nodes.map((n) => n.nextChargeInMs || 100)) + 2); continue; }
+      const nd = NODE_TYPES[node.type];
+      if (nd) await this.equipToolFor(nd.skill, nd.tier);
       const resp = await this.request('gather', { nodeId: node.id });
       if (resp.ok) got += resp.result.qty;
       else if (!TRANSIENT_ERRORS.has(resp.error.code)) throw new CommandError(resp.error, 'gather', resp.commandId);
@@ -353,8 +371,10 @@ export class GameClient {
     return got;
   }
 
-  /** Runs a refining or crafting recipe `count` times, batching and waiting out busy time. */
+  /** Runs a refining or crafting recipe `count` times, batching and waiting out busy time. Equips a matching tool first. */
   async make(recipeId: string, count: number, kind: 'refine' | 'craft'): Promise<ItemStack> {
+    const rd = RECIPES[recipeId];
+    if (rd) await this.equipToolFor(rd.skill, rd.tier);
     let left = count;
     let made = 0;
     let item = '';
@@ -416,11 +436,14 @@ export class GameClient {
     }
   }
 
-  /** Kills `count` mobs of `mobType` in the current zone, resting between fights. Returns all loot. */
+  /** Kills `count` mobs of `mobType` in the current zone, resting between fights. Returns all loot. Equips a skinning knife first when the beast drops hides. */
   async hunt(mobType: string, count: number, o: { restBelowPct?: number; timeoutMs?: number } = {}): Promise<ItemStack[]> {
     const deadline = Date.now() + (o.timeoutMs ?? 120_000);
     const loot: ItemStack[] = [];
     let kills = 0;
+    const md = MOB_TYPES[mobType];
+    // Beasts drop hides only to a killer with a skinning knife equipped.
+    if (md?.drops.some((d) => d.skin)) await this.equipToolFor('skinning', md.tier);
     while (kills < count) {
       if (Date.now() > deadline) throw new Error(`hunt(${mobType}) timed out after ${kills}/${count}`);
       let obs = await this.waitReady();

@@ -193,7 +193,7 @@ test('failureSummary groups by bot, command and code, and flags a current streak
     assert.equal(gather.streak, true);
     assert.equal(gather.streakLength, REPEAT_THRESHOLD);
     assert.ok(gather.firstTs <= gather.lastTs);
-    assert.match(gather.latestReason, /mining tool/);
+    assert.match(gather.latestReason, /pickaxe equipped/);
     const move = mine.find((f: any) => f.type === 'move' && f.code === 'BAD_REQUEST');
     assert.equal(move.count, 1);
     assert.equal(move.streak, false);

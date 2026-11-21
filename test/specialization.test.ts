@@ -58,7 +58,7 @@ test('focused skills earn double XP and keep their full level; unfocused skills 
     const ps = raw(w, (await spec.whoami()).playerId);
     const pg = raw(w, (await gen.whoami()).playerId);
     ps.skills.mining = 1000; pg.skills.mining = 1000; // trained level 10 each
-    for (const c of [spec, gen]) await c.travelTo('wilds');
+    for (const c of [spec, gen]) { await c.equip('copper_pickaxe'); await c.travelTo('wilds'); }
     const node = (await spec.observe()).zone!.nodes.find((n) => n.item === 'copper_ore')!;
     const rs = await spec.gather(node.id);
     await gen.waitReady();
@@ -83,6 +83,7 @@ test('focused gathering and crafting yield bonus output', async () => {
     p.skills.smelting = 4000; p.skills.mining = 4000; // trained level 20
     p.inventory.copper_ore = 20;
     setRng(w, () => 0); // every chance roll succeeds
+    await c.equip('copper_tongs');
     const plain = await c.refine('copper_bar', 2);
     assert.equal(plain.output.qty, 2, 'unfocused refining never yields bonus output');
     await c.waitReady();
@@ -90,6 +91,7 @@ test('focused gathering and crafting yield bonus output', async () => {
     const focused = await c.refine('copper_bar', 4);
     assert.equal(focused.bonus, 4);
     assert.equal(focused.output.qty, 8);
+    await c.equip('copper_pickaxe');
     await c.travelTo('wilds');
     const node = (await c.observe()).zone!.nodes.find((n) => n.item === 'copper_ore')!;
     const g = await c.gather(node.id);
@@ -103,7 +105,8 @@ test('tier-3 recipes need focus in their skill', async () => {
     const c = await w.bot('Armorer');
     const p = raw(w, (await c.whoami()).playerId);
     p.skills.armorcraft = 100; // trained level 3
-    p.inventory.wraith_essence = 2; p.inventory.leather = 3; p.inventory.iron_bar = 1;
+    p.inventory.wraith_essence = 2; p.inventory.leather = 3; p.inventory.iron_bar = 1; p.inventory.iron_hammer = 1;
+    await c.equip('iron_hammer');
     const denied = await c.request('craft', { recipeId: 'wraithhide_armor' });
     assert.equal(!denied.ok && denied.error.code, 'FOCUS_REQUIRED');
     assert.match(!denied.ok ? denied.error.hint ?? '' : '', /focus\.set/);

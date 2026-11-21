@@ -339,7 +339,7 @@
       const where = b.travel ? `<span class="zone transit">${esc(b.travel.from)} → ${esc(b.travel.to)}</span>` : zoneTag(b.zone);
       const fr = b.failureRate, rate = fr.attempts ? fr.failures / fr.attempts : 0;
       const chip = fr.failures ? `<span class="chip ${fr.failures >= 3 && rate >= 0.5 ? 'bad' : fr.failures >= 3 && rate >= 0.2 ? 'warn' : ''}" title="${fr.failures} failed of ${fr.attempts} write attempts in the last ${Math.round(fr.windowMs / 60000)} min">${Math.round(rate * 100)}% fail</span>` : '';
-      const gear = [b.equipment.weapon, b.equipment.armor].filter(Boolean).map(nm).map(esc).join(', ') || '<span class="muted">none</span>';
+      const gear = [b.equipment.weapon, b.equipment.armor, b.equipment.tool].filter(Boolean).map(nm).map(esc).join(', ') || '<span class="muted">none</span>';
       const open = openCards.has(b.id);
       return `<tr class="bot ${open ? 'open' : ''}" data-bot="${esc(b.id)}" title="Show bot card"><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b>${chip}<div class="mono muted">${esc(b.id)}</div></td>
         <td>${where}</td><td>${b.hp}/${b.maxHp}<div class="hp ${pct < 35 ? 'low' : ''}"><i style="width:${pct}%"></i></div></td>
