@@ -6,7 +6,7 @@ import { MOB_TYPES, NODE_TYPES, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } f
 import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/protocol.ts';
 import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
-import type { CommandDef, LootBag, Mob, Player, ResourceNode, Subscriber, Trade, Visibility } from './types.ts';
+import type { CommandDef, LootBag, Mob, Player, ResourceNode, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
 import { worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
 import { tradeCommands, tradeTick } from './trade.ts';
@@ -32,6 +32,8 @@ const RATE_BURST = 80;
 const ONLINE_WINDOW_MS = 60_000;
 /** Identical failures (same command type and error code, back to back) before the error carries `repeated`. */
 export const REPEAT_THRESHOLD = 3;
+/** Game-clock spacing of the operator's per-player progression snapshots. */
+export const SNAPSHOT_INTERVAL_MS = 60_000;
 /** High-volume operator events pruned after `EVENT_RETENTION_MS`; trades, deaths, quests, chat etc. are kept. */
 const PRUNABLE_EVENTS = ['combat.hit', 'combat.buff', 'gather', 'travel.depart', 'travel.arrive', 'player.online', 'player.offline', 'command.failed', 'bank', 'shop', 'repair'];
 
@@ -65,6 +67,7 @@ export class Game {
   readonly recentCommands = new Map<string, { ts: number; type: string; commandId: string; ok: boolean; code?: string }[]>();
   private timer: NodeJS.Timeout | null = null;
   private tickMs: number;
+  private lastSnapshotAt: number;
 
   constructor(opts: GameOptions) {
     this.store = new Store(opts.dbPath);
@@ -73,6 +76,7 @@ export class Game {
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? ((l) => console.log(l));
     this.tickMs = opts.tickMs ?? 25;
+    this.lastSnapshotAt = this.store.get<{ ts: number | null }>('SELECT MAX(ts) AS ts FROM snapshots')?.ts ?? -Infinity;
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
     this.commands = { ...worldCommands, ...socialCommands, ...tradeCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
@@ -389,9 +393,25 @@ export class Game {
         tradeTick(this, now);
         this.updateOnline(now);
       });
+      if (now - this.lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) this.snapshot(now);
     } catch (e) {
       this.log(`[tick-error] ${(e as Error).stack ?? e}`);
     }
+  }
+
+  /** Observation only: one progression row per player for the operator's sparklines and presence timeline. */
+  private snapshot(now: number) {
+    this.lastSnapshotAt = now;
+    this.store.transaction(() => {
+      for (const p of this.players.values()) {
+        const data: SnapshotData = {
+          skills: { ...p.skills }, kills: p.stats.kills, deaths: p.stats.deaths,
+          carried: p.inventory.silver ?? 0, banked: p.bank.silver ?? 0,
+          zone: p.zone, traveling: !!p.travel, online: this.online.has(p.id),
+        };
+        this.store.run('INSERT INTO snapshots(ts, player_id, data) VALUES(?, ?, ?)', now, p.id, JSON.stringify(data));
+      }
+    });
   }
 
   private updateOnline(now: number) {
@@ -431,11 +451,12 @@ export class Game {
   }
 
   /** Housekeeping: drops old idempotency records, high-volume operator events and old failure rows. */
-  prune(opts: { commandsMs?: number; eventsMs?: number; failuresMs?: number } = {}) {
+  prune(opts: { commandsMs?: number; eventsMs?: number; failuresMs?: number; snapshotsMs?: number } = {}) {
     const now = this.now();
     this.pruneCommands(opts.commandsMs);
     this.store.run(`DELETE FROM events WHERE ts < ? AND type IN (${PRUNABLE_EVENTS.map(() => '?').join(', ')})`, now - (opts.eventsMs ?? 24 * 3600_000), ...PRUNABLE_EVENTS);
     this.store.run('DELETE FROM failures WHERE ts < ?', now - (opts.failuresMs ?? 7 * 24 * 3600_000));
+    this.store.run('DELETE FROM snapshots WHERE ts < ?', now - (opts.snapshotsMs ?? 30 * 24 * 3600_000));
   }
 }
 

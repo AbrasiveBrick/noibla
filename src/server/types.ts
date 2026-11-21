@@ -92,3 +92,15 @@ export interface CommandDef {
   mutates: boolean;
   run: (g: Game, p: Player, payload: Record<string, any>) => unknown;
 }
+
+/** One operator snapshot of a player's progression (observation only). */
+export interface SnapshotData {
+  skills: Partial<Record<SkillId, number>>;
+  kills: number;
+  deaths: number;
+  carried: number;
+  banked: number;
+  zone: ZoneId | null;
+  traveling: boolean;
+  online: boolean;
+}

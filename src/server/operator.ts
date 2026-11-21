@@ -2,11 +2,12 @@
 // Nothing is scrubbed: agents run in isolated sandboxes and never see this view.
 // Includes private messages, pending trade submissions and lock state.
 
-import { ITEMS, ZONES } from '../shared/catalog.ts';
+import { ITEMS, QUESTS, SKILLS, ZONES, levelFor, type SkillId } from '../shared/catalog.ts';
 import type { GameEvent } from '../shared/protocol.ts';
 import { REPEAT_THRESHOLD, type Game } from './game.ts';
 import type { Store } from './store.ts';
-import { maxHp } from './world.ts';
+import { gearView, maxHp } from './world.ts';
+import type { SnapshotData } from './types.ts';
 import { silverFee } from './trade.ts';
 import { toStacks } from './util.ts';
 
@@ -87,7 +88,18 @@ function failureRates(g: Game, now: number) {
   };
 }
 
-export function operatorState(g: Game, sinceEventId: number) {
+const totalLevel = (skills: Partial<Record<string, number>>) => SKILLS.reduce((n, s) => n + levelFor(skills[s] ?? 0), 0);
+
+/** Progression snapshots: all retained rows on a first poll (sinceEventId 0), afterwards only rows with id > sinceSnapshotId. */
+function snapshots(g: Game, sinceEventId: number, sinceSnapshotId: number) {
+  const after = sinceEventId === 0 ? 0 : sinceSnapshotId;
+  return g.store.all<{ id: number; ts: number; player_id: string; data: string }>('SELECT id, ts, player_id, data FROM snapshots WHERE id > ? ORDER BY id ASC', after).map((r) => {
+    const d = JSON.parse(r.data) as SnapshotData;
+    return { id: r.id, ts: r.ts, playerId: r.player_id, ...d, totalLevel: totalLevel(d.skills) };
+  });
+}
+
+export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0) {
   const now = g.now();
   const rateOf = failureRates(g, now);
   const bots = [...g.players.values()].map((p) => ({
@@ -105,6 +117,10 @@ export function operatorState(g: Game, sinceEventId: number) {
     lastSeenAt: p.lastSeenAt,
     silver: { carried: p.inventory.silver ?? 0, banked: p.bank.silver ?? 0 },
     failureRate: rateOf(p.id),
+    gear: gearView(p),
+    skillLevels: Object.fromEntries(SKILLS.map((s) => [s, levelFor(p.skills[s] ?? 0)])) as Record<SkillId, number>,
+    quests: Object.entries(p.quests).filter(([, q]) => q.status !== 'claimed').map(([questId, q]) => ({ questId, name: QUESTS[questId]?.name ?? questId, status: q.status, progress: Math.min(q.progress, QUESTS[questId]?.objective.count ?? q.progress), goal: QUESTS[questId]?.objective.count ?? 0 })),
+    combatLockUntil: p.combatLockUntil,
   }));
   const circulation = bots.reduce((c, b) => ({ carried: c.carried + b.silver.carried, banked: c.banked + b.silver.banked }), { carried: 0, banked: 0 });
   const closed = g.store.all<{ data: string }>("SELECT data FROM events WHERE type = 'trade.closed' ORDER BY id DESC LIMIT 200").map((r) => (JSON.parse(r.data) as GameEvent).data);
@@ -147,5 +163,6 @@ export function operatorState(g: Game, sinceEventId: number) {
     })),
     economy: economy(g, circulation),
     feedback,
+    snapshots: snapshots(g, sinceEventId, sinceSnapshotId),
   };
 }

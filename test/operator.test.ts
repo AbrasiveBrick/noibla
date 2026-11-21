@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEATH_SILVER_LOSS, TRADE_SILVER_FEE, WEAR } from '../src/shared/catalog.ts';
-import { REPEAT_THRESHOLD } from '../src/server/game.ts';
+import { DEATH_SILVER_LOSS, SKILLS, TRADE_SILVER_FEE, WEAR, levelFor } from '../src/shared/catalog.ts';
+import { Game, REPEAT_THRESHOLD, SNAPSHOT_INTERVAL_MS } from '../src/server/game.ts';
+import { operatorState } from '../src/server/operator.ts';
 import { killPlayer } from '../src/server/world.ts';
 import { world, OP } from './helpers.ts';
 
@@ -206,4 +207,72 @@ test('failureSummary groups by bot, command and code, and flags a current streak
     st = await w.operator();
     assert.equal(st.failureSummary.find((f: any) => f.playerId === id && f.type === 'gather').streak, false);
   } finally { await w.close(); }
+});
+
+test('bot cards: per-bot gear wear, skill levels, open quests and combat lock', async () => {
+  const w = await world();
+  try {
+    const g = w.server.game;
+    const a = await w.bot('Carded');
+    const p = g.players.get((await a.whoami()).playerId)!;
+    p.equipment.weapon = 'iron_sword';
+    p.wear = { iron_sword: WEAR.max };
+    p.skills = { swords: 1000, mining: 39 };
+    p.quests = { wolf_cull: { status: 'active', progress: 2 }, ore_run: { status: 'claimed', progress: 6 } };
+    p.combatLockUntil = g.now() + 4000;
+    const bot = (await w.operator()).bots.find((x: any) => x.id === p.id);
+    assert.deepEqual(bot.gear, { weapon: { item: 'iron_sword', wear: WEAR.max, broken: true, repairCost: WEAR.repairCostByTier[2] } });
+    assert.deepEqual(Object.keys(bot.skillLevels), SKILLS);
+    assert.equal(bot.skillLevels.swords, levelFor(1000));
+    assert.equal(bot.skillLevels.mining, levelFor(39));
+    assert.equal(bot.skillLevels.tanning, 0);
+    assert.deepEqual(bot.quests, [{ questId: 'wolf_cull', name: 'Wolf Cull', status: 'active', progress: 2, goal: 3 }], 'claimed quests are not open');
+    assert.equal(bot.combatLockUntil, p.combatLockUntil);
+  } finally { await w.close(); }
+});
+
+test('snapshots: written every SNAPSHOT_INTERVAL_MS of game time; all on since=0, then only newer rows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'noibla-snap-'));
+  let clock = 1_000_000;
+  const open = () => new Game({ dbPath: join(dir, 'world.db'), now: () => clock, log: () => {} });
+  let g = open();
+  const { playerId } = g.register('Snapper');
+  const { playerId: other } = g.register('Watcher');
+  const count = () => g.store.get<{ n: number }>('SELECT COUNT(*) AS n FROM snapshots')!.n;
+  g.tick();
+  assert.equal(count(), 2, 'first tick writes one row per player');
+  clock += SNAPSHOT_INTERVAL_MS - 1; g.tick();
+  assert.equal(count(), 2, 'not before the interval');
+  const p = g.players.get(playerId)!;
+  p.skills = { swords: 1000 }; p.stats.kills = 4; p.bank.silver = 50; p.lastSeenAt = clock + 1;
+  clock += 1; g.tick();
+  assert.equal(count(), 4);
+
+  const first = operatorState(g, 0);
+  assert.equal(first.snapshots.length, 4);
+  const last = first.snapshots.filter((s: any) => s.playerId === playerId).at(-1)!;
+  assert.equal(last.ts, clock);
+  assert.deepEqual({ kills: last.kills, deaths: last.deaths, carried: last.carried, banked: last.banked, zone: last.zone, traveling: last.traveling, online: last.online, skills: last.skills },
+    { kills: 4, deaths: 0, carried: p.inventory.silver ?? 0, banked: 50, zone: 'town', traveling: false, online: true, skills: { swords: 1000 } });
+  assert.equal(last.totalLevel, levelFor(1000));
+  assert.equal(first.snapshots.filter((s: any) => s.playerId === other).at(-1)!.online, false, 'idle past the online window');
+  const cursor = first.snapshots.at(-1)!.id;
+  const evCursor = first.events.at(-1)!.id;
+  assert.equal(operatorState(g, evCursor, cursor).snapshots.length, 0, 'nothing new since the last poll');
+  clock += SNAPSHOT_INTERVAL_MS; g.tick();
+  const next = operatorState(g, evCursor, cursor).snapshots;
+  assert.deepEqual(next.map((s: any) => s.playerId).sort(), [playerId, other].sort());
+  assert.ok(next.every((s: any) => s.id > cursor && s.ts === clock));
+  assert.equal(operatorState(g, 0, cursor).snapshots.length, 6, 'since=0 ignores the snapshot cursor');
+
+  // A restart does not write a duplicate before the interval has passed.
+  g.store.close();
+  g = open();
+  g.tick();
+  assert.equal(count(), 6);
+  clock += SNAPSHOT_INTERVAL_MS; g.tick();
+  assert.equal(count(), 8);
+  g.prune({ snapshotsMs: SNAPSHOT_INTERVAL_MS / 2 });
+  assert.equal(count(), 2, 'prune drops snapshots older than the retention');
+  g.store.close();
 });

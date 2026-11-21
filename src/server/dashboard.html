@@ -87,6 +87,30 @@
   .eco h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 6px 0 2px; }
   details.raw > summary { cursor: pointer; padding: 10px 14px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
   .note { font-size: 12px; color: var(--muted); padding: 0 14px 10px; }
+  tr.bot { cursor: pointer; }
+  tr.bot:hover td { background: var(--soft); }
+  tr.bot td:first-child b::before { content: '▸ '; color: var(--muted); font-weight: 400; }
+  tr.bot.open td:first-child b::before { content: '▾ '; }
+  tr.card > td { background: var(--soft); padding: 10px 12px 12px; }
+  .cardgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 18px; }
+  .cardgrid h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; margin: 0 0 4px; }
+  .skills { display: grid; grid-template-columns: auto auto; justify-content: start; gap: 0 14px; font-size: 12px; }
+  .skills .zero { color: var(--muted); }
+  .wear { width: 100%; max-width: 160px; height: 5px; background: var(--panel); border-radius: 3px; overflow: hidden; margin: 3px 0 2px; }
+  .wear > i { display: block; height: 100%; background: var(--warn); }
+  .wear.broken > i { background: var(--bad); }
+  .spark { display: grid; grid-template-columns: 52px 1fr auto; gap: 2px 8px; align-items: center; font-size: 12px; }
+  .spark svg { width: 100%; height: 26px; display: block; color: var(--accent); }
+  .presence { padding: 4px 14px 12px; border-top: 1px solid var(--line); }
+  .presence h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 8px 0 6px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+  .presence .lane { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; margin: 3px 0; }
+  .presence .lane span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .presence svg { width: 100%; height: 10px; display: block; background: var(--soft); border-radius: 2px; }
+  .presence .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-left: 118px; font-family: var(--mono); }
+  .key { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
+  .key i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .p-town { fill: var(--town); background: var(--town); } .p-wilds { fill: var(--wild); background: var(--wild); } .p-frontier { fill: var(--lethal); background: var(--lethal); }
+  .p-travel { fill: var(--warn); background: var(--warn); } .p-off { fill: var(--line); background: var(--line); }
 </style>
 </head>
 <body>
@@ -113,6 +137,7 @@
     <section>
       <h2>World view <span class="count muted" id="worldCount"></span></h2>
       <div class="body"><table><thead><tr><th>Bot</th><th>Where</th><th>HP</th><th>Gear</th><th>K/D</th><th>Last did</th></tr></thead><tbody id="world"></tbody></table></div>
+      <div class="presence" id="presence"></div>
     </section>
 
     <section style="grid-row: span 2">
@@ -206,6 +231,10 @@
   let token = null;
   try { token = sessionStorage.getItem('opToken'); } catch {}
   let since = 0, events = [], state = null, timer = null, items = {};
+  // Progression snapshots per bot (oldest first), fetched in full once and then incrementally.
+  let snap = 0, snaps = new Map();
+  const openCards = new Set();
+  const SNAP_GAP_MS = 150_000; // longer than ~2 snapshot intervals: the server was down, leave the strip blank
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const nm = (id) => items[id] || id;
@@ -223,16 +252,19 @@
     e.preventDefault();
     token = $('tokenInput').value.trim();
     try { sessionStorage.setItem('opToken', token); } catch {}
-    since = 0; events = [];
+    since = 0; events = []; snap = 0; snaps = new Map();
     start();
   });
 
   async function poll() {
     try {
-      const res = await fetch(`/operator/state?since=${since}`, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+      const res = await fetch(`/operator/state?since=${since}&snap=${snap}`, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
       if (res.status === 401) { try { sessionStorage.removeItem('opToken'); } catch {} return showLogin('That is not a valid operator credential.'); }
       state = await res.json();
       items = state.items;
+      if (since === 0) snaps = new Map();
+      for (const r of state.snapshots) { if (!snaps.has(r.playerId)) snaps.set(r.playerId, []); snaps.get(r.playerId).push(r); }
+      if (state.snapshots.length) snap = state.snapshots[state.snapshots.length - 1].id;
       if (state.events.length) { events.push(...state.events); since = state.events[state.events.length - 1].id; if (events.length > 5000) events = events.slice(-5000); }
       $('status').textContent = `live · updated ${t(Date.now())}`;
       render();
@@ -306,11 +338,13 @@
       const fr = b.failureRate, rate = fr.attempts ? fr.failures / fr.attempts : 0;
       const chip = fr.failures ? `<span class="chip ${fr.failures >= 3 && rate >= 0.5 ? 'bad' : fr.failures >= 3 && rate >= 0.2 ? 'warn' : ''}" title="${fr.failures} failed of ${fr.attempts} write attempts in the last ${Math.round(fr.windowMs / 60000)} min">${Math.round(rate * 100)}% fail</span>` : '';
       const gear = [b.equipment.weapon, b.equipment.armor].filter(Boolean).map(nm).map(esc).join(', ') || '<span class="muted">none</span>';
-      return `<tr><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b>${chip}<div class="mono muted">${esc(b.id)}</div></td>
+      const open = openCards.has(b.id);
+      return `<tr class="bot ${open ? 'open' : ''}" data-bot="${esc(b.id)}" title="Show bot card"><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b>${chip}<div class="mono muted">${esc(b.id)}</div></td>
         <td>${where}</td><td>${b.hp}/${b.maxHp}<div class="hp ${pct < 35 ? 'low' : ''}"><i style="width:${pct}%"></i></div></td>
         <td>${gear}</td><td>${b.kills}/${b.deaths}</td>
-        <td>${b.lastAction ? `${esc(b.lastAction.summary)}<div class="muted">${ago(b.lastAction.at)}</div>` : ''}</td></tr>`;
+        <td>${b.lastAction ? `${esc(b.lastAction.summary)}<div class="muted">${ago(b.lastAction.at)}</div>` : ''}</td></tr>${open ? botCard(b, s.now) : ''}`;
     }).join('') || '<tr><td colspan="6" class="empty">No bots registered yet.</td></tr>';
+    renderPresence(s);
     $('worldCount').textContent = `${s.bots.length} bots`;
 
     // filter options
@@ -361,6 +395,68 @@
       s.feedback.map((f) => `<tr><td class="mono">${t(f.ts)}</td><td><b>${esc(f.name)}</b></td><td>${esc(f.category)}</td><td>${esc(f.summary)}</td><td>${esc(f.details)}</td>
         <td class="mono">${(f.context.recentCommands || []).slice(-5).map((c) => `${esc(c.type)} ${c.ok ? 'ok' : esc(c.code)}`).join('<br>')}</td></tr>`).join('')
     }</tbody></table>` : '<div class="empty">No feedback yet.</div>';
+  }
+
+  const sumLevels = (lv) => Object.values(lv || {}).reduce((n, x) => n + x, 0);
+
+  /** Inline-SVG sparkline of [ts, value] points over the points' own time span. */
+  function sparkline(points) {
+    if (points.length < 2) return '<svg viewBox="0 0 100 26" aria-hidden="true"></svg>';
+    const t0 = points[0][0], t1 = points[points.length - 1][0] || t0 + 1;
+    let lo = Infinity, hi = -Infinity;
+    for (const [, v] of points) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    const span = hi - lo || 1, tspan = t1 - t0 || 1;
+    const xy = points.map(([ts, v]) => `${(((ts - t0) / tspan) * 100).toFixed(2)},${(23 - ((v - lo) / span) * 20).toFixed(2)}`).join(' ');
+    return `<svg viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true"><polyline points="${xy}" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+  }
+
+  function botCard(b, now) {
+    const hist = snaps.get(b.id) || [];
+    const series = (pick, live) => [...hist.map((r) => [r.ts, pick(r)]), [now, live]];
+    const wealth = b.silver.carried + b.silver.banked, total = sumLevels(b.skillLevels);
+    const sp = (label, pts, cur) => `<span class="muted">${label}</span>${sparkline(pts)}<b class="num">${fmt(cur)}</b>`;
+    const skills = Object.entries(b.skillLevels).map(([k, v]) => `<span class="${v ? '' : 'zero'}">${esc(k)}</span><span class="num ${v ? '' : 'zero'}">${v}</span>`).join('');
+    const gear = Object.entries(b.gear).map(([slot, g]) => `<div><span class="muted">${esc(slot)}</span> ${esc(nm(g.item))}${g.broken ? ' <span class="chip bad">broken</span>' : ''}
+      <div class="wear ${g.broken ? 'broken' : ''}" title="wear ${g.wear}/${100}"><i style="width:${Math.min(100, g.wear)}%"></i></div>
+      <span class="muted">wear ${g.wear}% · repair ${g.repairCost ? `${g.repairCost} silver` : 'not needed'}</span></div>`).join('') || '<span class="muted">nothing equipped</span>';
+    const quests = b.quests.map((q) => `<div>${esc(q.name)} <span class="muted">${q.status === 'complete' ? 'ready to claim' : `${q.progress}/${q.goal}`}</span></div>`).join('') || '<span class="muted">none</span>';
+    const lock = Math.max(0, b.combatLockUntil - now);
+    const kd = b.deaths ? (b.kills / b.deaths).toFixed(2) : b.kills ? '∞' : '—';
+    return `<tr class="card"><td colspan="6"><div class="cardgrid">
+      <div><h3>Progress <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">${hist.length ? `since ${t(hist[0].ts)}` : 'no snapshots yet'}</span></h3>
+        <div class="spark">${sp('wealth', series((r) => r.carried + r.banked, wealth), wealth)}${sp('total lvl', series((r) => r.totalLevel, total), total)}${sp('kills', series((r) => r.kills, b.kills), b.kills)}</div></div>
+      <div><h3>Skill levels · total ${total}</h3><div class="skills">${skills}</div></div>
+      <div><h3>Combat</h3><div>K/D <b>${b.kills}/${b.deaths}</b> <span class="muted">(${kd})</span></div>
+        <div>Combat lock ${lock ? `<b class="broke">${(lock / 1000).toFixed(1)}s left</b>` : '<span class="muted">none</span>'}</div>
+        <h3 style="margin-top:10px">Wealth</h3><div>${fmt(b.silver.carried)} carried · ${fmt(b.silver.banked)} banked · <b>${fmt(wealth)}</b> total</div></div>
+      <div><h3>Gear</h3>${gear}<h3 style="margin-top:10px">Open quests</h3>${quests}</div>
+    </div></td></tr>`;
+  }
+
+  /** One strip per bot over the run, from snapshots: zone color when online, travel and offline in their own colors. */
+  function renderPresence(s) {
+    let t0 = Infinity;
+    for (const list of snaps.values()) if (list.length) t0 = Math.min(t0, list[0].ts);
+    if (t0 === Infinity) { $('presence').innerHTML = '<div class="empty">Presence timeline appears after the first progression snapshot (once a minute).</div>'; return; }
+    const t1 = Math.max(s.now, t0 + 1), W = 1000, x = (ts) => ((ts - t0) / (t1 - t0)) * W;
+    const cls = (r) => !r.online ? 'p-off' : r.traveling ? 'p-travel' : `p-${r.zone}`;
+    const label = (r) => !r.online ? 'offline' : r.traveling ? 'traveling' : r.zone;
+    const lanes = s.bots.map((b) => {
+      const list = snaps.get(b.id) || [];
+      const segs = [];
+      list.forEach((r, i) => {
+        const end = i + 1 < list.length ? list[i + 1].ts : Math.min(s.now, r.ts + SNAP_GAP_MS);
+        if (end - r.ts > SNAP_GAP_MS) return;
+        const c = cls(r), last = segs[segs.length - 1];
+        if (last && last.c === c && last.end === r.ts) last.end = end;
+        else segs.push({ c, start: r.ts, end, label: label(r) });
+      });
+      const rects = segs.map((g) => `<rect class="${g.c}" x="${x(g.start).toFixed(1)}" y="0" width="${Math.max(0.5, x(g.end) - x(g.start)).toFixed(1)}" height="10"><title>${esc(g.label)} ${t(g.start)}–${t(g.end)}</title></rect>`).join('');
+      return `<div class="lane"><span>${esc(b.name)}</span><svg viewBox="0 0 ${W} 10" preserveAspectRatio="none">${rects}</svg></div>`;
+    }).join('');
+    const keys = [['p-town', 'town'], ['p-wilds', 'wilds'], ['p-frontier', 'frontier'], ['p-travel', 'traveling'], ['p-off', 'offline']].map(([c, l]) => `<span class="key"><i class="${c}"></i>${l}</span>`).join('');
+    const day = (ts) => new Date(ts).toLocaleString([], { hour12: false, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    $('presence').innerHTML = `<h3>Presence timeline ${keys}</h3>${lanes}<div class="axis"><span>${day(t0)}</span><span>${day(t1)}</span></div>`;
   }
 
   // Whose routine stream an event belongs to: the actor, or the player a mob hit.
@@ -507,6 +603,13 @@
   }, true);
   for (const id of ['fBot', 'fZone', 'fType', 'fRoutine']) $(id).addEventListener('change', renderFeed);
   $('fTransient').addEventListener('change', render);
+  $('world').addEventListener('click', (e) => {
+    const row = e.target.closest('tr.bot');
+    if (!row) return;
+    const id = row.dataset.bot;
+    if (openCards.has(id)) openCards.delete(id); else openCards.add(id);
+    if (state) render();
+  });
   if (token) start(); else showLogin();
 })();
 </script>
