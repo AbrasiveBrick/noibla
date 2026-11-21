@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS feedback (
   summary TEXT NOT NULL, details TEXT NOT NULL, context TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS economy_ledger (kind TEXT PRIMARY KEY, qty INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, player_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS snapshots_ts ON snapshots(ts);
 CREATE INDEX IF NOT EXISTS failures_player ON failures(player_id, id);
 `;
 

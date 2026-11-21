@@ -104,7 +104,8 @@ async function handleOperator(game: Game, req: IncomingMessage, res: ServerRespo
   if (req.method === 'GET' && path === '/operator/state') {
     if (!game.authOperator(bearer(req))) return send(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'operator credential required' } });
     const since = Number(url.searchParams.get('since') ?? '0') || 0;
-    return send(res, 200, operatorState(game, since));
+    const snap = Number(url.searchParams.get('snap') ?? '0') || 0;
+    return send(res, 200, operatorState(game, since, snap));
   }
   notFound(res, req, path);
 }
