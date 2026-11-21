@@ -6,9 +6,10 @@ import {
   ABILITIES, BASE_HP, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
   effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
-import type { UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, ZoneView } from '../shared/protocol.ts';
+import type { UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
+import { MAP_RULES, dist, findPath, inBounds, nearestWalkable, pathLength, placeOf, pointAlong, regionAt, walkable, type PlaceId, type Pos } from '../shared/map.ts';
 import type { Game } from './game.ts';
-import type { CommandDef, Mob, Player } from './types.ts';
+import type { CommandDef, Mob, Player, Walk } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
 
 // ---------- affixes ----------
@@ -137,11 +138,18 @@ function requireTool(g: Game, p: Player, job: ToolJob, tier: number, what: strin
   return gearMultiplier(p, 'tool') < 1 ? 1 / WEAR.brokenMultiplier : 1;
 }
 
-// ---------- guards ----------
+// ---------- position & guards ----------
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Live position: follows the walk path while walking. */
+export function posOf(g: Game, p: Player): Pos {
+  return p.travel ? pointAlong(p.travel.path, (g.now() - p.travel.departAt) / p.travel.msPerTile) : p.pos;
+}
 
 function requireArrived(g: Game, p: Player): ZoneId {
-  if (p.travel) fail('TRAVELING', `traveling to ${p.travel.to}`, p.travel.arriveAt - g.now());
-  return p.zone!;
+  if (p.travel) fail('TRAVELING', `walking to ${p.travel.target ?? p.travel.to}`, p.travel.arriveAt - g.now(), 'wait for arrival, or send a new move to change course');
+  return p.zone;
 }
 
 function requireReady(g: Game, p: Player) {
@@ -149,9 +157,31 @@ function requireReady(g: Game, p: Player) {
   if (p.busyUntil > now) fail('BUSY', 'still performing the previous action', p.busyUntil - now);
 }
 
-export function requireZone(g: Game, p: Player, zone: ZoneId, what: string): void {
-  const z = requireArrived(g, p);
-  if (z !== zone) fail('WRONG_ZONE', `${what} is only available in ${zone}`);
+/** Region-wide features (trade, forum, focus): being anywhere in the region is enough, also while walking. */
+export function requireZone(_g: Game, p: Player, zone: ZoneId, what: string): void {
+  if (p.zone !== zone) fail('WRONG_ZONE', `${what} is only available in ${zone}`, undefined, `travelTo('${zone}') (move { to: '${zone}' }) first`);
+}
+
+const at = (x: number, y: number) => `(${x}, ${y})`;
+
+function rangeHint(id: string) { return `walk there first: move { to: '${id}' } (SDK: goTo('${id}'))`; }
+
+/** Places (bank, stations, quest board, shop) need you within MAP_RULES.range.place of them. */
+function requirePlace(g: Game, p: Player, placeId: PlaceId, what: string, code: 'OUT_OF_RANGE' | 'NO_STATION' = 'OUT_OF_RANGE'): void {
+  const place = placeOf(g.map, placeId)!;
+  requireArrived(g, p);
+  if (code === 'OUT_OF_RANGE') requireZone(g, p, regionAt(g.map, place), what);
+  const d = dist(p.pos, place);
+  if (d > MAP_RULES.range.place + 1e-9) {
+    fail(code, `${what} needs you within ${MAP_RULES.range.place} tiles of the ${placeId} at ${at(place.x, place.y)} in ${regionAt(g.map, place)}; you are ${round1(d)} tiles away at ${at(round1(p.pos.x), round1(p.pos.y))}`, undefined, rangeHint(placeId));
+  }
+}
+
+function requireInRange(g: Game, p: Player, target: Pos, id: string, what: string): void {
+  const d = dist(p.pos, target);
+  if (d > MAP_RULES.range.interact + 1e-9) {
+    fail('OUT_OF_RANGE', `${what} ${id} is ${round1(d)} tiles away at ${at(round1(target.x), round1(target.y))}; range is ${MAP_RULES.range.interact}`, undefined, rangeHint(id));
+  }
 }
 
 // ---------- observation ----------
@@ -160,25 +190,39 @@ function questViews(p: Player): QuestProgress[] {
   return Object.entries(p.quests).map(([questId, q]) => ({ questId, status: q.status, progress: Math.min(q.progress, QUESTS[questId].objective.count), goal: QUESTS[questId].objective.count }));
 }
 
-function zoneView(g: Game, zone: ZoneId, viewerId: string): ZoneView {
+function walkView(g: Game, w: Walk): TravelView {
+  const now = g.now();
+  const dest = w.path[w.path.length - 1];
+  return { from: w.from, to: w.to, dest: { ...dest }, ...(w.target ? { target: w.target } : {}), arriveAt: w.arriveAt, arriveInMs: Math.max(0, w.arriveAt - now) };
+}
+
+/** Your region plus everything within MAP_RULES.viewRadius (any region), nearest first. */
+function zoneView(g: Game, p: Player): ZoneView {
+  const zone = p.zone;
   const z = ZONES[zone];
   const now = g.now();
+  const me = posOf(g, p);
+  const R = MAP_RULES.viewRadius;
+  const near = <T extends { distance: number }>(list: T[]) => list.filter((e) => e.distance <= R).sort((a, b) => a.distance - b.distance);
+  const loc = (q: Pos, range: number) => { const d = dist(me, q); return { x: round1(q.x), y: round1(q.y), distance: round1(d), inRange: d <= range + 1e-9 }; };
+  const I = MAP_RULES.range.interact;
   return {
-    id: z.id, name: z.name, safety: z.safety, adjacent: z.adjacent, stations: z.stations,
-    hasBank: z.hasBank, hasForum: z.hasForum, hasQuestBoard: z.hasQuestBoard, pvp: z.pvp,
-    nodes: [...g.nodes.values()].filter((n) => n.zone === zone).map((n) => {
+    id: z.id, name: z.name, safety: z.safety, adjacent: z.adjacent, hasBank: z.hasBank, hasForum: z.hasForum, hasQuestBoard: z.hasQuestBoard, pvp: z.pvp,
+    viewRadius: R,
+    places: near(g.map.places.map((s) => ({ id: s.id, ...loc(s, MAP_RULES.range.place) }))),
+    nodes: near([...g.nodes.values()].map((n) => {
       const def = NODE_TYPES[n.type];
-      return { id: n.id, type: n.type, item: def.item, tier: def.tier, charges: n.charges, maxCharges: def.maxCharges, nextChargeInMs: n.charges < def.maxCharges ? Math.max(0, n.nextChargeAt - now) : 0 };
-    }),
-    mobs: [...g.mobs.values()].filter((m) => m.zone === zone).map((m) => {
+      return { id: n.id, type: n.type, item: def.item, tier: def.tier, region: n.zone, ...loc(n, I), charges: n.charges, maxCharges: def.maxCharges, nextChargeInMs: n.charges < def.maxCharges ? Math.max(0, n.nextChargeAt - now) : 0 };
+    })),
+    mobs: near([...g.mobs.values()].map((m) => {
       const def = MOB_TYPES[m.type];
       const alive = m.deadUntil <= now && m.hp > 0;
-      return { id: m.id, type: m.type, name: def.name, hp: alive ? m.hp : 0, maxHp: def.hp, alive, respawnInMs: alive ? 0 : Math.max(0, m.deadUntil - now), targetId: alive ? m.targetId : null };
-    }),
-    players: [...g.players.values()].filter((o) => o.id !== viewerId && o.zone === zone && !o.travel).map((o) => ({
-      id: o.id, name: o.name, hpPct: Math.round((o.hp / maxHp(o)) * 100), equipment: { ...o.equipment }, inCombat: now - o.lastCombatAt < g.ms(TIMING.outOfCombatMs),
+      return { id: m.id, type: m.type, name: def.name, region: m.zone, ...loc(alive ? m : m.home, I), hp: alive ? m.hp : 0, maxHp: def.hp, alive, respawnInMs: alive ? 0 : Math.max(0, m.deadUntil - now), targetId: alive ? m.targetId : null };
     })),
-    lootBags: [...g.bags.values()].filter((b) => b.zone === zone).map((b) => ({ id: b.id, ownerId: b.ownerId, ownerName: b.ownerName, items: toStacks(b.items), expiresInMs: Math.max(0, b.expiresAt - now) })),
+    players: near([...g.players.values()].filter((o) => o.id !== p.id).map((o) => ({
+      id: o.id, name: o.name, region: o.zone, ...loc(posOf(g, o), I), walking: !!o.travel, hpPct: Math.round((o.hp / maxHp(o)) * 100), equipment: { ...o.equipment }, inCombat: now - o.lastCombatAt < g.ms(TIMING.outOfCombatMs),
+    }))),
+    lootBags: near([...g.bags.values()].map((b) => ({ id: b.id, region: b.zone, ...loc({ x: b.x!, y: b.y! }, I), ownerId: b.ownerId, ownerName: b.ownerName, items: toStacks(b.items), expiresInMs: Math.max(0, b.expiresAt - now) }))),
   };
 }
 
@@ -196,7 +240,8 @@ export function observe(g: Game, p: Player): Observation {
     now,
     self: {
       id: p.id, name: p.name, zone: p.zone,
-      travel: p.travel ? { from: p.travel.from, to: p.travel.to, arriveAt: p.travel.arriveAt, arriveInMs: Math.max(0, p.travel.arriveAt - now) } : null,
+      pos: (({ x, y }) => ({ x: round1(x), y: round1(y) }))(posOf(g, p)),
+      travel: p.travel ? walkView(g, p.travel) : null,
       hp: p.hp, maxHp: maxHp(p), busyMs: Math.max(0, p.busyUntil - now),
       inCombat: now - p.lastCombatAt < g.ms(TIMING.outOfCombatMs), combatLockedMs: Math.max(0, p.combatLockUntil - now),
       equipment: { ...p.equipment }, inventory: toStacks(p.inventory), skills, abilities,
@@ -206,7 +251,7 @@ export function observe(g: Game, p: Player): Observation {
       gear: gearView(p),
       uniques: uniquesOf(g, p),
     },
-    zone: p.zone && !p.travel ? zoneView(g, p.zone, p.id) : null,
+    zone: zoneView(g, p),
     unreadDms: unread,
     openTrades,
   };
@@ -214,39 +259,113 @@ export function observe(g: Game, p: Player): Observation {
 
 // ---------- movement ----------
 
-function move(g: Game, p: Player, payload: Record<string, any>) {
-  const to = reqStr(payload, 'to', 20) as ZoneId;
-  if (!ZONES[to]) fail('BAD_REQUEST', `unknown zone "${to}"`);
-  const from = requireArrived(g, p);
-  if (from === to) fail('BAD_REQUEST', `already in ${to}`);
-  if (!ZONES[from].adjacent.includes(to)) fail('NOT_ADJACENT', `${to} is not adjacent to ${from}; adjacent: ${ZONES[from].adjacent.join(', ')}`);
-  requireReady(g, p);
-  const now = g.now();
-  if (p.combatLockUntil > now) {
-    const attackers = [...g.mobs.values()].filter((m) => m.targetId === p.id && mobAlive(g, m)).map((m) => `${MOB_TYPES[m.type].name} (${m.id}, ${m.hp} hp)`);
-    fail('COMBAT_LOCKED', 'cannot leave the zone while in combat', p.combatLockUntil - now,
-      attackers.length
-        ? `every hit you deal or take renews the lock, and these mobs keep attacking you: ${attackers.join(', ')}. Kill them (or die) before moving.`
-        : 'stop attacking and wait retryAfterMs, then move.');
+/** Resolves `move { to }`: a region id, a place id, or the id of a node, mob, loot bag or player (or a player's name). */
+function resolveTarget(g: Game, p: Player, to: string): { dest: Pos; range: number } {
+  if ((ZONES as Record<string, unknown>)[to]) {
+    const zone = to as ZoneId;
+    if (p.zone === zone && !p.travel) fail('BAD_REQUEST', `already in ${zone}`, undefined, `to walk inside ${zone}, move to { x, y } or to a target id (node, mob, place, player)`);
+    return { dest: g.map.anchors[zone], range: 0 };
   }
-  p.travel = { from, to, departAt: now, arriveAt: now + g.ms(TIMING.travelMs) };
-  p.zone = null;
-  clearAggro(g, p.id);
-  g.emit('travel.depart', { kind: 'zone', zone: from }, { playerId: p.id, name: p.name, from, to }, { zone: from, actor: p });
-  g.setLastAction(p, 'travel', `traveling ${from} → ${to}`);
-  g.markPlayer(p);
-  return { travel: { from, to, arriveAt: p.travel.arriveAt, arriveInMs: p.travel.arriveAt - now } };
+  const place = placeOf(g.map, to);
+  if (place) return { dest: place, range: 1.5 };
+  const I = MAP_RULES.range.interact;
+  const node = g.nodes.get(to);
+  if (node) return { dest: node, range: I };
+  const mob = g.mobs.get(to);
+  if (mob) return { dest: mobAlive(g, mob) ? mob : mob.home, range: I };
+  const bag = g.bags.get(to);
+  if (bag) return { dest: { x: bag.x!, y: bag.y! }, range: I };
+  const other = g.players.get(to) ?? g.playerByName(to);
+  if (other && other.id !== p.id) return { dest: posOf(g, other), range: I };
+  return fail('BAD_REQUEST', `unknown move target "${to}"`, undefined,
+    `use a region (${Object.keys(ZONES).join(', ')}), a place (${g.map.places.map((s) => s.id).join(', ')}), a node/mob/loot bag/player id from observe(), or { x, y }`);
 }
 
-function arrive(g: Game, p: Player) {
-  const t = p.travel!;
-  p.zone = t.to;
-  p.travel = null;
-  if (t.to === 'town') p.hp = maxHp(p);
-  g.emit('travel.arrive', { kind: 'zone', zone: t.to }, { playerId: p.id, name: p.name, from: t.from, to: t.to }, { zone: t.to, actor: p });
-  g.emit('self.arrived', { kind: 'player', playerId: p.id }, { zone: t.to }, { zone: t.to });
-  g.setLastAction(p, 'travel', `arrived in ${t.to}`);
+function move(g: Game, p: Player, payload: Record<string, any>) {
+  let dest: Pos;
+  let range = 0;
+  let target: string | undefined;
+  if (payload.to !== undefined) {
+    target = reqStr(payload, 'to', 80);
+    ({ dest, range } = resolveTarget(g, p, target));
+  } else {
+    if (!Number.isInteger(payload.x) || !Number.isInteger(payload.y)) fail('BAD_REQUEST', 'move needs { to: <region | place | id> } or integer { x, y }');
+    dest = { x: payload.x, y: payload.y };
+    if (!inBounds(g.map, dest.x, dest.y)) fail('BAD_REQUEST', `(${dest.x}, ${dest.y}) is outside the map (0..${g.map.width - 1}, 0..${g.map.height - 1})`);
+    if (!walkable(g.map, dest.x, dest.y)) {
+      const alt = nearestWalkable(g.map, dest);
+      fail('BAD_REQUEST', `tile (${dest.x}, ${dest.y}) is blocked ('${g.map.tiles[dest.y][dest.x]}')`, undefined, `the nearest open tile is (${alt.x}, ${alt.y})`);
+    }
+  }
+  requireReady(g, p);
+  const now = g.now();
+  const here = posOf(g, p);
+  const path = findPath(g.map, here, dest, range);
+  if (!path) return fail('BAD_REQUEST', `no path to ${target ?? at(dest.x, dest.y)}`);
+  const full = dist(here, path[0]) > 1e-6 ? [{ ...here }, ...path] : path;
+  const length = pathLength(full);
+  if (length < 1e-6) {
+    // Already there: stop any walk in progress.
+    p.pos = { ...here };
+    p.travel = null;
+    return { travel: null, pos: { x: round1(here.x), y: round1(here.y) }, distance: 0 };
+  }
+  if (p.combatLockUntil > now && full.some((q) => regionAt(g.map, q) !== p.zone)) {
+    const attackers = [...g.mobs.values()].filter((m) => m.targetId === p.id && mobAlive(g, m)).map((m) => `${MOB_TYPES[m.type].name} (${m.id}, ${m.hp} hp)`);
+    fail('COMBAT_LOCKED', `cannot leave ${p.zone} while in combat`, p.combatLockUntil - now,
+      attackers.length
+        ? `every hit you deal or take renews the lock, and these mobs keep attacking you: ${attackers.join(', ')}. Kill them (or die) before leaving ${p.zone}.`
+        : `stop attacking and wait retryAfterMs, then move. Moving inside ${p.zone} is allowed.`);
+  }
+  const msPerTile = g.ms(MAP_RULES.msPerTile);
+  const end = full[full.length - 1];
+  p.pos = { ...here };
+  p.travel = { from: p.zone, to: regionAt(g.map, end), path: full, departAt: now, arriveAt: now + Math.max(1, Math.ceil(length * msPerTile)), msPerTile, ...(target ? { target } : {}) };
+  g.setLastAction(p, 'move', `walking to ${target ?? at(end.x, end.y)} (${round1(length)} tiles)`);
   g.markPlayer(p);
+  return { travel: walkView(g, p.travel), pos: { x: round1(here.x), y: round1(here.y) }, distance: round1(length) };
+}
+
+/** Advances a walk: region crossings (blocked while combat locked) and arrival. */
+function walkTick(g: Game, p: Player, now: number) {
+  const w = p.travel!;
+  const done = now >= w.arriveAt;
+  const pos = done ? { ...w.path[w.path.length - 1] } : pointAlong(w.path, (now - w.departAt) / w.msPerTile);
+  const region = regionAt(g.map, pos);
+  if (region !== p.zone) {
+    if (p.combatLockUntil > now) {
+      p.travel = null;
+      g.emit('self.arrived', { kind: 'player', playerId: p.id }, { zone: p.zone, pos: { x: round1(p.pos.x), y: round1(p.pos.y) }, stopped: 'COMBAT_LOCKED', note: `stopped at the edge of ${p.zone}: you cannot leave a region while in combat` }, { zone: p.zone });
+      g.setLastAction(p, 'move', `stopped at the edge of ${p.zone} (combat locked)`);
+      g.markPlayer(p);
+      return;
+    }
+    const from = p.zone;
+    g.emit('travel.depart', { kind: 'zone', zone: from }, { playerId: p.id, name: p.name, from, to: region }, { zone: from, actor: p });
+    p.zone = region;
+    g.emit('travel.arrive', { kind: 'zone', zone: region }, { playerId: p.id, name: p.name, from, to: region }, { zone: region, actor: p });
+    g.setLastAction(p, 'travel', `entered ${region}`);
+    g.markPlayer(p);
+  }
+  p.pos = pos;
+  if (done) {
+    p.travel = null;
+    g.emit('self.arrived', { kind: 'player', playerId: p.id }, { zone: p.zone, pos: { ...pos }, ...(w.target ? { target: w.target } : {}) }, { zone: p.zone });
+    g.setLastAction(p, 'move', `arrived at ${w.target ?? at(pos.x, pos.y)} in ${p.zone}`);
+    g.markPlayer(p);
+  }
+}
+
+/** A chasing mob steps toward its target, sliding along walls, never leaving its region. */
+function mobStep(g: Game, m: Mob, target: Pos, tiles: number) {
+  const dx = target.x - m.x, dy = target.y - m.y;
+  const d = Math.hypot(dx, dy);
+  const s = Math.min(tiles, d - 1);
+  if (s <= 0) return;
+  for (const [ax, ay] of [[(dx / d) * s, (dy / d) * s], [Math.sign(dx) * s, 0], [0, Math.sign(dy) * s]]) {
+    const nx = m.x + ax, ny = m.y + ay;
+    if (walkable(g.map, Math.round(nx), Math.round(ny)) && regionAt(g.map, { x: nx, y: ny }) === m.zone) { m.x = nx; m.y = ny; return; }
+  }
 }
 
 // ---------- gathering ----------
@@ -255,12 +374,13 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   const nodeId = reqStr(payload, 'nodeId', 80);
   const zone = requireArrived(g, p);
   const node = g.nodes.get(nodeId);
-  if (!node || node.zone !== zone) fail('INVALID_TARGET', `no resource node ${nodeId} in ${zone}`);
-  requireReady(g, p);
+  if (!node) fail('INVALID_TARGET', `no resource node ${nodeId}`);
   const def = NODE_TYPES[node!.type];
+  const slow = requireTool(g, p, def.skill, def.tier, `${def.name} (tier ${def.tier})`);
+  requireInRange(g, p, node!, nodeId, 'resource node');
+  requireReady(g, p);
   const now = g.now();
   if (node!.charges <= 0) fail('DEPLETED', `${def.name} is depleted`, node!.nextChargeAt - now);
-  const slow = requireTool(g, p, def.skill, def.tier, `${def.name} (tier ${def.tier})`);
   const level = skillLevel(p, def.skill);
   let qty = 1 + rollBonus(g, Math.min(FOCUS.maxBonusYield, FOCUS.bonusYieldPerLevel * level) + affixSum(p, ['tool'], 'yield') / 100);
   const doubleDrop = affixSum(p, ['tool'], 'double_drop');
@@ -303,7 +423,7 @@ function makeItem(kind: 'refine' | 'craft') {
     if (!r) fail('BAD_REQUEST', `unknown recipe "${recipeId}"`);
     if (r!.kind !== kind) fail('BAD_REQUEST', `${recipeId} is a ${r!.kind} recipe; use the "${r!.kind}" command`);
     const zone = requireArrived(g, p);
-    if (!ZONES[zone].stations.includes(r!.station)) fail('NO_STATION', `${recipeId} needs a ${r!.station}, found in town`);
+    requirePlace(g, p, r!.station, recipeId, 'NO_STATION');
     requireReady(g, p);
     const level = skillLevel(p, r!.skill);
     const focused = isFocused(p, r!.skill);
@@ -505,12 +625,13 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
   const mob = g.mobs.get(targetId!);
   const victim = mob ? undefined : g.players.get(targetId!);
   if (mob) {
-    if (mob.zone !== zone) fail('INVALID_TARGET', `${targetId} is not in ${zone}`);
     if (!mobAlive(g, mob)) fail('TARGET_DEAD', `${targetId} is dead`);
+    requireInRange(g, p, mob, mob.id, MOB_TYPES[mob.type].name);
   } else if (victim) {
     if (victim.id === p.id) fail('INVALID_TARGET', 'cannot attack yourself');
     if (!ZONES[zone].pvp) fail('SAFE_ZONE', `PvP is not allowed in ${zone}`);
-    if (victim.zone !== zone || victim.travel) fail('INVALID_TARGET', `${victim.name} is not in ${zone}`);
+    if (!ZONES[victim.zone].pvp) fail('SAFE_ZONE', `${victim.name} is in ${victim.zone}, where PvP is not allowed`);
+    requireInRange(g, p, posOf(g, victim), victim.id, victim.name);
   } else {
     fail('INVALID_TARGET', `no target ${targetId}`);
   }
@@ -592,8 +713,9 @@ function rollLoot(g: Game, mobType: string, p: Player): ItemStack[] {
 
 /** Death rules. Lethal zones drop everything carried and worn into a loot bag; bank and skills are always safe. */
 export function killPlayer(g: Game, victim: Player, source: { kind: 'mob' | 'player'; id: string; name: string }) {
-  const zone = victim.zone!;
+  const zone = victim.zone;
   const z = ZONES[zone];
+  const deathPos = posOf(g, victim);
   const now = g.now();
   let bagId: string | null = null;
   let dropped: ItemStack[] = [];
@@ -611,7 +733,7 @@ export function killPlayer(g: Game, victim: Player, source: { kind: 'mob' | 'pla
     dropped = toStacks(items);
     if (dropped.length) {
       bagId = newId('bag');
-      const bag = { id: bagId, zone, ownerId: victim.id, ownerName: victim.name, items, createdAt: now, expiresAt: now + g.ms(TIMING.lootBagTtlMs) };
+      const bag = { id: bagId, zone, x: round1(deathPos.x), y: round1(deathPos.y), ownerId: victim.id, ownerName: victim.name, items, createdAt: now, expiresAt: now + g.ms(TIMING.lootBagTtlMs) };
       g.bags.set(bagId, bag);
       g.markBag(bag);
     }
@@ -627,7 +749,8 @@ export function killPlayer(g: Game, victim: Player, source: { kind: 'mob' | 'pla
   const lostNote = silverLost > 0 ? ` ${silverLost} carried silver was destroyed (${DEATH_SILVER_LOSS * 100}% of what you carried; bank silver is safe).` : '';
   g.emit('self.died', { kind: 'player', playerId: victim.id }, { zone, killerKind: source.kind, killerId: source.id, killerName: source.name, dropped, bagId, silverLost, note: (z.fullLoot ? 'The rest of your carried and equipped items were dropped. Bank and skills are safe.' : 'Safe zone death: you kept the rest of your items.') + lostNote }, { zone });
   // Respawn in town.
-  victim.zone = 'town';
+  victim.zone = regionAt(g.map, g.map.spawn);
+  victim.pos = { ...g.map.spawn };
   victim.travel = null;
   victim.hp = maxHp(victim);
   victim.cooldowns = {};
@@ -647,7 +770,8 @@ function loot(g: Game, p: Player, payload: Record<string, any>) {
   const bagId = reqStr(payload, 'bagId', 80);
   const zone = requireArrived(g, p);
   const bag = g.bags.get(bagId);
-  if (!bag || bag.zone !== zone) fail('NOT_FOUND', `no loot bag ${bagId} in ${zone}`);
+  if (!bag) fail('NOT_FOUND', `no loot bag ${bagId}`);
+  requireInRange(g, p, { x: bag!.x!, y: bag!.y! }, bagId, 'loot bag');
   const asked = payload.items === undefined ? toStacks(bag!.items) : stacks(payload.items, 'items', false);
   const want = removeItems(bag!.items, asked);
   addItems(p.inventory, want);
@@ -663,7 +787,7 @@ function loot(g: Game, p: Player, payload: Record<string, any>) {
 
 function bankOp(kind: 'deposit' | 'withdraw') {
   return (g: Game, p: Player, payload: Record<string, any>) => {
-    requireZone(g, p, 'town', 'the bank');
+    requirePlace(g, p, 'bank', 'the bank');
     const asked = stacks(payload.items, 'items', false);
     const items = kind === 'deposit' ? removeItems(p.inventory, asked) : removeItems(p.bank, asked);
     addItems(kind === 'deposit' ? p.bank : p.inventory, items);
@@ -716,7 +840,7 @@ function questAccept(g: Game, p: Player, payload: Record<string, any>) {
   const questId = reqStr(payload, 'questId', 40);
   const def = QUESTS[questId];
   if (!def) fail('NOT_FOUND', `unknown quest ${questId}`);
-  requireZone(g, p, 'town', 'the quest board');
+  requirePlace(g, p, 'quest_board', 'the quest board');
   if (p.quests[questId]) fail('QUEST_STATE', `quest ${questId} already ${p.quests[questId].status}`);
   p.quests[questId] = { status: 'active', progress: 0 };
   g.emit('quest', { kind: 'operator' }, { playerId: p.id, name: p.name, questId, status: 'accepted' }, { zone: 'town', actor: p });
@@ -729,7 +853,7 @@ function questClaim(g: Game, p: Player, payload: Record<string, any>) {
   const questId = reqStr(payload, 'questId', 40);
   const def = QUESTS[questId];
   if (!def) fail('NOT_FOUND', `unknown quest ${questId}`);
-  requireZone(g, p, 'town', 'the quest board');
+  requirePlace(g, p, 'quest_board', 'the quest board');
   const q = p.quests[questId];
   if (!q || q.status !== 'complete') {
     fail('QUEST_STATE', `quest ${questId} is ${q?.status ?? 'not accepted'}`, undefined,
@@ -761,7 +885,7 @@ function shopBuy(g: Game, p: Player, payload: Record<string, any>) {
   const qty = optInt(payload, 'qty', 1, MAX_CRAFT_BATCH, 1);
   const price = SHOP[item];
   if (price === undefined) fail('NOT_FOUND', `the shop does not sell ${item}`, undefined, `the shop sells: ${Object.entries(SHOP).map(([i, pr]) => `${i} (${pr})`).join(', ')}. Buy anything else from players.`);
-  requireZone(g, p, 'town', 'the shop');
+  requirePlace(g, p, 'shop', 'the shop');
   const cost = price! * qty;
   payFromInventory(p, cost, `${qty}× ${item}`);
   addItems(p.inventory, [{ item, qty }]);
@@ -775,7 +899,7 @@ function shopBuy(g: Game, p: Player, payload: Record<string, any>) {
 function repair(g: Game, p: Player, payload: Record<string, any>) {
   const slotArg = payload.slot === undefined ? undefined : reqStr(payload, 'slot', 10);
   if (slotArg !== undefined && !SLOTS.includes(slotArg as Slot)) fail('BAD_REQUEST', `slot must be one of ${SLOTS.join(', ')}`);
-  requireZone(g, p, 'town', 'repairs');
+  requirePlace(g, p, 'forge', 'repairs');
   const slots: Slot[] = slotArg ? [slotArg as Slot] : SLOTS;
   const jobs: { slot: Slot; item: string; wearRemoved: number; cost: number }[] = [];
   for (const slot of slots) {
@@ -799,10 +923,10 @@ function repair(g: Game, p: Player, payload: Record<string, any>) {
 
 export function worldTick(g: Game, now: number) {
   for (const p of g.players.values()) {
-    if (p.travel && p.travel.arriveAt <= now) arrive(g, p);
+    if (p.travel) walkTick(g, p, now);
     const max = maxHp(p);
-    if (p.hp < max && p.zone === 'town' && !p.travel) { p.hp = max; g.markPlayer(p); continue; }
-    if (p.hp < max && !p.travel && now - p.lastCombatAt >= g.ms(TIMING.outOfCombatMs) && now - p.lastRegenAt >= g.ms(TIMING.regenIntervalMs)) {
+    if (p.hp < max && p.zone === 'town') { p.hp = max; g.markPlayer(p); continue; }
+    if (p.hp < max && now - p.lastCombatAt >= g.ms(TIMING.outOfCombatMs) && now - p.lastRegenAt >= g.ms(TIMING.regenIntervalMs)) {
       p.hp = Math.min(max, p.hp + Math.ceil(max * TIMING.regenFraction));
       p.lastRegenAt = now;
       g.markPlayer(p);
@@ -810,20 +934,26 @@ export function worldTick(g: Game, now: number) {
   }
   for (const m of g.mobs.values()) {
     const def = MOB_TYPES[m.type];
+    const last = m.movedAt ?? now;
+    m.movedAt = now;
     if (m.hp <= 0 || m.deadUntil > now) {
-      if (m.deadUntil <= now) { m.hp = def.hp; m.deadUntil = 0; m.aggro = {}; m.targetId = null; }
+      if (m.deadUntil <= now) { m.hp = def.hp; m.deadUntil = 0; m.aggro = {}; m.targetId = null; m.x = m.home.x; m.y = m.home.y; }
       continue;
     }
     if (!m.targetId) continue;
-    const valid = (id: string) => { const t = g.players.get(id); return !!t && !t.travel && t.zone === m.zone; };
+    // A mob keeps chasing an attacker anywhere in its own region; it gives up (healed, back home) when none is left there.
+    const valid = (id: string) => { const t = g.players.get(id); return !!t && t.zone === m.zone; };
     if (!valid(m.targetId)) {
       delete m.aggro[m.targetId];
       const next = Object.entries(m.aggro).filter(([id]) => valid(id)).sort((a, b) => b[1] - a[1])[0];
       if (next) { m.targetId = next[0]; }
-      else { m.targetId = null; m.aggro = {}; m.hp = def.hp; continue; }
+      else { m.targetId = null; m.aggro = {}; m.hp = def.hp; m.x = m.home.x; m.y = m.home.y; continue; }
     }
+    const target = g.players.get(m.targetId!)!;
+    const tpos = posOf(g, target);
+    mobStep(g, m, tpos, (now - last) / g.ms(MAP_RULES.mobMsPerTile));
+    if (dist(m, tpos) > MAP_RULES.range.interact + 1e-9) continue;
     if (now >= m.nextAttackAt) {
-      const target = g.players.get(m.targetId!)!;
       m.nextAttackAt = now + g.ms(def.attackMs);
       const zone = m.zone;
       const res = damagePlayer(g, target, def.damage, { kind: 'mob', id: m.id, name: def.name });
@@ -853,7 +983,7 @@ const rw = (run: CommandDef['run']): CommandDef => ({ mutates: true, run });
 
 export const worldCommands: Record<string, CommandDef> = {
   observe: ro((g, p) => observe(g, p)),
-  catalog: ro(() => CATALOG),
+  catalog: ro((g) => ({ ...CATALOG, map: { ...MAP_RULES, ...g.map } })),
   'player.lookup': ro((g, _p, payload) => {
     const o = g.playerByName(reqStr(obj(payload), 'name', 40));
     if (!o) fail('NOT_FOUND', 'no such player');
@@ -862,8 +992,10 @@ export const worldCommands: Record<string, CommandDef> = {
   'player.get': ro((g, p, payload) => {
     const o = g.players.get(reqStr(obj(payload), 'playerId', 40));
     if (!o) fail('NOT_FOUND', 'no such player');
-    const sameZone = !p.travel && !o!.travel && p.zone === o!.zone;
-    return { id: o!.id, name: o!.name, online: g.isOnline(o!.id), zone: sameZone ? o!.zone : null, createdAt: o!.createdAt };
+    const sameZone = p.zone === o!.zone;
+    const pos = posOf(g, o!);
+    const visible = dist(posOf(g, p), pos) <= MAP_RULES.viewRadius;
+    return { id: o!.id, name: o!.name, online: g.isOnline(o!.id), zone: sameZone ? o!.zone : null, pos: visible ? { x: round1(pos.x), y: round1(pos.y) } : null, createdAt: o!.createdAt };
   }),
   move: rw(move),
   'focus.set': rw(focusSet),
@@ -876,7 +1008,7 @@ export const worldCommands: Record<string, CommandDef> = {
   attack: rw((g, p, payload) => useAbility(g, p, payload, true)),
   'ability.use': rw((g, p, payload) => useAbility(g, p, payload, false)),
   loot: rw(loot),
-  'bank.view': ro((g, p) => { requireZone(g, p, 'town', 'the bank'); return { items: toStacks(p.bank) }; }),
+  'bank.view': ro((g, p) => { requirePlace(g, p, 'bank', 'the bank'); return { items: toStacks(p.bank) }; }),
   'bank.deposit': rw(bankOp('deposit')),
   'bank.withdraw': rw(bankOp('withdraw')),
   'quest.list': ro((_g, p) => ({

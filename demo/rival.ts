@@ -36,12 +36,16 @@ export async function runRival(c: GameClient, facts: Facts) {
   const fighter = await c.lookupPlayer('Fighter');
   await c.travelTo('frontier');
   say(`waiting in the frontier for ${fighter.name} (${fighter.playerId})`);
+  // player.get reveals the region of players in your region; their position only within view.
+  await c.waitFor(async () => (await c.getPlayer(fighter.playerId)).zone === 'frontier' || null, { timeoutMs: 240_000, intervalMs: 30, what: 'the fighter to enter the frontier' });
+  say(`${fighter.name} just crossed the river — stalking them across the map`);
   await c.waitFor(async () => {
     const o = await c.observe();
-    const f = o.zone?.players.find((p) => p.id === fighter.playerId);
-    return f ?? null;
-  }, { timeoutMs: 240_000, intervalMs: 30, what: 'the fighter to enter the frontier' });
-  say(`${fighter.name} just arrived, alone and mining — attacking before any wraith can (open PvP zone)`);
+    if (o.zone.players.find((p) => p.id === fighter.playerId && p.inRange)) return true;
+    await c.request('move', { to: fighter.playerId });
+    return null;
+  }, { timeoutMs: 60_000, intervalMs: 80, what: 'to catch up with the fighter' });
+  say(`caught ${fighter.name} alone — attacking (open PvP zone)`);
   const outcome = await c.fight(fighter.playerId, { timeoutMs: 60_000 });
   say(`fight over: ${outcome.result} after ${outcome.hits} hits`);
 

@@ -59,7 +59,7 @@ test('beasts drop hides only to a killer with a skinning knife; hunt() equips on
     await c.equip('copper_sword');
     await c.equip('copper_axe');
     await c.travelTo('wilds');
-    const wolf = (await c.observe()).zone!.mobs.find((m) => m.type === 'wolf' && m.alive)!;
+    const wolf = await c.approachMob('wolf');
     const bare = await c.fight(wolf.id);
     assert.equal(bare.result, 'killed');
     assert.ok(!bare.loot.some((s) => s.item === 'rough_hide'), 'no knife, no hide');

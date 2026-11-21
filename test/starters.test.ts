@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FOCUS, ITEMS, QUESTS, RECIPES, SKILLS, ZONES } from '../src/shared/catalog.ts';
-import { FOCUS_RULE, STARTERS, pickStarter, renderStarter } from '../src/shared/starters.ts';
+import { FOCUS_RULE, MAP_RULE, STARTERS, pickStarter, renderStarter } from '../src/shared/starters.ts';
 import { world } from './helpers.ts';
 
 test('starters: ids are unique and every referenced item, quest and zone exists', () => {
@@ -27,7 +27,7 @@ test('starters: ids are unique and every referenced item, quest and zone exists'
 });
 
 test('starters: every rendered brief explains the specialization incentive', () => {
-  for (const s of STARTERS) assert.ok(renderStarter(s).includes(FOCUS_RULE), s.id);
+  for (const s of STARTERS) assert.ok(renderStarter(s).includes(FOCUS_RULE) && renderStarter(s).includes(MAP_RULE), s.id);
   assert.match(FOCUS_RULE, new RegExp(`up to ${FOCUS.slots} focus skills`));
 });
 

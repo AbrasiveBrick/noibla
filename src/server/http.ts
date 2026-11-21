@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CATALOG } from '../shared/catalog.ts';
+import { MAP_RULES } from '../shared/map.ts';
 import type { GameEvent } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import { GameError } from './util.ts';
@@ -51,7 +52,7 @@ export function createHttpServer(game: Game, listener: Listener): Server {
       if (req.method === 'GET' && path === '/') return send(res, 200, 'noibla bot API. Read GET /docs/sdk.');
 
       if (req.method === 'GET' && path === '/api/health') return send(res, 200, { ok: true, now: game.now(), speed: game.speed });
-      if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, CATALOG);
+      if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, { ...CATALOG, map: { ...MAP_RULES, ...game.map } });
       if (req.method === 'GET' && path === '/docs/sdk') return send(res, 200, readFileSync(SDK_DOC, 'utf8'), { 'content-type': 'text/markdown; charset=utf-8' });
 
       if (req.method === 'POST' && path === '/api/register') {

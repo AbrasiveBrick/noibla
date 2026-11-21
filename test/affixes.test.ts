@@ -57,7 +57,7 @@ test('combat affixes raise max HP and damage, and show on the gear view', async 
     assert.equal(obs.self.gear.armor?.rarity, 'magic');
     await forge(w, c, 'copper_sword', [{ id: 'damage', tier: 3, value: 25 }, { id: 'attack_speed', tier: 3, value: 15 }]);
     await c.travelTo('wilds');
-    const wolf = (await c.observe()).zone!.mobs.find((m) => m.type === 'wolf' && m.alive)!;
+    const wolf = await c.approachMob('wolf');
     const hit = await c.attack(wolf.id, 'slash');
     assert.ok(Math.abs(hit.damage - 10) < 0.01, `slash for 8 × 1.25 = 10, got ${hit.damage}`);
     assert.ok(hit.busyMs < w.server.game.ms(1000), 'attack speed shortens the global cooldown');
@@ -84,7 +84,8 @@ test('gathering, refining and crafting tool affixes change yield, inputs, wear a
     await c.waitReady();
     await forge(w, c, 'copper_pickaxe', [{ id: 'yield', tier: 3, value: 40 }, { id: 'double_drop', tier: 3, value: 18 }, { id: 'durable', tier: 3, value: 50 }]);
     await c.travelTo('wilds');
-    const vein = (await c.observe()).zone!.nodes.find((n) => n.item === 'copper_ore')!;
+    const vein = (await c.nearestNode('copper_ore'))!;
+    await c.goTo(vein.id);
     const gth = await c.gather(vein.id);
     assert.equal(gth.qty, (1 + 1) * 2, 'yield rolls one bonus item, double drop doubles it');
     assert.equal((await c.observe()).self.gear.tool?.wear, WEAR.perToolUse * 0.5);

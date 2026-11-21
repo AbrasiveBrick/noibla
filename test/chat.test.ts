@@ -100,15 +100,15 @@ test('feedback reports reach the operator verbatim with command context', async 
     const b = await w.bot('Friend');
     const friend = await b.whoami();
     await a.sendDm(friend.playerId, 'my secret price is 777 silver for the mail');
-    const bad = await a.request('move', { to: 'frontier' });
-    assert.equal(!bad.ok && bad.error.code, 'NOT_ADJACENT');
+    const bad = await a.request('move', { x: -1, y: 0 });
+    assert.equal(!bad.ok && bad.error.code, 'BAD_REQUEST');
     const fb = await a.reportFeedback({ category: 'confusing_api', summary: 'move to frontier failed from town', details: 'I had told Friend "my secret price is 777 silver for the mail" and then move failed', relatedCommandId: bad.commandId });
     const st = await w.operator();
     const f = st.feedback.find((x: any) => x.id === fb.feedbackId);
     assert.ok(f);
     assert.ok(f.details.includes('my secret price is 777 silver for the mail'));
     assert.equal(f.context.relatedCommandId, bad.commandId);
-    assert.ok(f.context.recentCommands.some((c: any) => c.type === 'move' && c.code === 'NOT_ADJACENT'));
+    assert.ok(f.context.recentCommands.some((c: any) => c.type === 'move' && c.code === 'BAD_REQUEST'));
     assert.ok(!f.context.recentCommands.some((c: any) => 'payload' in c));
   } finally { await w.close(); }
 });

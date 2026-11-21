@@ -46,13 +46,15 @@ test('gathering, refining, crafting improve through use and respect tools and sk
   try {
     const c = await w.bot('Smith');
     await c.travelTo('wilds');
-    const o = await c.observe();
-    const iron = o.zone!.nodes.find((n) => n.item === 'iron_ore')!;
+    const iron = (await c.nearestNode('iron_ore'))!;
     const noTool = await c.request('gather', { nodeId: iron.id });
-    assert.equal(!noTool.ok && noTool.error.code, 'TOOL_REQUIRED');
+    assert.equal(!noTool.ok && noTool.error.code, 'TOOL_REQUIRED', 'tool checks come before range checks');
     assert.match(!noTool.ok ? noTool.error.hint ?? '' : '', /equip\("copper_pickaxe"\)/);
     await c.equip('copper_pickaxe');
-    const vein = o.zone!.nodes.find((n) => n.item === 'copper_ore')!;
+    const vein = (await c.nearestNode('copper_ore'))!;
+    const far = await c.request('gather', { nodeId: vein.id });
+    if (vein.distance > 1.5) assert.equal(!far.ok && far.error.code, 'OUT_OF_RANGE');
+    await c.goTo(vein.id);
     const g1 = await c.request('gather', { nodeId: vein.id }, { commandId: 'g-1' });
     const g2 = await c.request('gather', { nodeId: vein.id }, { commandId: 'g-1' });
     assert.ok(g1.ok && g2.ok && g2.replayed);
@@ -86,8 +88,7 @@ test('gear determines abilities; town is safe; PvP only in the frontier; combat 
     await Promise.all([a.travelTo('wilds'), b.travelTo('wilds')]);
     const pvp = await a.request('attack', { targetId: victim.playerId });
     assert.equal(!pvp.ok && pvp.error.code, 'SAFE_ZONE');
-    o = await a.observe();
-    const wolf = o.zone!.mobs.find((m) => m.type === 'wolf' && m.alive)!;
+    const wolf = await a.approachMob('wolf');
     const hit = await a.attack(wolf.id);
     assert.equal(hit.ability, 'punch');
     await a.waitReady();
@@ -111,12 +112,11 @@ test('death: safe wilderness keeps everything; frontier drops carried + equipped
     // Prepare: copper ore carried, silver banked, punching skill.
     await v.travelTo('wilds');
     await v.gatherItem('copper_ore', 2);
-    let obs = await v.observe();
-    const boar = obs.zone!.mobs.find((m) => m.type === 'boar' && m.alive)!;
+    const boar = await v.approachMob('boar');
     await v.sendWhenReady('attack', { targetId: boar.id });
     // Stand still and let the boar win (safe wilderness).
     await v.waitFor(async () => (await v.observe()).self.zone === 'town' || null, { timeoutMs: 20_000, what: 'death in the wilds' });
-    obs = await v.observe();
+    let obs = await v.observe();
     assert.ok(obs.self.inventory.some((s) => s.item === 'copper_ore'), 'safe-zone death keeps inventory');
     // Every death destroys 25% of carried silver, safe zones included: 20 → 15.
     assert.equal(await v.count('silver'), 15);
@@ -124,8 +124,7 @@ test('death: safe wilderness keeps everything; frontier drops carried + equipped
     const xpBefore = obs.self.skills.unarmed.xp + obs.self.skills.mining.xp;
 
     await Promise.all([v.travelTo('frontier'), looter.travelTo('frontier')]);
-    obs = await v.observe();
-    const wraith = obs.zone!.mobs.find((m) => m.type === 'wraith' && m.alive)!;
+    const wraith = await v.approachMob('wraith');
     await v.sendWhenReady('attack', { targetId: wraith.id });
     const died = await v.waitForEvent((e) => e.type === 'self.died', 20_000);
     assert.equal(died.data.zone, 'frontier');
@@ -135,8 +134,10 @@ test('death: safe wilderness keeps everything; frontier drops carried + equipped
     assert.deepEqual((await v.bank()).items, [{ item: 'silver', qty: 15 }]);
     assert.ok(obs.self.skills.unarmed.xp + obs.self.skills.mining.xp >= xpBefore);
 
+    await looter.goTo(died.data.bagId);
     const lo = await looter.observe();
-    const bag = lo.zone!.lootBags.find((b) => b.ownerId === me.playerId)!;
+    const bag = lo.zone.lootBags.find((b) => b.ownerId === me.playerId)!;
+    assert.ok(bag.inRange && bag.id === died.data.bagId);
     assert.ok(bag.items.some((s) => s.item === 'copper_ore'));
     const taken = await looter.lootAll(bag.id);
     assert.ok(taken.taken.some((s) => s.item === 'copper_ore'));

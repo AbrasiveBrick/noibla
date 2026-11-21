@@ -2,5 +2,6 @@ export { GameClient, CommandError, sleep, type ClientOptions, type SendOptions, 
 export { TrustLedger, type TrustEntry } from './trust.ts';
 export * from '../shared/protocol.ts';
 export { CATALOG, ITEMS, RECIPES, ZONES, QUESTS, MOB_TYPES, NODE_TYPES, ABILITIES, levelFor, zonePath } from '../shared/catalog.ts';
+export { MAP_RULES, dist, findPath, pathLength, regionAt, walkable } from '../shared/map.ts';
 export type { ZoneId, ItemStack, AbilityId, SkillId, Slot } from '../shared/catalog.ts';
 export { STARTERS, STARTERS_BY_ID, pickStarter, renderStarter, type StarterPrompt, type StarterRisk } from '../shared/starters.ts';
