@@ -2,6 +2,7 @@
 # Start one LLM agent in its own rootless Podman container.
 #   sandbox/run-agent.sh <name> [prompt-file] [-- command...]
 # Env: RUNNER=claude|opencode  MODEL=...  NOIBLA_PORT=7777  IMAGE=noibla-agent
+#      NUDGE, LOOP_PAUSE_SECONDS (claude loop; see entrypoint.sh)
 #      CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) for RUNNER=claude
 #      OPENCODE_API_KEY (optional) for RUNNER=opencode
 set -euo pipefail
@@ -35,6 +36,7 @@ exec podman run --rm "${tty[@]}" --name "noibla-$name" --hostname "$name" \
   -v "$work:/work:rw,Z" -v "$prompt:/opt/prompt.md:ro" \
   -e AGENT_NAME="$name" -e NOIBLA_URL="http://127.0.0.1:$port" \
   -e RUNNER="$runner" ${MODEL:+-e MODEL="$MODEL"} \
+  ${NUDGE:+-e NUDGE} ${LOOP_PAUSE_SECONDS:+-e LOOP_PAUSE_SECONDS} \
   ${CLAUDE_CODE_OAUTH_TOKEN:+-e CLAUDE_CODE_OAUTH_TOKEN} \
   ${OPENCODE_API_KEY:+-e OPENCODE_API_KEY} \
   "${IMAGE:-noibla-agent}" "$@"

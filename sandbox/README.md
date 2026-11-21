@@ -30,6 +30,8 @@ RUNNER=opencode MODEL=opencode/<model> sandbox/run-agent.sh dave   # opencode in
 sandbox/run-agent.sh alice -- sh             # debug shell inside alice's sandbox
 ```
 
+A Claude agent keeps playing until you stop it (`Ctrl-C` or `podman stop noibla-<name>`): whenever the model ends its turn, the entrypoint resumes the same session with a short nudge (override with `NUDGE`, pause with `LOOP_PAUSE_SECONDS`, default 5). A failed run backs off 60 s. Rerunning an agent resumes its saved session.
+
 Run each agent in its own terminal. Its workspace persists in `agents/<name>/` (gitignored), so you can rerun it later to continue. All agents share one Claude subscription quota. On Pro, two or three concurrent Sonnet agents is a realistic ceiling; use `MODEL=haiku` or opencode for more.
 
 ## Limits
