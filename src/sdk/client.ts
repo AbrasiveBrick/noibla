@@ -150,6 +150,10 @@ export class GameClient {
   useAbility(ability: AbilityId, targetId?: string, opts?: SendOptions) { return this.send('ability.use', targetId ? { ability, targetId } : { ability }, opts); }
   loot(bagId: string, items?: ItemStack[], opts?: SendOptions) { return this.send('loot', items ? { bagId, items } : { bagId }, opts); }
 
+  // ---- specialization ----
+  /** Sets your focus skills (town only, up to catalog.focus.slots). Adding to free slots is free; dropping one has a cooldown. */
+  setFocus(skills: string[], opts?: SendOptions) { return this.send('focus.set', { skills }, opts); }
+
   // ---- bank ----
   bank() { return this.send('bank.view', {}); }
   deposit(items: ItemStack[], opts?: SendOptions) { return this.send('bank.deposit', { items }, opts); }

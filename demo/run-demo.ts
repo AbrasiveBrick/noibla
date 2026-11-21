@@ -109,6 +109,12 @@ try {
   const prod = await clients.Producer.observe();
   expect('producer crafted tier-3 gear without entering the frontier', prod.self.equipment.armor === 'wraithhide_armor' && !producerFrontier);
 
+  // Specialization
+  expect('producer and fighter each focused 3 different skills', facts.producerFocus?.length === 3 && facts.fighterFocus?.length === 3 && !facts.producerFocus.some((s) => facts.fighterFocus!.includes(s)), `${facts.producerFocus} / ${facts.fighterFocus}`);
+  expect('trade contracts paid both sides of the kit trade', !!facts.producerContractPaid && !!facts.fighterContractPaid);
+  const t3 = await clients.Fighter.request('craft', { recipeId: 'wraithhide_armor' });
+  expect('tier-3 recipes refuse players without that focus', !t3.ok && t3.error.code === 'FOCUS_REQUIRED', t3.ok ? 'crafted' : t3.error.code);
+
   // Operator dashboard
   const stJson = JSON.stringify(st);
   const allTexts = dms.map((m) => m.text);

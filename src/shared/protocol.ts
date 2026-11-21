@@ -11,7 +11,7 @@ export type ErrorCode =
   | 'IDEMPOTENCY_CONFLICT' | 'RATE_LIMITED'
   | 'BUSY' | 'TRAVELING' | 'COMBAT_LOCKED' | 'ON_COOLDOWN'
   | 'WRONG_ZONE' | 'NOT_ADJACENT' | 'NO_STATION' | 'SAFE_ZONE'
-  | 'DEPLETED' | 'TOOL_REQUIRED' | 'SKILL_TOO_LOW'
+  | 'DEPLETED' | 'TOOL_REQUIRED' | 'SKILL_TOO_LOW' | 'FOCUS_REQUIRED'
   | 'NOT_ENOUGH_ITEMS' | 'NOT_EQUIPPABLE' | 'INVALID_TARGET' | 'TARGET_DEAD' | 'ABILITY_UNAVAILABLE'
   | 'QUEST_STATE' | 'TRADE_STATE' | 'TRADE_EXPIRED' | 'NAME_TAKEN' | 'INTERNAL';
 
@@ -34,7 +34,8 @@ export type CommandResponse<R = unknown> =
 
 // ---------- Observations ----------
 
-export interface SkillView { xp: number; level: number }
+/** `level` is what counts for rules: the full `trainedLevel` when the skill is focused, else capped at catalog.focus.unfocusedLevelCap. */
+export interface SkillView { xp: number; level: number; trainedLevel: number; focused: boolean }
 export interface AbilityView { id: AbilityId; kind: 'attack' | 'buff'; readyInMs: number; source: string }
 export interface TravelView { from: ZoneId; to: ZoneId; arriveAt: number; arriveInMs: number }
 export interface QuestProgress { questId: string; status: 'active' | 'complete' | 'claimed'; progress: number; goal: number }
@@ -55,9 +56,13 @@ export interface SelfView {
   abilities: AbilityView[];
   effects: { evadeMs: number; braceMs: number };
   quests: QuestProgress[];
+  /** Focus skills (up to catalog.focus.slots). Focused skills earn more XP, level past the unfocused cap, and unlock tier-3 recipes. */
+  focus: FocusView;
   /** Wear of equipped gear (0 to catalog.wear.max). Broken gear works at reduced strength until repaired in town. */
   gear: Partial<Record<Slot, GearWearView>>;
 }
+
+export interface FocusView { skills: string[]; slots: number; unfocusedLevelCap: number; respecReadyInMs: number }
 
 export interface GearWearView { item: string; wear: number; broken: boolean; repairCost: number }
 
@@ -196,8 +201,10 @@ export interface Commands {
   move: { payload: { to: ZoneId }; result: { travel: TravelView } };
   // Skills: gathering, refining, crafting
   gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number } };
-  refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number } };
-  craft: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number } };
+  /** `bonus`: extra outputs from focused specialization (already included in `output.qty`). */
+  refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number } };
+  craft: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number } };
+  'focus.set': { payload: { skills: string[] }; result: FocusView };
   // Equipment & combat
   equip: { payload: { item: string }; result: { equipment: Partial<Record<Slot, string>> } };
   unequip: { payload: { slot: Slot }; result: { equipment: Partial<Record<Slot, string>> } };

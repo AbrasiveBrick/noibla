@@ -1,6 +1,8 @@
 // Producer: gathers, refines and crafts gear entirely in safe zones, sells it
 // through the forum + DMs + blind trade, remembers who kept their word, and
 // buys frontier exclusives to craft tier-3 gear without ever leaving safety.
+// It specializes as a smith (smelting, weaponcraft, armorcraft focus): tier-3 armor
+// needs armorcraft focus, and an outfitter contract pays it for selling the mail.
 
 import { GameClient, TrustLedger, type ItemStack } from '../src/sdk/index.ts';
 import { Inbox, fmt, narrator, waitForStatus, type Facts } from './lib.ts';
@@ -14,6 +16,11 @@ export async function runProducer(c: GameClient, facts: Facts, ledgerFile?: stri
   const inbox = new Inbox(c);
   const me = await c.whoami();
   facts.producerId = me.playerId;
+
+  // --- Specialize: three focus skills; everything else stays capped at the unfocused level ---
+  facts.producerFocus = (await c.setFocus(['smelting', 'weaponcraft', 'armorcraft'])).skills;
+  await c.acceptQuest('outfitter_contract');
+  say(`focused on ${facts.producerFocus.join(', ')}; accepted the outfitter contract (paid when a buyer receives iron mail)`);
 
   // --- Gather in the safe wilderness ---
   await c.acceptQuest('ore_run');
@@ -92,6 +99,9 @@ export async function runProducer(c: GameClient, facts: Facts, ledgerFile?: stri
   facts.kitReceiptProducer = r2;
   ledger.record(r2);
   say(`${p2.trade.id} settled: sent ${fmt(r2.actual.youSent)}, received ${fmt(r2.actual.youReceived)} → ${r2.counterpartyName} ${r2.counterpartyKeptWord ? 'kept their word' : 'BROKE their word'}`);
+  const contract = await c.claimQuest('outfitter_contract');
+  facts.producerContractPaid = contract.reward.some((s) => s.item === 'silver');
+  say(`outfitter contract paid ${fmt(contract.reward)} for delivering the mail through a settled trade`);
 
   // --- Phase C/D: deal desk for frontier exclusives ---
   const expecting = new Map<string, { item: string; qty: number; price: number }>();

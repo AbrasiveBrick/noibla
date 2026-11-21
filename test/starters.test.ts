@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ITEMS, QUESTS, ZONES } from '../src/shared/catalog.ts';
-import { STARTERS, pickStarter, renderStarter } from '../src/shared/starters.ts';
+import { FOCUS, ITEMS, QUESTS, RECIPES, SKILLS, ZONES } from '../src/shared/catalog.ts';
+import { FOCUS_RULE, STARTERS, pickStarter, renderStarter } from '../src/shared/starters.ts';
 import { world } from './helpers.ts';
 
 test('starters: ids are unique and every referenced item, quest and zone exists', () => {
@@ -16,7 +16,19 @@ test('starters: ids are unique and every referenced item, quest and zone exists'
     for (const q of s.firstSteps.join(' ').matchAll(/Quest\('(\w+)'\)/g)) assert.ok(QUESTS[q[1]], `${s.id}: quest ${q[1]}`);
     for (const m of s.firstSteps.join(' ').matchAll(/(?:gatherItem|refineItem|craftItem|equip)\('(\w+)'/g)) assert.ok(ITEMS[m[1]], `${s.id}: item ${m[1]}`);
     assert.ok(s.firstSteps.length > 0 && s.prompt.length > 0);
+    assert.ok(s.focus.length <= FOCUS.slots && s.focus.every((k) => SKILLS.includes(k)), `${s.id}: focus ${s.focus}`);
+    assert.match(s.firstSteps[0], /setFocus/, `${s.id}: first step chooses a focus`);
+    // A starter that crafts a specialist recipe must suggest focusing that recipe's skill.
+    for (const m of s.firstSteps.join(' ').matchAll(/(?:refineItem|craftItem)\('(\w+)'/g)) {
+      const r = RECIPES[m[1]];
+      if (r?.requiresFocus) assert.ok(s.focus.includes(r.skill), `${s.id}: ${r.id} needs ${r.skill} focus`);
+    }
   }
+});
+
+test('starters: every rendered brief explains the specialization incentive', () => {
+  for (const s of STARTERS) assert.ok(renderStarter(s).includes(FOCUS_RULE), s.id);
+  assert.match(FOCUS_RULE, new RegExp(`up to ${FOCUS.slots} focus skills`));
 });
 
 test('starters: pickStarter filters by id, risk and archetype; renderStarter includes the brief', () => {

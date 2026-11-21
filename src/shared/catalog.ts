@@ -97,6 +97,8 @@ export interface RecipeDef {
   tier: number;
   /** Minimum level in `skill`. */
   minLevel: number;
+  /** Only players who have `skill` among their focus skills can make it (see FOCUS). */
+  requiresFocus?: boolean;
   inputs: ItemStack[];
   output: ItemStack;
 }
@@ -107,7 +109,7 @@ export const RECIPES: Record<string, RecipeDef> = {
   // Refining
   copper_bar: recipe({ id: 'copper_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 1, minLevel: 0, inputs: [{ item: 'copper_ore', qty: 2 }], output: { item: 'copper_bar', qty: 1 } }),
   iron_bar: recipe({ id: 'iron_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 2, minLevel: 1, inputs: [{ item: 'iron_ore', qty: 2 }], output: { item: 'iron_bar', qty: 1 } }),
-  duskiron_bar: recipe({ id: 'duskiron_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 3, minLevel: 2, inputs: [{ item: 'duskiron_ore', qty: 2 }, { item: 'iron_bar', qty: 1 }], output: { item: 'duskiron_bar', qty: 1 } }),
+  duskiron_bar: recipe({ id: 'duskiron_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_ore', qty: 2 }, { item: 'iron_bar', qty: 1 }], output: { item: 'duskiron_bar', qty: 1 } }),
   pine_plank: recipe({ id: 'pine_plank', kind: 'refine', station: 'sawmill', skill: 'woodworking', tier: 1, minLevel: 0, inputs: [{ item: 'pine_log', qty: 2 }], output: { item: 'pine_plank', qty: 1 } }),
   leather: recipe({ id: 'leather', kind: 'refine', station: 'tannery', skill: 'tanning', tier: 1, minLevel: 0, inputs: [{ item: 'rough_hide', qty: 2 }], output: { item: 'leather', qty: 1 } }),
   // Tools
@@ -116,11 +118,11 @@ export const RECIPES: Record<string, RecipeDef> = {
   // Weapons
   copper_sword: recipe({ id: 'copper_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 3 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_sword', qty: 1 } }),
   iron_sword: recipe({ id: 'iron_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_sword', qty: 1 } }),
-  duskiron_sword: recipe({ id: 'duskiron_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 3, minLevel: 2, inputs: [{ item: 'duskiron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_sword', qty: 1 } }),
+  duskiron_sword: recipe({ id: 'duskiron_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'duskiron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_sword', qty: 1 } }),
   // Armor
   leather_jerkin: recipe({ id: 'leather_jerkin', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 1, minLevel: 0, inputs: [{ item: 'leather', qty: 3 }], output: { item: 'leather_jerkin', qty: 1 } }),
   iron_mail: recipe({ id: 'iron_mail', kind: 'craft', station: 'forge', skill: 'armorcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'leather', qty: 2 }], output: { item: 'iron_mail', qty: 1 } }),
-  wraithhide_armor: recipe({ id: 'wraithhide_armor', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 3, minLevel: 2, inputs: [{ item: 'wraith_essence', qty: 2 }, { item: 'leather', qty: 3 }, { item: 'iron_bar', qty: 1 }], output: { item: 'wraithhide_armor', qty: 1 } }),
+  wraithhide_armor: recipe({ id: 'wraithhide_armor', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'wraith_essence', qty: 2 }, { item: 'leather', qty: 3 }, { item: 'iron_bar', qty: 1 }], output: { item: 'wraithhide_armor', qty: 1 } }),
 };
 
 export interface NodeDef { id: string; name: string; item: string; tier: number; skill: SkillId; maxCharges: number }
@@ -182,7 +184,8 @@ export interface QuestDef {
   id: string;
   name: string;
   description: string;
-  objective: { kind: 'kill' | 'gather' | 'craft'; target: string; count: number };
+  /** `deliver`: items you send to another player in settled trades. `procure`: items you receive from another player in settled trades. */
+  objective: { kind: 'kill' | 'gather' | 'craft' | 'deliver' | 'procure'; target: string; count: number };
   reward: ItemStack[];
 }
 
@@ -191,6 +194,11 @@ export const QUESTS: Record<string, QuestDef> = {
   ore_run: { id: 'ore_run', name: 'Ore Run', description: 'Mine 6 copper ore.', objective: { kind: 'gather', target: 'copper_ore', count: 6 }, reward: [{ item: 'silver', qty: 15 }] },
   apprentice_smith: { id: 'apprentice_smith', name: 'Apprentice Smith', description: 'Craft a copper sword.', objective: { kind: 'craft', target: 'copper_sword', count: 1 }, reward: [{ item: 'silver', qty: 20 }] },
   frontier_hunt: { id: 'frontier_hunt', name: 'Frontier Hunt', description: 'Kill a wraith in the frontier.', objective: { kind: 'kill', target: 'wraith', count: 1 }, reward: [{ item: 'silver', qty: 60 }] },
+  // Trade contracts: progress counts only what actually changes hands in settled blind trades with other players.
+  supply_contract: { id: 'supply_contract', name: 'Supply Contract', description: 'Deliver 4 iron bars to other players through settled trades.', objective: { kind: 'deliver', target: 'iron_bar', count: 4 }, reward: [{ item: 'silver', qty: 40 }] },
+  outfitter_contract: { id: 'outfitter_contract', name: 'Outfitter Contract', description: 'Deliver an iron mail to another player through a settled trade.', objective: { kind: 'deliver', target: 'iron_mail', count: 1 }, reward: [{ item: 'silver', qty: 50 }] },
+  hire_a_smith: { id: 'hire_a_smith', name: 'Hire a Smith', description: 'Receive an iron sword from another player through a settled trade.', objective: { kind: 'procure', target: 'iron_sword', count: 1 }, reward: [{ item: 'silver', qty: 30 }] },
+  ore_buyer: { id: 'ore_buyer', name: 'Ore Buyer', description: 'Receive 6 iron ore from other players through settled trades.', objective: { kind: 'procure', target: 'iron_ore', count: 6 }, reward: [{ item: 'silver', qty: 25 }] },
 };
 
 export const SKILLS: SkillId[] = ['mining', 'woodcutting', 'smelting', 'woodworking', 'tanning', 'toolcraft', 'weaponcraft', 'armorcraft', 'swords', 'unarmed'];
@@ -218,9 +226,37 @@ export const MAX_CRAFT_BATCH = 10;
 
 export const MAX_SKILL_LEVEL = 99;
 
-/** Skill level from XP, capped at MAX_SKILL_LEVEL. No global level exists; each skill grows independently through use. */
+/** Trained level from XP, capped at MAX_SKILL_LEVEL. No global level exists; each skill grows independently through use. */
 export function levelFor(xp: number): number {
   return Math.min(MAX_SKILL_LEVEL, Math.floor(Math.sqrt(Math.max(0, xp) / 10)));
+}
+
+/**
+ * Specialization. Each player picks up to `slots` focus skills (`focus.set`, in town).
+ * - Focused skills earn `xpMult`× XP and count their full trained level.
+ * - Unfocused skills still work and still earn XP, but count at most `unfocusedLevelCap` levels
+ *   (enough for every tier-1 and tier-2 recipe). Refocusing later restores the full trained level: XP is never lost.
+ * - Level perks: action speed −5%/level (floor 50%), gathering bonus yield +`bonusYieldPerLevel`/level (up to +`maxBonusYield` items),
+ *   weapon damage (see COMBAT). Focused refining and crafting also get a `bonusOutputPerLevel`/level chance of one extra output per unit (up to `maxBonusOutput`).
+ * - Tier-3 recipes (`requiresFocus`) can only be made by players focused in that recipe's skill.
+ * - Adding a skill to a free slot is free. Dropping a focused skill is allowed once per `respecCooldownMs`.
+ * Nobody can master the whole gathering → refining → crafting → combat chain alone: specialists trade with each other.
+ */
+export const FOCUS = {
+  slots: 3,
+  xpMult: 2,
+  unfocusedLevelCap: 3,
+  bonusYieldPerLevel: 0.1,
+  maxBonusYield: 2,
+  bonusOutputPerLevel: 0.05,
+  maxBonusOutput: 0.5,
+  respecCooldownMs: 10 * 60_000,
+};
+
+/** Level that counts for rules: the full trained level when focused, else capped at FOCUS.unfocusedLevelCap. */
+export function effectiveLevel(xp: number, focused: boolean): number {
+  const level = levelFor(xp);
+  return focused ? level : Math.min(FOCUS.unfocusedLevelCap, level);
 }
 
 /** Combat: XP per point of damage dealt, and the weapon-skill damage bonus (+3% per level, counted up to level 30). */
@@ -286,4 +322,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS };
