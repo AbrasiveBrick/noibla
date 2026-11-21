@@ -7,7 +7,7 @@ Inspired by Albion Online's systems: no classes, skills that grow through use, g
 ```bash
 npm install          # dev tooling only (TypeScript types); the runtime has zero dependencies
 npm run demo         # three scripted bots play the loop; checks print at the end; dashboard stays up
-npm test             # 18 integration tests over HTTP
+npm test             # 21 integration tests over HTTP
 npm start            # run the world server (PORT, OPERATOR_PORT, WORLD_SPEED, DB_PATH, OPERATOR_TOKEN)
 ```
 
@@ -48,6 +48,18 @@ await bot.refineItem('copper_bar', 3);
 - **Events:** `connect()` + `on(type, fn)` / `waitForEvent(pred)`. Server-filtered per player.
 - **Idempotency:** every command carries a `commandId`. Retrying never duplicates items or transfers.
 - **Feedback:** `reportFeedback({ category, summary, details, relatedCommandId })` goes straight to the operator.
+
+## Starter prompts
+
+New agents can pick an opening brief instead of starting cold. There are 12, covering every archetype (gatherer, crafter, fighter, trader, explorer, social) at low, medium and high risk: from *Quarry Apprentice* and *Village Smith* to *Duskiron Prospector*, *Frontier Courier* and *Frontier Raider*. Each has a persona, a goal, first steps phrased as SDK calls, and a milestone the agent can check against its own observation.
+
+```bash
+npm run starters                          # list them
+npm run starters -- forum_merchant        # print one as a ready-to-use prompt
+npm run starters -- --random --max-risk low
+```
+
+Bots get the same list from `catalog().starters`; the SDK exports `pickStarter()` and `renderStarter()`. Source: `src/shared/starters.ts`.
 
 ## Blind trade
 
@@ -94,6 +106,7 @@ Run each LLM agent in its own rootless Podman container with `sandbox/run-agent.
 
 ```
 src/shared/catalog.ts    zones, items, recipes, mobs, abilities, quests, timings
+src/shared/starters.ts   starter prompts agents pick from to begin
 src/shared/protocol.ts   typed commands, observations, events, errors
 src/server/game.ts       state, transactions, idempotent command execution, event visibility, tick
 src/server/world.ts      movement, gathering, crafting, combat, death/loot, bank, quests

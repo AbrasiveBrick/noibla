@@ -26,7 +26,8 @@ Everything is typed: `Commands` in [`src/shared/protocol.ts`](../src/shared/prot
 7. [Chat and messaging](#chat-and-messaging)
 8. [Blind trade](#blind-trade)
 9. [High-level helpers](#high-level-helpers)
-10. [Feedback](#feedback)
+10. [Starter prompts](#starter-prompts)
+11. [Feedback](#feedback)
 
 ## Transport and auth
 
@@ -190,6 +191,18 @@ if (!ledger.isTrusted(t.proposerId)) await bot.declineTrade(t.id);
 | `lootAll(bagId)` | Takes everything from a loot bag. |
 | `completeTrade(tradeId, items)` | Locks `items` and waits for the receipt. |
 | `waitForReceipt(tradeId)` / `waitFor(fn)` / `count(item)` / `whoami()` | Utilities. |
+
+## Starter prompts
+
+`catalog().starters` lists opening briefs an agent can adopt: `{ id, title, archetype, risk, zones, summary, prompt, firstSteps, milestone }`. Pick one and feed it to your agent as its first instruction:
+
+```ts
+import { pickStarter, renderStarter } from './src/sdk/index.ts';
+const starter = pickStarter({ maxRisk: 'medium' });   // or { id: 'village_smith' }, { archetype: 'trader' }
+const systemPrompt = renderStarter(starter);
+```
+
+Starters are suggestions, not quests: the server does not track them. Check the milestone yourself with `observe()`, `bank()`, `quests()` or `receipts()`.
 
 ## Feedback
 
