@@ -18,7 +18,15 @@ export type ErrorCode =
 /** Errors that do not depend on game state changing hands; safe to retry with the same commandId later. */
 export const TRANSIENT_ERRORS: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['BUSY', 'TRAVELING', 'COMBAT_LOCKED', 'ON_COOLDOWN', 'RATE_LIMITED', 'DEPLETED']);
 
-export interface ApiError { code: ErrorCode; message: string; retryAfterMs?: number }
+export interface ApiError {
+  code: ErrorCode;
+  message: string;
+  retryAfterMs?: number;
+  /** What to do next, when the server can tell. */
+  hint?: string;
+  /** Present when this player sent the same command type and got the same error code this many times in a row (3+). */
+  repeated?: number;
+}
 
 export type CommandResponse<R = unknown> =
   | { ok: true; commandId: string; result: R; replayed?: boolean }
@@ -47,7 +55,11 @@ export interface SelfView {
   abilities: AbilityView[];
   effects: { evadeMs: number; braceMs: number };
   quests: QuestProgress[];
+  /** Wear of equipped gear (0 to catalog.wear.max). Broken gear works at reduced strength until repaired in town. */
+  gear: Partial<Record<Slot, GearWearView>>;
 }
+
+export interface GearWearView { item: string; wear: number; broken: boolean; repairCost: number }
 
 export interface NodeView { id: string; type: string; item: string; tier: number; charges: number; maxCharges: number; nextChargeInMs: number }
 export interface MobView { id: string; type: string; name: string; hp: number; maxHp: number; alive: boolean; respawnInMs: number; targetId: string | null }
@@ -161,6 +173,8 @@ export interface TradeReceipt {
   /** Did the counterparty send exactly what they promised? null when the trade expired. */
   counterpartyKeptWord: boolean | null;
   youKeptWord: boolean | null;
+  /** Silver destroyed from what you received (the settlement fee). `actual.youReceived` is the gross amount the counterparty sent. */
+  silverFee?: number;
   at: number;
 }
 
@@ -198,6 +212,10 @@ export interface Commands {
   'quest.list': { payload: Empty; result: { available: { id: string; name: string; description: string; reward: ItemStack[] }[]; mine: QuestProgress[] } };
   'quest.accept': { payload: { questId: string }; result: QuestProgress };
   'quest.claim': { payload: { questId: string }; result: { reward: ItemStack[] } };
+  // Town services
+  'shop.list': { payload: Empty; result: { items: { item: string; price: number }[] } };
+  'shop.buy': { payload: { item: string; qty?: number }; result: { bought: ItemStack; paid: number; inventory: ItemStack[] } };
+  repair: { payload: { slot?: Slot }; result: { repaired: { slot: Slot; item: string; wearRemoved: number; cost: number }[]; paid: number; gear: Partial<Record<Slot, GearWearView>> } };
   // Public chat
   'chat.say': { payload: { text: string }; result: { message: ChatMessage } };
   'chat.history': { payload: { channel: string; limit?: number; beforeId?: number }; result: { channel: string; messages: ChatMessage[] } };
@@ -239,6 +257,8 @@ export interface AttackResult {
   loot: ItemStack[];
   xp: number;
   busyMs: number;
+  /** Wear of the equipped weapon after this attack, when one is equipped. */
+  weaponWear?: number;
 }
 
 // ---------- Events ----------
@@ -251,12 +271,12 @@ export type EventType =
   // town forum
   | 'forum.thread' | 'forum.reply'
   // private to one player
-  | 'self.damaged' | 'self.arrived' | 'self.died' | 'quest.progress' | 'quest.complete'
+  | 'self.damaged' | 'self.arrived' | 'self.died' | 'self.gearBroken' | 'quest.progress' | 'quest.complete'
   | 'trade.proposed' | 'trade.agreed' | 'trade.declined' | 'trade.cancelled' | 'trade.settled' | 'trade.expired'
   // private to the two DM participants
   | 'dm.message'
   // operator only
-  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired';
+  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired' | 'shop' | 'repair';
 
 export interface GameEvent<D = any> {
   id: number;

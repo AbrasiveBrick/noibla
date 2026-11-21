@@ -2,10 +2,10 @@
 // equipment, combat, death & loot, banking, quests.
 
 import {
-  ABILITIES, BASE_HP, CATALOG, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SKILLS, TIMING, XP, ZONES,
+  ABILITIES, BASE_HP, CATALOG, COMBAT, DEATH_SILVER_LOSS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
   levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
-import type { AbilityView, AttackResult, Observation, QuestProgress, ZoneView } from '../shared/protocol.ts';
+import type { AbilityView, AttackResult, GearWearView, Observation, QuestProgress, ZoneView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Mob, Player } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
@@ -14,12 +14,52 @@ import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, remove
 
 export function maxHp(p: Player): number {
   const armor = p.equipment.armor ? ITEMS[p.equipment.armor] : undefined;
-  return BASE_HP + (armor?.hpBonus ?? 0);
+  return BASE_HP + Math.round((armor?.hpBonus ?? 0) * gearMultiplier(p, 'armor'));
 }
 
 function defense(p: Player): number {
   const armor = p.equipment.armor ? ITEMS[p.equipment.armor] : undefined;
-  return armor?.defense ?? 0;
+  return (armor?.defense ?? 0) * gearMultiplier(p, 'armor');
+}
+
+// ---------- gear wear ----------
+
+/** Wear is tracked per item id, so unequipping and re-equipping keeps it. */
+function wearOf(p: Player, item: string): number { return p.wear?.[item] ?? 0; }
+
+function gearMultiplier(p: Player, slot: Slot): number {
+  const item = p.equipment[slot];
+  return item && wearOf(p, item) >= WEAR.max ? WEAR.brokenMultiplier : 1;
+}
+
+export function repairCost(item: string, wear: number): number {
+  if (wear <= 0) return 0;
+  return Math.ceil(((WEAR.repairCostByTier[ITEMS[item]?.tier ?? 0] ?? 0) * wear) / WEAR.max);
+}
+
+export function gearView(p: Player): Partial<Record<Slot, GearWearView>> {
+  const out: Partial<Record<Slot, GearWearView>> = {};
+  for (const slot of ['weapon', 'armor'] as Slot[]) {
+    const item = p.equipment[slot];
+    if (!item) continue;
+    const wear = wearOf(p, item);
+    out[slot] = { item, wear: Math.round(wear * 100) / 100, broken: wear >= WEAR.max, repairCost: repairCost(item, wear) };
+  }
+  return out;
+}
+
+function addWear(g: Game, p: Player, slot: Slot, amount: number) {
+  const item = p.equipment[slot];
+  if (!item || amount <= 0) return;
+  const before = wearOf(p, item);
+  if (before >= WEAR.max) return;
+  p.wear = p.wear ?? {};
+  p.wear[item] = Math.min(WEAR.max, before + amount);
+  if (p.wear[item] >= WEAR.max) {
+    if (slot === 'armor') p.hp = Math.min(p.hp, maxHp(p));
+    g.emit('self.gearBroken', { kind: 'player', playerId: p.id }, { slot, item, note: `${item} is broken and works at ${WEAR.brokenMultiplier * 100}% strength. Repair it in town with the "repair" command (${repairCost(item, WEAR.max)} silver).` }, {});
+  }
+  g.markPlayer(p);
 }
 
 export function skillLevel(p: Player, s: SkillId): number { return levelFor(p.skills[s] ?? 0); }
@@ -111,6 +151,7 @@ export function observe(g: Game, p: Player): Observation {
       equipment: { ...p.equipment }, inventory: toStacks(p.inventory), skills, abilities,
       effects: { evadeMs: Math.max(0, p.evadeUntil - now), braceMs: Math.max(0, p.braceUntil - now) },
       quests: questViews(p),
+      gear: gearView(p),
     },
     zone: p.zone && !p.travel ? zoneView(g, p.zone, p.id) : null,
     unreadDms: unread,
@@ -128,7 +169,13 @@ function move(g: Game, p: Player, payload: Record<string, any>) {
   if (!ZONES[from].adjacent.includes(to)) fail('NOT_ADJACENT', `${to} is not adjacent to ${from}; adjacent: ${ZONES[from].adjacent.join(', ')}`);
   requireReady(g, p);
   const now = g.now();
-  if (p.combatLockUntil > now) fail('COMBAT_LOCKED', 'cannot leave the zone while in combat', p.combatLockUntil - now);
+  if (p.combatLockUntil > now) {
+    const attackers = [...g.mobs.values()].filter((m) => m.targetId === p.id && mobAlive(g, m)).map((m) => `${MOB_TYPES[m.type].name} (${m.id}, ${m.hp} hp)`);
+    fail('COMBAT_LOCKED', 'cannot leave the zone while in combat', p.combatLockUntil - now,
+      attackers.length
+        ? `every hit you deal or take renews the lock, and these mobs keep attacking you: ${attackers.join(', ')}. Kill them (or die) before moving.`
+        : 'stop attacking and wait retryAfterMs, then move.');
+  }
   p.travel = { from, to, departAt: now, arriveAt: now + g.ms(TIMING.travelMs) };
   p.zone = null;
   clearAggro(g, p.id);
@@ -161,7 +208,7 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   const now = g.now();
   if (node!.charges <= 0) fail('DEPLETED', `${def.name} is depleted`, node!.nextChargeAt - now);
   const tool = bestTool(p, def.skill);
-  if (tool < def.tier - 1) fail('TOOL_REQUIRED', `${def.name} (tier ${def.tier}) needs a tier ${def.tier - 1}+ ${def.skill} tool; best carried is tier ${tool}`);
+  if (tool < def.tier - 1) fail('TOOL_REQUIRED', `${def.name} (tier ${def.tier}) needs a tier ${def.tier - 1}+ ${def.skill} tool; best carried is tier ${tool}`, undefined, toolHint(def.skill, def.tier - 1));
   const level = skillLevel(p, def.skill);
   const qty = 1 + (g.rng() < 0.1 * level ? 1 : 0);
   if (node!.charges === def.maxCharges) node!.nextChargeAt = now + g.ms(TIMING.nodeRegenMs);
@@ -176,6 +223,18 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   g.setLastAction(p, 'gather', `gathered ${qty}× ${def.item}`);
   g.markPlayer(p);
   return { item: def.item, qty, xp, skill: def.skill, level: skillLevel(p, def.skill), busyMs: busy };
+}
+
+function toolHint(skill: SkillId, minTier: number): string {
+  const tool = Object.values(ITEMS)
+    .filter((i) => i.kind === 'tool' && i.toolFor === skill && (i.toolTier ?? 0) >= minTier)
+    .sort((a, b) => (a.toolTier ?? 0) - (b.toolTier ?? 0))[0];
+  if (!tool) return `no ${skill} tool of tier ${minTier}+ exists`;
+  const r = RECIPES[tool.id];
+  const ways = [`buy one from another player`];
+  if (r) ways.unshift(`craft it (recipe "${r.id}" at the ${r.station} in town: ${describe(r.inputs)}; needs ${r.skill} level ${r.minLevel})`);
+  if (SHOP[tool.id] !== undefined) ways.push(`buy it in town with shop.buy for ${SHOP[tool.id]} silver`);
+  return `carry a ${tool.id} (tier ${tool.toolTier}) in your inventory. Gathering this node again will fail until you do. Ways to get one: ${ways.join('; ')}.`;
 }
 
 // ---------- refining & crafting ----------
@@ -269,8 +328,13 @@ function attackDamage(p: Player, ability: AbilityId): { damage: number; skill: S
   const def = ABILITIES[ability];
   const weapon = p.equipment.weapon ? ITEMS[p.equipment.weapon] : undefined;
   const skill: SkillId = weapon?.weaponSkill ?? 'unarmed';
-  const base = def.flatDamage ?? (weapon?.power ?? 0) * (def.powerMult ?? 1);
-  return { damage: base * (1 + 0.05 * skillLevel(p, skill)), skill };
+  const base = def.flatDamage ?? (weapon?.power ?? 0) * gearMultiplier(p, 'weapon') * (def.powerMult ?? 1);
+  const bonusLevels = Math.min(skillLevel(p, skill), COMBAT.damageBonusMaxLevel);
+  return { damage: base * (1 + COMBAT.damageBonusPerLevel * bonusLevels), skill };
+}
+
+function combatXp(damage: number): number {
+  return damage > 0 ? Math.max(1, Math.round(damage * COMBAT.xpPerDamage)) : 0;
 }
 
 /** Applies damage to a player (armor, evade, brace) and handles death. */
@@ -282,6 +346,7 @@ export function damagePlayer(g: Game, target: Player, raw: number, source: { kin
   else if (target.braceUntil > now) dmg *= 0.5;
   const damage = dodged ? 0 : Math.max(1, Math.round(dmg));
   target.hp = Math.max(0, target.hp - damage);
+  if (!dodged) addWear(g, target, 'armor', WEAR.perHitTaken);
   target.lastCombatAt = now;
   target.combatLockUntil = now + g.ms(TIMING.combatLockMs);
   g.markPlayer(target);
@@ -334,6 +399,8 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
   }
 
   const { damage: raw, skill } = attackDamage(p, ability);
+  addWear(g, p, 'weapon', WEAR.perAttack);
+  const weaponWear = p.equipment.weapon ? Math.round(wearOf(p, p.equipment.weapon) * 100) / 100 : undefined;
   if (def.cooldownMs > 0) p.cooldowns[ability] = now + g.ms(def.cooldownMs);
   p.busyUntil = now + gcd;
   p.lastCombatAt = now;
@@ -346,7 +413,8 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     mob.hp = Math.max(0, mob.hp - damage);
     mob.aggro[p.id] = (mob.aggro[p.id] ?? 0) + damage;
     if (!mob.targetId) { mob.targetId = p.id; mob.nextAttackAt = now + g.ms(mdef.attackMs); }
-    gainXp(p, skill, damage);
+    const xp = combatXp(damage);
+    gainXp(p, skill, xp);
     g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: mob.id, targetName: mdef.name, ability, damage, targetHp: mob.hp }, { zone, actor: p });
     let loot: ItemStack[] = [];
     let killed = false;
@@ -364,15 +432,16 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     } else {
       g.setLastAction(p, 'combat', `fighting ${mdef.name}`);
     }
-    return { ability, targetId: mob.id, damage, dodged: false, targetHp: mob.hp, killed, loot, xp: damage, busyMs: gcd };
+    return { ability, targetId: mob.id, damage, dodged: false, targetHp: mob.hp, killed, loot, xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}) };
   }
 
   const v = victim!;
   const res = damagePlayer(g, v, raw, { kind: 'player', id: p.id, name: p.name });
-  gainXp(p, skill, res.damage);
+  const xp = combatXp(res.damage);
+  gainXp(p, skill, xp);
   g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: v.id, targetName: v.name, ability, damage: res.damage, dodged: res.dodged, targetHpPct: Math.round((v.hp / maxHp(v)) * 100), pvp: true }, { zone, actor: p });
   g.setLastAction(p, 'combat', res.killed ? `killed ${v.name}` : `attacking ${v.name}`);
-  return { ability, targetId: v.id, damage: res.damage, dodged: res.dodged, targetHp: res.killed ? 0 : v.hp, killed: res.killed, loot: [], xp: res.damage, busyMs: gcd };
+  return { ability, targetId: v.id, damage: res.damage, dodged: res.dodged, targetHp: res.killed ? 0 : v.hp, killed: res.killed, loot: [], xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}) };
 }
 
 function rollLoot(g: Game, mobType: string): ItemStack[] {
@@ -393,9 +462,14 @@ export function killPlayer(g: Game, victim: Player, source: { kind: 'mob' | 'pla
   const now = g.now();
   let bagId: string | null = null;
   let dropped: ItemStack[] = [];
+  // Part of the carried silver is destroyed on every death (a sink); banked silver is safe.
+  const silverLost = Math.floor((victim.inventory.silver ?? 0) * DEATH_SILVER_LOSS);
+  if (silverLost > 0) removeItems(victim.inventory, [{ item: 'silver', qty: silverLost }]);
   if (z.fullLoot) {
     const items: Record<string, number> = { ...victim.inventory };
     for (const it of Object.values(victim.equipment)) if (it) items[it] = (items[it] ?? 0) + 1;
+    // The dropped copies leave with their wear; a looter gets them as fresh items.
+    if (victim.wear) for (const it of Object.keys(items)) delete victim.wear[it];
     victim.inventory = {};
     victim.equipment = {};
     dropped = toStacks(items);
@@ -412,9 +486,10 @@ export function killPlayer(g: Game, victim: Player, source: { kind: 'mob' | 'pla
     const killer = g.players.get(source.id);
     if (killer) { killer.stats.kills++; g.markPlayer(killer); }
   }
-  g.emit('player.death', { kind: 'zone', zone }, { victimId: victim.id, victimName: victim.name, killerKind: source.kind, killerId: source.id, killerName: source.name, zone, fullLoot: z.fullLoot, bagId, dropped }, { zone, actor: victim });
+  g.emit('player.death', { kind: 'zone', zone }, { victimId: victim.id, victimName: victim.name, killerKind: source.kind, killerId: source.id, killerName: source.name, zone, fullLoot: z.fullLoot, bagId, dropped, silverLost }, { zone, actor: victim });
   if (bagId) g.emit('loot.dropped', { kind: 'zone', zone }, { bagId, ownerId: victim.id, ownerName: victim.name, items: dropped }, { zone, actor: victim });
-  g.emit('self.died', { kind: 'player', playerId: victim.id }, { zone, killerKind: source.kind, killerId: source.id, killerName: source.name, dropped, bagId, note: z.fullLoot ? 'Carried and equipped items were dropped. Bank and skills are safe.' : 'Safe zone death: you kept everything.' }, { zone });
+  const lostNote = silverLost > 0 ? ` ${silverLost} carried silver was destroyed (${DEATH_SILVER_LOSS * 100}% of what you carried; bank silver is safe).` : '';
+  g.emit('self.died', { kind: 'player', playerId: victim.id }, { zone, killerKind: source.kind, killerId: source.id, killerName: source.name, dropped, bagId, silverLost, note: (z.fullLoot ? 'The rest of your carried and equipped items were dropped. Bank and skills are safe.' : 'Safe zone death: you kept the rest of your items.') + lostNote }, { zone });
   // Respawn in town.
   victim.zone = 'town';
   victim.travel = null;
@@ -499,13 +574,65 @@ function questClaim(g: Game, p: Player, payload: Record<string, any>) {
   if (!def) fail('NOT_FOUND', `unknown quest ${questId}`);
   requireZone(g, p, 'town', 'the quest board');
   const q = p.quests[questId];
-  if (!q || q.status !== 'complete') fail('QUEST_STATE', `quest ${questId} is ${q?.status ?? 'not accepted'}`);
+  if (!q || q.status !== 'complete') {
+    fail('QUEST_STATE', `quest ${questId} is ${q?.status ?? 'not accepted'}`, undefined,
+      !q ? `accept it first with quest.accept` : q.status === 'claimed' ? 'the reward was already paid' : `progress ${Math.min(q.progress, def!.objective.count)}/${def!.objective.count}: ${def!.description} Claim it once progress reaches the goal.`);
+  }
   q!.status = 'claimed';
   addItems(p.inventory, def!.reward);
   g.emit('quest', { kind: 'operator' }, { playerId: p.id, name: p.name, questId, status: 'claimed', reward: def!.reward }, { zone: 'town', actor: p });
   g.setLastAction(p, 'quest', `claimed ${def!.name} (${describe(def!.reward)})`);
   g.markPlayer(p);
   return { reward: def!.reward };
+}
+
+// ---------- town services: shop & repair (silver sinks) ----------
+
+function payFromInventory(p: Player, cost: number, what: string) {
+  const have = p.inventory.silver ?? 0;
+  if (have < cost) fail('NOT_ENOUGH_ITEMS', `${what} costs ${cost} silver; you carry ${have}`, undefined, 'withdraw silver from the bank, or sell goods to other players');
+  removeItems(p.inventory, [{ item: 'silver', qty: cost }]);
+}
+
+function shopList() {
+  return { items: Object.entries(SHOP).map(([item, price]) => ({ item, price })) };
+}
+
+function shopBuy(g: Game, p: Player, payload: Record<string, any>) {
+  const item = reqStr(payload, 'item', 60);
+  const qty = optInt(payload, 'qty', 1, MAX_CRAFT_BATCH, 1);
+  const price = SHOP[item];
+  if (price === undefined) fail('NOT_FOUND', `the shop does not sell ${item}`, undefined, `the shop sells: ${Object.entries(SHOP).map(([i, pr]) => `${i} (${pr})`).join(', ')}. Buy anything else from players.`);
+  requireZone(g, p, 'town', 'the shop');
+  const cost = price! * qty;
+  payFromInventory(p, cost, `${qty}× ${item}`);
+  addItems(p.inventory, [{ item, qty }]);
+  g.emit('shop', { kind: 'operator' }, { playerId: p.id, name: p.name, item, qty, paid: cost }, { zone: 'town', actor: p });
+  g.setLastAction(p, 'shop', `bought ${qty}× ${item} for ${cost} silver`);
+  g.markPlayer(p);
+  return { bought: { item, qty }, paid: cost, inventory: toStacks(p.inventory) };
+}
+
+function repair(g: Game, p: Player, payload: Record<string, any>) {
+  const slotArg = payload.slot === undefined ? undefined : reqStr(payload, 'slot', 10);
+  if (slotArg !== undefined && slotArg !== 'weapon' && slotArg !== 'armor') fail('BAD_REQUEST', 'slot must be weapon or armor');
+  requireZone(g, p, 'town', 'repairs');
+  const slots: Slot[] = slotArg ? [slotArg as Slot] : ['weapon', 'armor'];
+  const jobs: { slot: Slot; item: string; wearRemoved: number; cost: number }[] = [];
+  for (const slot of slots) {
+    const item = p.equipment[slot];
+    const wear = item ? wearOf(p, item) : 0;
+    if (item && wear > 0) jobs.push({ slot, item, wearRemoved: Math.round(wear * 100) / 100, cost: repairCost(item, wear) });
+  }
+  if (!jobs.length) fail('BAD_REQUEST', slotArg ? `nothing to repair in ${slotArg}` : 'no equipped gear needs repair', undefined, 'repair works on equipped gear; equip the item first');
+  const total = jobs.reduce((n, j) => n + j.cost, 0);
+  payFromInventory(p, total, 'this repair');
+  for (const j of jobs) delete p.wear![j.item];
+  p.hp = maxHp(p);
+  g.emit('repair', { kind: 'operator' }, { playerId: p.id, name: p.name, repaired: jobs, paid: total }, { zone: 'town', actor: p });
+  g.setLastAction(p, 'repair', `repaired ${jobs.map((j) => j.item).join(', ')} for ${total} silver`);
+  g.markPlayer(p);
+  return { repaired: jobs, paid: total, gear: gearView(p) };
 }
 
 // ---------- tick ----------
@@ -596,4 +723,7 @@ export const worldCommands: Record<string, CommandDef> = {
   })),
   'quest.accept': rw(questAccept),
   'quest.claim': rw(questClaim),
+  'shop.list': ro(() => shopList()),
+  'shop.buy': rw(shopBuy),
+  repair: rw(repair),
 };

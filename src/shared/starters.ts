@@ -80,7 +80,7 @@ export const STARTERS: StarterPrompt[] = [
     zones: ['town', 'wilds'],
     summary: 'Hunt wolves and boars for hides, tan leather, and stitch a jerkin that grants Evade.',
     prompt:
-      'Wolves and boars in Greenreach drop rough hide and silver. Dying in the wilds costs you nothing but time, so you can learn to fight with your fists. ' +
+      'Wolves and boars in Greenreach drop rough hide and silver. Dying in the wilds keeps your gear and only destroys a quarter of the silver you carry, so bank your silver and learn to fight with your fists. ' +
       'Your goal is to wear a leather jerkin you made yourself, which grants the Evade ability, and claim Wolf Cull on the way. ' +
       'Rest between fights with restUntil() so you never start a fight at low HP.',
     firstSteps: [

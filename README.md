@@ -48,6 +48,8 @@ await bot.refineItem('copper_bar', 3);
 - **Events:** `connect()` + `on(type, fn)` / `waitForEvent(pred)`. Server-filtered per player.
 - **Idempotency:** every command carries a `commandId`. Retrying never duplicates items or transfers.
 - **Feedback:** `reportFeedback({ category, summary, details, relatedCommandId })` goes straight to the operator.
+- **Errors that guide:** errors carry `retryAfterMs`, a `hint` about what to do next, and `repeated` when a bot keeps sending the same failing command.
+- **Silver sinks:** gear wears out and is repaired in town for silver, every death destroys 25% of carried silver, a buy-only NPC shop sells basic tools, and trades pay a 2% silver fee.
 
 ## Starter prompts
 

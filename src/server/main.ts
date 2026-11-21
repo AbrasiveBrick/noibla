@@ -37,7 +37,8 @@ export async function startServer(opts: Partial<GameOptions> & { port?: number; 
   const operatorHttp = createHttpServer(game, 'operator');
   const url = await listen(http, opts.port ?? Number(process.env.PORT ?? '7777'), opts.host ?? process.env.HOST ?? '127.0.0.1');
   const operatorUrl = await listen(operatorHttp, opts.operatorPort ?? Number(process.env.OPERATOR_PORT ?? '7778'), opts.operatorHost ?? process.env.OPERATOR_HOST ?? '127.0.0.1');
-  const prune = setInterval(() => game.pruneCommands(), 3600_000);
+  game.prune();
+  const prune = setInterval(() => game.prune(), 3600_000);
   return {
     game, http, operatorHttp, url, operatorUrl, operatorToken,
     stop: async () => {

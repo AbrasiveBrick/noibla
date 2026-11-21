@@ -116,7 +116,9 @@ test('death: safe wilderness keeps everything; frontier drops carried + equipped
     await v.waitFor(async () => (await v.observe()).self.zone === 'town' || null, { timeoutMs: 20_000, what: 'death in the wilds' });
     obs = await v.observe();
     assert.ok(obs.self.inventory.some((s) => s.item === 'copper_ore'), 'safe-zone death keeps inventory');
-    await v.deposit([{ item: 'silver', qty: 20 }]);
+    // Every death destroys 25% of carried silver, safe zones included: 20 → 15.
+    assert.equal(await v.count('silver'), 15);
+    await v.deposit([{ item: 'silver', qty: 15 }]);
     const xpBefore = obs.self.skills.unarmed.xp + obs.self.skills.mining.xp;
 
     await Promise.all([v.travelTo('frontier'), looter.travelTo('frontier')]);
@@ -128,7 +130,7 @@ test('death: safe wilderness keeps everything; frontier drops carried + equipped
     obs = await v.observe();
     assert.equal(obs.self.zone, 'town');
     assert.deepEqual(obs.self.inventory, []);
-    assert.deepEqual((await v.bank()).items, [{ item: 'silver', qty: 20 }]);
+    assert.deepEqual((await v.bank()).items, [{ item: 'silver', qty: 15 }]);
     assert.ok(obs.self.skills.unarmed.xp + obs.self.skills.mining.xp >= xpBefore);
 
     const lo = await looter.observe();
