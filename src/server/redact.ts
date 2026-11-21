@@ -1,6 +1,7 @@
 // Redaction rules for anything the operator can see (dashboard, debug view,
 // feedback context, server logs).
-//  - Private message contents never leave the DM tables except to the two participants.
+//  - Players only ever see their own private conversations. The operator dashboard shows them
+//    in full, but feedback reports still scrub them.
 //  - Nothing may reveal a pending trade submission or lock.
 
 /** Commands whose failures could reveal a pending submission or lock state. */

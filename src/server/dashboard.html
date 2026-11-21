@@ -57,6 +57,7 @@
   .ev .tag { font-size: 11px; color: var(--muted); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ev.death { background: color-mix(in srgb, var(--bad) 9%, transparent); }
   .ev.forum { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .ev.dm { background: color-mix(in srgb, var(--warn) 9%, transparent); }
   .ev .quote { color: var(--muted); font-style: italic; }
   .kept { color: var(--good); font-weight: 600; white-space: nowrap; } .broke { color: var(--bad); font-weight: 600; white-space: nowrap; }
   .party { margin: 2px 0; }
@@ -113,7 +114,8 @@
           <option value="chat">Zone chat</option>
           <option value="trade">Trades</option>
           <option value="bank">Bank &amp; quests</option>
-          <option value="system">Presence &amp; private msgs</option>
+          <option value="dm">Private messages</option>
+          <option value="system">Presence</option>
         </select>
         <label class="chk"><input type="checkbox" id="fHits"> show every combat hit</label>
       </div>
@@ -131,7 +133,7 @@
       <h2>Debug: failed commands <span class="count muted" id="failCount"></span>
         <label class="chk" style="margin-left:auto"><input type="checkbox" id="fTransient"> include transient (busy, cooldown, travel)</label>
       </h2>
-      <div class="note">Trade submission/lock failures are redacted so nothing reveals a pending trade. Private message contents are never shown here.</div>
+      <div class="note">Trade submission/lock failures are redacted so nothing reveals a pending trade.</div>
       <div class="body"><table><thead><tr><th>Time</th><th>Bot</th><th>Command ID</th><th>Command</th><th>Code</th><th>Reason</th></tr></thead><tbody id="failures"></tbody></table></div>
     </section>
 
@@ -153,7 +155,7 @@
     'loot.dropped': 'looting', 'loot.taken': 'looting', 'loot.expired': 'looting',
     'forum.thread': 'forum', 'forum.reply': 'forum', 'chat.message': 'chat',
     'trade.closed': 'trade', bank: 'bank', quest: 'bank',
-    'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'system',
+    'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'dm',
     'command.failed': 'debug', feedback: 'debug',
   };
   const $ = (id) => document.getElementById(id);
@@ -201,7 +203,7 @@
   function involved(ev) {
     const d = ev.data || {};
     return [ev.actorId, d.playerId, d.attackerId, d.targetId, d.victimId, d.killerId, d.looterId, d.ownerId,
-      d.message && d.message.authorId, d.thread && d.thread.authorId, d.post && d.post.authorId,
+      d.toId, d.message && d.message.authorId, d.thread && d.thread.authorId, d.post && d.post.authorId,
       ...(d.parties || []).map((p) => p.id)].filter(Boolean);
   }
 
@@ -226,7 +228,9 @@
       case 'forum.reply': return `<b>${esc(d.post.authorName)}</b> replied to “${esc(d.threadTitle)}”: <span class="quote">${esc(d.post.body)}</span>`;
       case 'bank': return `<b>${esc(d.name)}</b> ${d.action === 'deposit' ? 'banked' : 'withdrew'} ${stacks(d.items)}`;
       case 'quest': return `<b>${esc(d.name)}</b> quest ${esc(d.questId)}: ${esc(d.status)}${d.reward ? ` (${stacks(d.reward)})` : ''}`;
-      case 'dm.sent': return `<b>${esc(d.name)}</b> sent a private message <span class="muted">(content not shown)</span>`;
+      case 'dm.sent': return d.text === undefined
+        ? `<b>${esc(d.name)}</b> sent a private message`
+        : `<b>${esc(d.name)}</b> → <b>${esc(d.toName)}</b> <span class="muted">[private]</span> <span class="quote">“${esc(d.text)}”</span>`;
       case 'trade.closed': return d.outcome === 'settled'
         ? `Trade settled: ${d.parties.map((p) => `<b>${esc(p.name)}</b> ${p.keptWord ? '<span class="kept">kept word</span>' : '<span class="broke">broke word</span>'}`).join(' · ')}`
         : `Trade timed out between ${d.parties.map((p) => `<b>${esc(p.name)}</b>`).join(' and ')} — nothing changed hands`;
@@ -313,7 +317,7 @@
     $('feedCount').textContent = `${list.length} shown`;
     $('feed').innerHTML = list.map((ev) => {
       const cat = CATEGORY[ev.type] || 'system';
-      const cls = cat === 'deaths' && ev.type === 'player.death' ? 'death' : cat === 'forum' ? 'forum' : '';
+      const cls = cat === 'deaths' && ev.type === 'player.death' ? 'death' : cat === 'forum' ? 'forum' : cat === 'dm' ? 'dm' : '';
       return `<div class="ev ${cls}"><time>${t(ev.ts)}</time><span class="tag">${ev.zone ? esc(ev.zone) : esc(cat)}</span><span>${describe(ev)}</span></div>`;
     }).join('') || '<div class="empty" style="padding:10px 14px">No matching activity.</div>';
   }

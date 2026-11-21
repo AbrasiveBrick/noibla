@@ -1,5 +1,5 @@
 // Read-only operator views built from the server's own state and event log.
-// Never includes private message contents or pending trade submissions/locks.
+// Includes private messages (operator-only); never pending trade submissions/locks.
 
 import { ITEMS, ZONES } from '../shared/catalog.ts';
 import type { GameEvent } from '../shared/protocol.ts';

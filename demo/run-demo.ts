@@ -112,7 +112,8 @@ try {
   // Operator dashboard
   const stJson = JSON.stringify(st);
   const allTexts = dms.map((m) => m.text);
-  expect('dashboard data contains no private message contents', !allTexts.some((t) => stJson.includes(t)), `${allTexts.length} DMs checked`);
+  const opDms = st.events.filter((e: GameEvent) => e.type === 'dm.sent').map((e: GameEvent) => e.data.text);
+  expect('dashboard shows private message contents to the operator', allTexts.every((t) => opDms.includes(t)) && allTexts.some((t) => stJson.includes(t)), `${allTexts.length} DMs shown`);
   const lockFail = st.failures.find((f: any) => f.type === 'trade.lock');
   expect('trade.lock failure is redacted in the debug view', !!lockFail && lockFail.code === 'TRADE_REJECTED' && /redacted/.test(lockFail.reason));
   expect('dashboard shows the settled trades and the timeout separately', st.trades.settled.length >= 3 && st.trades.timeouts.length >= 1);

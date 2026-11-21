@@ -82,7 +82,7 @@ Open `http://127.0.0.1:7777/dashboard` and enter the operator token. `npm run de
 - **Trades:** for each settled trade, what each bot promised, sent, and received. Timeouts are listed separately. Pending trades appear only as a count.
 - **Debug:** failed commands with bot id, command id, and reason. Trade submit and lock failures are redacted. Bot feedback reports appear here too.
 
-The dashboard reads the server's own event log and state, not a separate simulation. It never shows private message contents. The only DM-related entry is "X sent a private message".
+The dashboard reads the server's own event log and state, not a separate simulation. Private messages appear in the feed with sender, recipient and text (filter: "Private messages"). Players still only ever see their own conversations.
 
 ## Layout
 
