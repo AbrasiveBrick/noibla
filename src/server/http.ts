@@ -1,6 +1,8 @@
-// HTTP transport. Bots: POST /api/command and GET /api/events (SSE) with a bot
-// token. Operator: GET /operator/state with the operator token. The two
-// credentials are distinct and never interchangeable.
+// HTTP transport, as two separate listeners. The bot listener serves
+// POST /api/command and GET /api/events (SSE) with a bot token. The operator
+// listener serves the dashboard and GET /operator/state with the operator
+// token, on its own port so sandboxed agents can be given the bot port only.
+// The two credentials are distinct and never interchangeable.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -38,16 +40,16 @@ async function readJson(req: IncomingMessage): Promise<any> {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new GameError('BAD_REQUEST', 'invalid JSON'); }
 }
 
-export function createHttpServer(game: Game): Server {
+export type Listener = 'bot' | 'operator';
+
+export function createHttpServer(game: Game, listener: Listener): Server {
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     try {
-      if (req.method === 'GET' && (path === '/' || path === '/dashboard')) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'" });
-        res.end(readFileSync(DASHBOARD));
-        return;
-      }
+      if (listener === 'operator') return await handleOperator(game, req, res, url);
+      if (req.method === 'GET' && path === '/') return send(res, 200, 'noibla bot API. Read GET /docs/sdk.');
+
       if (req.method === 'GET' && path === '/api/health') return send(res, 200, { ok: true, now: game.now(), speed: game.speed });
       if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, CATALOG);
       if (req.method === 'GET' && path === '/docs/sdk') return send(res, 200, readFileSync(SDK_DOC, 'utf8'), { 'content-type': 'text/markdown; charset=utf-8' });
@@ -79,17 +81,30 @@ export function createHttpServer(game: Game): Server {
         return;
       }
 
-      if (path === '/operator/state' && req.method === 'GET') {
-        if (!game.authOperator(bearer(req))) return send(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'operator credential required' } });
-        const since = Number(url.searchParams.get('since') ?? '0') || 0;
-        return send(res, 200, operatorState(game, since));
-      }
-
-      send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: `no route ${req.method} ${path}` } });
+      notFound(res, req, path);
     } catch (e) {
       game.log(`[http-error] ${req.method} ${path} ${(e as Error).message}`);
       if (!res.headersSent) send(res, 500, { ok: false, error: { code: 'INTERNAL', message: 'internal server error' } });
       else res.end();
     }
   });
+}
+
+function notFound(res: ServerResponse, req: IncomingMessage, path: string) {
+  send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: `no route ${req.method} ${path}` } });
+}
+
+async function handleOperator(game: Game, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const path = url.pathname;
+  if (req.method === 'GET' && (path === '/' || path === '/dashboard')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'" });
+    res.end(readFileSync(DASHBOARD));
+    return;
+  }
+  if (req.method === 'GET' && path === '/operator/state') {
+    if (!game.authOperator(bearer(req))) return send(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'operator credential required' } });
+    const since = Number(url.searchParams.get('since') ?? '0') || 0;
+    return send(res, 200, operatorState(game, since));
+  }
+  notFound(res, req, path);
 }

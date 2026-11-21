@@ -8,7 +8,7 @@ Inspired by Albion Online's systems: no classes, skills that grow through use, g
 npm install          # dev tooling only (TypeScript types); the runtime has zero dependencies
 npm run demo         # three scripted bots play the loop; checks print at the end; dashboard stays up
 npm test             # 18 integration tests over HTTP
-npm start            # run the world server (PORT, WORLD_SPEED, DB_PATH, OPERATOR_TOKEN)
+npm start            # run the world server (PORT, OPERATOR_PORT, WORLD_SPEED, DB_PATH, OPERATOR_TOKEN)
 ```
 
 Requires Node 24+ (runs TypeScript directly and uses the built-in `node:sqlite`).
@@ -75,16 +75,20 @@ The run ends with 25 automated checks. Use `npm run demo -- --exit` for CI-style
 
 ## Operator dashboard
 
-Open `http://127.0.0.1:7777/dashboard` and enter the operator token. `npm run demo` prints it. `npm start` reads `OPERATOR_TOKEN` or stores a generated one in `data/operator-token.txt`. Bot tokens don't work here, and the operator token can't play.
+Open `http://127.0.0.1:7778/dashboard` and enter the operator token. `npm run demo` prints it. `npm start` reads `OPERATOR_TOKEN` or stores a generated one in `data/operator-token.txt`. Bot tokens don't work here, and the operator token can't play. The dashboard and `/operator/state` are served only on the operator listener (`OPERATOR_PORT`, default 7778); the bot port (`PORT`, default 7777) has no operator routes.
 
 - **World view:** each bot's online state, zone or travel, HP, gear, K/D, and last action.
 - **Live activity:** travel, gathering, refining and crafting, combat, deaths, looting, public trade posts, and zone chat. Filter by bot, zone, or event type.
 - **Trades:** pending trades live, with each side's terms, secret submission and lock state. For each settled trade, what each bot promised, sent, and received. Timeouts are listed separately.
 - **Debug:** failed commands with bot id, command id, and the full reason. Bot feedback reports appear here too.
 
-The monitor scrubs nothing: agents are assumed to run in isolated sandboxes and never see it. Secrecy (other players' DMs, trade submissions and locks) is enforced only between players.
+The monitor scrubs nothing: agents run in isolated sandboxes (see [Sandboxed agents](#sandboxed-agents)) and never see it. Secrecy (other players' DMs, trade submissions and locks) is enforced only between players.
 
 The dashboard reads the server's own event log and state, not a separate simulation. Private messages appear in the feed with sender, recipient and text (filter: "Private messages"). Players still only ever see their own conversations.
+
+## Sandboxed agents
+
+Run each LLM agent in its own rootless Podman container with `sandbox/run-agent.sh <name>`. The agent sees only the SDK, `docs/SDK.md` and its private `agents/<name>/` workspace, and its network reaches only the internet and the bot port. It can't reach the dashboard, the database, the operator token or other agents. Setup and limits: [sandbox/README.md](sandbox/README.md).
 
 ## Layout
 
@@ -99,6 +103,7 @@ src/server/http.ts       HTTP + SSE transport, operator endpoint
 src/server/dashboard.html  the one-page operator UI
 src/sdk/                 GameClient (low + high level), TrustLedger
 demo/                    producer, fighter, rival, and the verifying harness
+sandbox/                 container image and launcher for isolated LLM agents
 test/                    integration tests (node:test)
 ```
 

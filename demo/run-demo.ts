@@ -22,7 +22,7 @@ rmSync(STATE, { recursive: true, force: true });
 mkdirSync(STATE, { recursive: true });
 
 const server = await startServer({ dbPath: `${STATE}/world.db`, port, speed, operatorToken: process.env.OPERATOR_TOKEN, log: () => {} });
-log(`world running at ${server.url} (speed ×${speed}) · dashboard ${server.url}/dashboard`);
+log(`world running at ${server.url} (speed ×${speed}) · dashboard ${server.operatorUrl}/dashboard`);
 log(`operator token (dashboard only, not a bot token): ${server.operatorToken}`);
 
 const facts: Facts = {};
@@ -104,7 +104,7 @@ try {
 
   // Honest trade -> tier 3 crafted in safe zones
   expect('honest essence trade settled', !!facts.essenceReceiptProducer?.counterpartyKeptWord);
-  const st = await (await fetch(`${server.url}/operator/state`, { headers: { authorization: `Bearer ${server.operatorToken}` } })).json();
+  const st = await (await fetch(`${server.operatorUrl}/operator/state`, { headers: { authorization: `Bearer ${server.operatorToken}` } })).json();
   const producerFrontier = st.events.some((e: GameEvent) => e.type === 'travel.arrive' && e.data.playerId === pid && e.data.to === 'frontier');
   const prod = await clients.Producer.observe();
   expect('producer crafted tier-3 gear without entering the frontier', prod.self.equipment.armor === 'wraithhide_armor' && !producerFrontier);
@@ -117,7 +117,7 @@ try {
   const lockFail = st.failures.find((f: any) => f.type === 'trade.lock');
   expect('trade.lock failure shows its real reason in the debug view', !!lockFail && lockFail.code === 'TRADE_STATE' && !/redacted/.test(lockFail.reason), lockFail?.reason);
   expect('dashboard shows the settled trades and the timeout separately', st.trades.settled.length >= 3 && st.trades.timeouts.length >= 1);
-  const botOnOperator = await fetch(`${server.url}/operator/state`, { headers: { authorization: `Bearer ${tokens.bot}` } });
+  const botOnOperator = await fetch(`${server.operatorUrl}/operator/state`, { headers: { authorization: `Bearer ${tokens.bot}` } });
   const opOnBot = await fetch(`${server.url}/api/command`, { method: 'POST', headers: { authorization: `Bearer ${server.operatorToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ commandId: 'x', type: 'observe', payload: {} }) });
   expect('bot token cannot open the dashboard; operator token cannot play', botOnOperator.status === 401 && opOnBot.status === 401);
   const fbs = st.feedback;
@@ -137,6 +137,6 @@ if (exitAfter) {
   await server.stop();
   process.exit(allOk ? 0 : 1);
 } else {
-  log(`server still running for the dashboard: ${server.url}/dashboard  (Ctrl+C to stop)`);
+  log(`server still running for the dashboard: ${server.operatorUrl}/dashboard  (Ctrl+C to stop)`);
   process.on('SIGINT', async () => { await server.stop(); process.exit(allOk ? 0 : 1); });
 }
