@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CATALOG, FOCUS, RECIPES, XP, effectiveLevel, levelFor } from '../src/shared/catalog.ts';
 import type { Player } from '../src/server/types.ts';
+import { SKILL_ODDS } from '../src/server/odds.ts';
 import { world } from './helpers.ts';
 
 type W = Awaited<ReturnType<typeof world>>;
@@ -97,7 +98,7 @@ test('focused gathering and crafting yield bonus output', async () => {
     const node = (await c.nearestNode('copper_ore'))!;
     await c.goTo(node.id);
     const g = await c.gather(node.id);
-    assert.equal(g.qty, 1 + FOCUS.maxBonusYield, 'a level-20 focused gatherer triples yield');
+    assert.equal(g.qty, 1 + SKILL_ODDS.maxBonusYield, 'a level-20 focused gatherer triples yield');
   } finally { await w.close(); }
 });
 

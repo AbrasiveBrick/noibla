@@ -125,7 +125,7 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
     lastSeenAt: p.lastSeenAt,
     silver: { carried: p.inventory.silver ?? 0, banked: p.bank.silver ?? 0 },
     failureRate: rateOf(p.id),
-    gear: gearView(p),
+    gear: gearView(p, true),
     skillLevels: Object.fromEntries(SKILLS.map((s) => [s, levelFor(p.skills[s] ?? 0)])) as Record<SkillId, number>,
     focus: [...(p.focus ?? [])],
     quests: Object.entries(p.quests).filter(([, q]) => q.status !== 'claimed').map(([questId, q]) => ({ questId, name: QUESTS[questId]?.name ?? questId, status: q.status, progress: Math.min(q.progress, QUESTS[questId]?.objective.count ?? q.progress), goal: QUESTS[questId]?.objective.count ?? 0 })),

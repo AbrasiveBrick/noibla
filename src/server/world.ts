@@ -3,12 +3,13 @@
 
 import { randomBytes } from 'node:crypto';
 import {
-  ABILITIES, BASE_HP, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
+  ABILITIES, AFFIXES, BASE_HP, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
   effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
-import type { UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
+import type { AffixRoll, UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
 import { MAP_RULES, dist, findPath, inBounds, nearestWalkable, pathLength, placeOf, pointAlong, regionAt, walkable, type PlaceId, type Pos } from '../shared/map.ts';
 import type { Game } from './game.ts';
+import { MOB_LOOT, SKILL_ODDS } from './odds.ts';
 import type { CommandDef, Mob, Player, Walk } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
 
@@ -25,10 +26,21 @@ export function affixSum(p: Player, slots: Slot[], affixId: string): number {
   for (const slot of slots) {
     const id = p.equipment[slot];
     const u = id ? REGISTRY.get(id) : undefined;
-    if (u) for (const a of u.affixes) if (a.id === affixId) n += a.value;
+    if (u) for (const a of u.affixes) if (a.id === affixId) n += a.value ?? 0;
   }
   return n;
 }
+/** Player-facing copy of an affix roll: chance-based affixes hide their value. */
+export function publicAffix(a: AffixRoll): AffixRoll {
+  return AFFIXES[a.id]?.hiddenValue ? { id: a.id, tier: a.tier } : { ...a };
+}
+export function publicUnique(u: UniqueItem): UniqueItem { return { ...u, affixes: u.affixes.map(publicAffix) }; }
+/** Readable affix line. A value whose text has no `{v}` (chance affixes, operator view only) is appended. */
+export function affixLine(a: AffixRoll): string {
+  const extra = a.value !== undefined && !AFFIXES[a.id]?.text.includes('{v}') ? ` (${a.value})` : '';
+  return `T${a.tier} ${affixText(a.id, a.value)}${extra}`;
+}
+
 const COMBAT_SLOTS: Slot[] = ['weapon', 'armor'];
 const pct = (v: number) => Math.min(0.9, v / 100);
 
@@ -61,7 +73,8 @@ export function repairCost(item: string, wear: number): number {
   return Math.ceil(((WEAR.repairCostByTier[itemDef(item)?.tier ?? 0] ?? 0) * mult * wear) / WEAR.max);
 }
 
-export function gearView(p: Player): Partial<Record<Slot, GearWearView>> {
+/** Equipped gear. `reveal` (operator only) shows chance-based affix values too. */
+export function gearView(p: Player, reveal = false): Partial<Record<Slot, GearWearView>> {
   const out: Partial<Record<Slot, GearWearView>> = {};
   for (const slot of SLOTS) {
     const item = p.equipment[slot];
@@ -69,7 +82,7 @@ export function gearView(p: Player): Partial<Record<Slot, GearWearView>> {
     const wear = wearOf(p, item);
     const u = REGISTRY.get(item);
     out[slot] = { item, wear: Math.round(wear * 100) / 100, broken: wear >= WEAR.max, repairCost: repairCost(item, wear),
-      ...(u ? { ilvl: u.ilvl, rarity: u.rarity, corrupted: u.corrupted, affixes: u.affixes.map((x) => `T${x.tier} ${affixText(x.id, x.value)}`) } : {}) };
+      ...(u ? { ilvl: u.ilvl, rarity: u.rarity, corrupted: u.corrupted, affixes: u.affixes.map((x) => affixLine(reveal ? x : publicAffix(x))) } : {}) };
   }
   return out;
 }
@@ -385,7 +398,7 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   const now = g.now();
   if (node!.charges <= 0) fail('DEPLETED', `${def.name} is depleted`, node!.nextChargeAt - now);
   const level = skillLevel(p, def.skill);
-  let qty = 1 + rollBonus(g, Math.min(FOCUS.maxBonusYield, FOCUS.bonusYieldPerLevel * level) + affixSum(p, ['tool'], 'yield') / 100);
+  let qty = 1 + rollBonus(g, Math.min(SKILL_ODDS.maxBonusYield, SKILL_ODDS.bonusYieldPerLevel * level) + affixSum(p, ['tool'], 'yield') / 100);
   const doubleDrop = affixSum(p, ['tool'], 'double_drop');
   if (doubleDrop > 0 && g.rng() < doubleDrop / 100) qty *= 2;
   if (node!.charges === def.maxCharges) node!.nextChargeAt = now + g.ms(TIMING.nodeRegenMs);
@@ -452,7 +465,7 @@ function makeItem(kind: 'refine' | 'craft') {
     removeItems(p.inventory, r!.inputs, count);
     let bonus = 0;
     const toolOutput = kind === 'refine' ? affixSum(p, ['tool'], 'refine_output') / 100 : 0;
-    const chance = (focused ? Math.min(FOCUS.maxBonusOutput, FOCUS.bonusOutputPerLevel * level) : 0) + toolOutput;
+    const chance = (focused ? Math.min(SKILL_ODDS.maxBonusOutput, SKILL_ODDS.bonusOutputPerLevel * level) : 0) + toolOutput;
     if (chance > 0) for (let i = 0; i < count; i++) if (g.rng() < chance) bonus++;
     // Refining tools with save_inputs: each unit may hand its inputs back.
     let saved = 0;
@@ -472,7 +485,7 @@ function makeItem(kind: 'refine' | 'craft') {
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
     g.markPlayer(p);
-    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * (count - saved) })).filter((s) => s.qty > 0), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(saved ? { inputsSaved: saved } : {}), ...(made ? { items: made } : {}) };
+    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * (count - saved) })).filter((s) => s.qty > 0), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(saved ? { inputsSaved: saved } : {}), ...(made ? { items: made.map(publicUnique) } : {}) };
   };
 }
 
@@ -526,7 +539,7 @@ function bestUnique(g: Game, bag: Record<string, number>, base: string): string 
 /** Every unique the player owns (carried, equipped, banked), for observation. */
 function uniquesOf(g: Game, p: Player): UniqueItem[] {
   const ids = new Set<string>([...Object.keys(p.inventory), ...Object.keys(p.bank), ...Object.values(p.equipment).filter((x): x is string => !!x)]);
-  return [...ids].filter(isUnique).sort().map((id) => g.uniques.get(id)).filter((u): u is UniqueItem => !!u);
+  return [...ids].filter(isUnique).sort().map((id) => g.uniques.get(id)).filter((u): u is UniqueItem => !!u).map(publicUnique);
 }
 
 /** Public details of any unique item: anyone can inspect an id they were offered. */
@@ -534,7 +547,7 @@ function inspect(g: Game, _p: Player, payload: Record<string, any>) {
   const id = reqStr(payload, 'item', 60);
   const u = g.uniques.get(id);
   if (!u) fail('NOT_FOUND', `no unique item ${id}`, undefined, 'unique ids look like iron_sword#3f9a1c2b; see observe().self.uniques');
-  return { item: u! };
+  return { item: publicUnique(u!) };
 }
 
 function unequip(g: Game, p: Player, payload: Record<string, any>) {
@@ -674,13 +687,13 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
       killed = true;
       loot = rollLoot(g, mob.type, p);
       addItems(p.inventory, loot);
-      if (mdef.drops.some((d) => d.skin)) {
+      if (MOB_LOOT[mob.type].drops.some((d) => d.skin)) {
         if (equippedToolTier(p, 'skinning') >= requiredToolTier(mdef.tier)) {
           addWear(g, p, 'tool', WEAR.perToolUse);
           if (findShard(g, p)) loot = toStacks(Object.fromEntries([...loot, { item: 'orb_shard', qty: 1 }].reduce((m, s) => m.set(s.item, (m.get(s.item) ?? 0) + s.qty), new Map<string, number>())));
           const dd = affixSum(p, ['tool'], 'double_drop');
           if (dd > 0 && g.rng() < dd / 100) {
-            const extra = loot.filter((s) => mdef.drops.some((d) => d.skin && d.item === s.item));
+            const extra = loot.filter((s) => MOB_LOOT[mob.type].drops.some((d) => d.skin && d.item === s.item));
             addItems(p.inventory, extra);
             loot = toStacks(Object.fromEntries([...loot, ...extra].reduce((m, s) => m.set(s.item, (m.get(s.item) ?? 0) + s.qty), new Map<string, number>())));
           }
@@ -715,7 +728,7 @@ function silverIn(stacks: ItemStack[]): number {
 }
 
 function rollLoot(g: Game, mobType: string, p: Player): ItemStack[] {
-  const def = MOB_TYPES[mobType];
+  const def = { ...MOB_TYPES[mobType], ...MOB_LOOT[mobType] };
   const canSkin = equippedToolTier(p, 'skinning') >= requiredToolTier(def.tier);
   const out: Record<string, number> = {};
   const [lo, hi] = def.silver;

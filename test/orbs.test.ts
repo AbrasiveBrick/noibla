@@ -99,7 +99,7 @@ test('vaal: better, bricked or unchanged, then locked; luck from hammer and ench
     setRng(w, makeRng(3));
     await c2.modifyItem(u2.id, 'transmute');
     const q = await c2.quoteModify(u2.id, 'vaal');
-    assert.equal(q.luck, ORBS.maxLuck);
+    assert.equal('luck' in q, false, 'odds stay server-side');
     assert.equal(q.feeCut, ORBS.maxFeeCut);
     assert.ok(q.fee < ORBS.baseFee.vaal);
     setRng(w, () => 0.2); // bricked band shrinks to 0.125 at max luck; 0.2 now lands in "better"

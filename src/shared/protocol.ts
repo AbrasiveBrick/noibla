@@ -85,7 +85,8 @@ export interface OtherPlayerView extends Located { id: string; name: string; reg
 export interface LootBagView extends Located { id: string; region: ZoneId; ownerId: string; ownerName: string; items: ItemStack[]; expiresInMs: number }
 export type Rarity = 'normal' | 'magic' | 'rare';
 /** One rolled modifier on a unique item (see catalog().affixes). */
-export interface AffixRoll { id: string; tier: number; value: number }
+/** `value` is omitted for chance-based affixes (catalog `hiddenValue`): odds are never shown to players. */
+export interface AffixRoll { id: string; tier: number; value?: number }
 /**
  * A crafted gear instance. Its `id` (`<base>#<hex>`) is used wherever an item id goes: inventory, bank, equip, trades, loot.
  * Passing the plain base id (`iron_sword`) to those commands picks one of your uniques of that base.
@@ -112,7 +113,6 @@ export interface ItemModifyResult {
   outcome: string;
   fee: number;
   feeCut: number;
-  luck: number;
   before: { rarity: Rarity; affixes: AffixRoll[] };
   xp: number;
 }
@@ -273,8 +273,8 @@ export interface Commands {
   'item.modify': { payload: { item: string; orb: string }; result: ItemModifyResult };
   /** Destroy a carried (not equipped) unique for orb shards (town altar). */
   'item.salvage': { payload: { item: string }; result: { salvaged: string; shards: number; inventoryShards: number } };
-  /** What item.modify would cost you now: fee, fee cut, luck, max affix tier. */
-  'item.quote': { payload: { item: string; orb: string }; result: { item: string; orb: string; fee: number; feeCut: number; luck: number; mods: number; corrupted: boolean; maxAffixTier: number } };
+  /** What item.modify would cost you now: fee, fee cut, max affix tier. */
+  'item.quote': { payload: { item: string; orb: string }; result: { item: string; orb: string; fee: number; feeCut: number; mods: number; corrupted: boolean; maxAffixTier: number } };
   equip: { payload: { item: string }; result: { equipment: Partial<Record<Slot, string>> } };
   unequip: { payload: { slot: Slot }; result: { equipment: Partial<Record<Slot, string>> } };
   attack: { payload: { targetId: string; ability?: AbilityId }; result: AttackResult };
