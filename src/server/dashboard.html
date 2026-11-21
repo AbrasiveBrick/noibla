@@ -50,6 +50,8 @@
   .filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
   select, input[type=password], button { font: inherit; font-size: 13px; color: var(--ink); background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
   button { cursor: pointer; }
+  .types { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; flex-basis: 100%; }
+  button.link { background: none; border: none; padding: 0; color: var(--accent); font-size: 12px; }
   label.chk { font-size: 12px; color: var(--muted); display: inline-flex; gap: 5px; align-items: center; text-transform: none; letter-spacing: 0; font-weight: 400; }
   #feed { max-height: 640px; overflow-y: auto; padding: 4px 0; }
   .ev { display: grid; grid-template-columns: 64px 74px minmax(0, 1fr); gap: 8px; padding: 5px 14px; font-size: 13px; border-bottom: 1px solid var(--soft); }
@@ -145,26 +147,26 @@
       <div class="filters">
         <select id="fBot" aria-label="Filter by bot"><option value="">All bots</option></select>
         <select id="fZone" aria-label="Filter by zone"><option value="">All zones</option></select>
-        <select id="fType" aria-label="Filter by event type">
-          <option value="">All events</option>
-          <option value="travel">Travel</option>
-          <option value="gathering">Gathering</option>
-          <option value="crafting">Refining &amp; crafting</option>
-          <option value="combat">Combat</option>
-          <option value="deaths">Deaths</option>
-          <option value="looting">Looting</option>
-          <option value="forum">Trade posts</option>
-          <option value="chat">Zone chat</option>
-          <option value="trade">Trades</option>
-          <option value="bank">Bank &amp; quests</option>
-          <option value="dm">Private messages</option>
-          <option value="system">Presence</option>
-        </select>
         <select id="fRoutine" aria-label="Routine events">
           <option value="rollup">Routine: rolled up per bot</option>
           <option value="each">Routine: every event (incl. hits)</option>
           <option value="hide">Routine: hidden</option>
         </select>
+        <div id="fType" class="types" role="group" aria-label="Filter by event type">
+          <label class="chk"><input type="checkbox" value="travel"> Travel</label>
+          <label class="chk"><input type="checkbox" value="gathering"> Gathering</label>
+          <label class="chk"><input type="checkbox" value="crafting"> Refining &amp; crafting</label>
+          <label class="chk"><input type="checkbox" value="combat"> Combat</label>
+          <label class="chk"><input type="checkbox" value="deaths"> Deaths</label>
+          <label class="chk"><input type="checkbox" value="looting"> Looting</label>
+          <label class="chk"><input type="checkbox" value="forum"> Trade posts</label>
+          <label class="chk"><input type="checkbox" value="chat"> Zone chat</label>
+          <label class="chk"><input type="checkbox" value="trade"> Trades</label>
+          <label class="chk"><input type="checkbox" value="bank"> Bank &amp; quests</label>
+          <label class="chk"><input type="checkbox" value="dm"> Private messages</label>
+          <label class="chk"><input type="checkbox" value="system"> Presence</label>
+          <button type="button" id="fTypeAll" class="link">All events</button>
+        </div>
       </div>
       <div class="note" id="feedVolume" style="padding-top:8px"></div>
       <div id="feed"></div>
@@ -547,7 +549,8 @@
   }
 
   function renderFeed() {
-    const bot = $('fBot').value, zone = $('fZone').value, type = $('fType').value, mode = $('fRoutine').value;
+    const bot = $('fBot').value, zone = $('fZone').value, mode = $('fRoutine').value;
+    const types = new Set([...$('fType').querySelectorAll('input:checked')].map((i) => i.value));
     const rows = [];          // { ev } or { group: { key, owner, name, evs } }
     const open = new Map();   // owner -> group still accepting older events
     const volume = {};
@@ -559,7 +562,7 @@
       volume[ev.type] = (volume[ev.type] || 0) + 1;
       if (rows.length >= 400) continue;
       if (cat === 'debug') continue;
-      if (type) { if (cat === type) rows.push({ ev }); continue; }
+      if (types.size) { if (types.has(cat)) rows.push({ ev }); continue; }
       if (ROUTINE.has(ev.type)) {
         if (mode === 'hide') continue;
         if (mode === 'each') { rows.push({ ev }); continue; }
@@ -603,6 +606,7 @@
   }, true);
   for (const id of ['fBot', 'fZone', 'fType', 'fRoutine']) $(id).addEventListener('change', renderFeed);
   $('fTransient').addEventListener('change', render);
+  $('fTypeAll').addEventListener('click', () => { for (const i of $('fType').querySelectorAll('input')) i.checked = false; renderFeed(); });
   $('world').addEventListener('click', (e) => {
     const row = e.target.closest('tr.bot');
     if (!row) return;
