@@ -39,9 +39,9 @@ export async function runRival(c: GameClient, facts: Facts) {
   await c.waitFor(async () => {
     const o = await c.observe();
     const f = o.zone?.players.find((p) => p.id === fighter.playerId);
-    return f && (f.inCombat || f.hpPct < 100) ? f : null;
-  }, { timeoutMs: 240_000, intervalMs: 60, what: 'the fighter to engage a wraith' });
-  say(`${fighter.name} is fighting a wraith — attacking (open PvP zone)`);
+    return f ?? null;
+  }, { timeoutMs: 240_000, intervalMs: 30, what: 'the fighter to enter the frontier' });
+  say(`${fighter.name} just arrived, alone and mining — attacking before any wraith can (open PvP zone)`);
   const outcome = await c.fight(fighter.playerId, { timeoutMs: 60_000 });
   say(`fight over: ${outcome.result} after ${outcome.hits} hits`);
 

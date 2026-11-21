@@ -90,6 +90,7 @@ try {
 
   // Frontier death, banking, looting
   expect('fighter died in the frontier and dropped gear + ore', facts.fighterDeath?.zone === 'frontier' && ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.fighterDeath!.dropped.some((s) => s.item === i)), fmt(facts.fighterDeath?.dropped ?? []));
+  expect('the rival, not a wraith, landed the killing blow', facts.fighterDeath?.killer === 'Rival', String(facts.fighterDeath?.killer));
   expect('fighter\'s banked spare and skills survived death', !!facts.fighterBankAfterDeath?.some((s) => s.item === 'iron_sword') && !!facts.fighterSkillsKept);
   expect('rival looted the fighter\'s gear and duskiron ore', ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.rivalLoot?.some((s) => s.item === i)));
 
