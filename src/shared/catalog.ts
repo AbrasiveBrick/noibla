@@ -1,0 +1,251 @@
+// Static game data shared by the server and the SDK.
+// Everything here is public knowledge: bots can fetch it with the `catalog` command.
+
+export type ZoneId = 'town' | 'wilds' | 'frontier';
+export type Safety = 'safe' | 'safe-wild' | 'lethal';
+export type StationId = 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench';
+export type Slot = 'weapon' | 'armor';
+export type ItemKind = 'currency' | 'resource' | 'material' | 'tool' | 'weapon' | 'armor';
+export type SkillId =
+  | 'mining' | 'woodcutting'
+  | 'smelting' | 'woodworking' | 'tanning'
+  | 'toolcraft' | 'weaponcraft' | 'armorcraft'
+  | 'swords' | 'unarmed';
+export type AbilityId = 'punch' | 'slash' | 'heavy_strike' | 'evade' | 'brace';
+
+export interface ItemStack { item: string; qty: number }
+
+export interface ItemDef {
+  id: string;
+  name: string;
+  kind: ItemKind;
+  tier: number;
+  /** Only obtainable in the lethal frontier (gathered or dropped there). */
+  frontierExclusive?: boolean;
+  slot?: Slot;
+  /** Weapons: base damage of weapon abilities. */
+  power?: number;
+  /** Armor: fraction of incoming damage removed. */
+  defense?: number;
+  /** Armor: extra max HP. */
+  hpBonus?: number;
+  /** Tools: gathering tier. A node of tier T needs a tool of tier >= T-1 (bare hands are tier 0). */
+  toolTier?: number;
+  toolFor?: SkillId;
+  /** Abilities granted while equipped. */
+  abilities?: AbilityId[];
+  weaponSkill?: SkillId;
+  description: string;
+}
+
+export const ITEMS: Record<string, ItemDef> = {
+  silver: { id: 'silver', name: 'Silver', kind: 'currency', tier: 0, description: 'Currency. Dropped by mobs and paid by quests.' },
+  // Raw resources
+  copper_ore: { id: 'copper_ore', name: 'Copper Ore', kind: 'resource', tier: 1, description: 'Mined from copper veins in the wilds.' },
+  iron_ore: { id: 'iron_ore', name: 'Iron Ore', kind: 'resource', tier: 2, description: 'Mined from iron veins in the wilds. Needs a T1+ pickaxe.' },
+  pine_log: { id: 'pine_log', name: 'Pine Log', kind: 'resource', tier: 1, description: 'Cut from pine groves in the wilds.' },
+  rough_hide: { id: 'rough_hide', name: 'Rough Hide', kind: 'resource', tier: 1, description: 'Dropped by wolves and boars in the wilds.' },
+  duskiron_ore: { id: 'duskiron_ore', name: 'Duskiron Ore', kind: 'resource', tier: 3, frontierExclusive: true, description: 'Frontier exclusive. Mined from duskiron veins. Needs a T2 pickaxe.' },
+  wraith_essence: { id: 'wraith_essence', name: 'Wraith Essence', kind: 'resource', tier: 3, frontierExclusive: true, description: 'Frontier exclusive. Dropped by wraiths.' },
+  // Refined materials
+  copper_bar: { id: 'copper_bar', name: 'Copper Bar', kind: 'material', tier: 1, description: 'Smelted copper.' },
+  iron_bar: { id: 'iron_bar', name: 'Iron Bar', kind: 'material', tier: 2, description: 'Smelted iron.' },
+  duskiron_bar: { id: 'duskiron_bar', name: 'Duskiron Bar', kind: 'material', tier: 3, description: 'Smelted from frontier duskiron ore.' },
+  pine_plank: { id: 'pine_plank', name: 'Pine Plank', kind: 'material', tier: 1, description: 'Sawn pine.' },
+  leather: { id: 'leather', name: 'Leather', kind: 'material', tier: 1, description: 'Tanned hide.' },
+  // Tools (carried in inventory; the best one is used automatically)
+  copper_pickaxe: { id: 'copper_pickaxe', name: 'Copper Pickaxe', kind: 'tool', tier: 1, toolTier: 1, toolFor: 'mining', description: 'Mines up to tier 2 veins.' },
+  iron_pickaxe: { id: 'iron_pickaxe', name: 'Iron Pickaxe', kind: 'tool', tier: 2, toolTier: 2, toolFor: 'mining', description: 'Mines up to tier 3 veins (duskiron).' },
+  // Weapons
+  copper_sword: { id: 'copper_sword', name: 'Copper Sword', kind: 'weapon', tier: 1, slot: 'weapon', power: 8, weaponSkill: 'swords', abilities: ['slash', 'heavy_strike'], description: 'Starter sword.' },
+  iron_sword: { id: 'iron_sword', name: 'Iron Sword', kind: 'weapon', tier: 2, slot: 'weapon', power: 12, weaponSkill: 'swords', abilities: ['slash', 'heavy_strike'], description: 'Solid sword.' },
+  duskiron_sword: { id: 'duskiron_sword', name: 'Duskiron Sword', kind: 'weapon', tier: 3, slot: 'weapon', power: 20, weaponSkill: 'swords', abilities: ['slash', 'heavy_strike'], description: 'Tier 3 blade forged from frontier duskiron.' },
+  // Armor
+  leather_jerkin: { id: 'leather_jerkin', name: 'Leather Jerkin', kind: 'armor', tier: 1, slot: 'armor', defense: 0.08, hpBonus: 20, abilities: ['evade'], description: 'Light armor. Grants Evade.' },
+  iron_mail: { id: 'iron_mail', name: 'Iron Mail', kind: 'armor', tier: 2, slot: 'armor', defense: 0.15, hpBonus: 40, abilities: ['brace'], description: 'Medium armor. Grants Brace.' },
+  wraithhide_armor: { id: 'wraithhide_armor', name: 'Wraithhide Armor', kind: 'armor', tier: 3, slot: 'armor', defense: 0.25, hpBonus: 70, abilities: ['evade', 'brace'], description: 'Tier 3 armor woven with wraith essence. Grants Evade and Brace.' },
+};
+
+export interface AbilityDef {
+  id: AbilityId;
+  name: string;
+  kind: 'attack' | 'buff';
+  /** Attack: damage = weapon power * powerMult (or flatDamage when unarmed). */
+  powerMult?: number;
+  flatDamage?: number;
+  cooldownMs: number;
+  /** Buff duration. */
+  durationMs?: number;
+  description: string;
+}
+
+export const ABILITIES: Record<AbilityId, AbilityDef> = {
+  punch: { id: 'punch', name: 'Punch', kind: 'attack', flatDamage: 4, cooldownMs: 0, description: 'Always available when no weapon is equipped.' },
+  slash: { id: 'slash', name: 'Slash', kind: 'attack', powerMult: 1, cooldownMs: 0, description: 'Basic weapon attack.' },
+  heavy_strike: { id: 'heavy_strike', name: 'Heavy Strike', kind: 'attack', powerMult: 2, cooldownMs: 4000, description: 'Double damage, 4s cooldown.' },
+  evade: { id: 'evade', name: 'Evade', kind: 'buff', durationMs: 3000, cooldownMs: 10000, description: 'Dodge the next hit within 3s.' },
+  brace: { id: 'brace', name: 'Brace', kind: 'buff', durationMs: 4000, cooldownMs: 12000, description: 'Halve incoming damage for 4s.' },
+};
+
+export interface RecipeDef {
+  id: string;
+  kind: 'refine' | 'craft';
+  station: StationId;
+  skill: SkillId;
+  tier: number;
+  /** Minimum level in `skill`. */
+  minLevel: number;
+  inputs: ItemStack[];
+  output: ItemStack;
+}
+
+const recipe = (r: RecipeDef): RecipeDef => r;
+
+export const RECIPES: Record<string, RecipeDef> = {
+  // Refining
+  copper_bar: recipe({ id: 'copper_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 1, minLevel: 0, inputs: [{ item: 'copper_ore', qty: 2 }], output: { item: 'copper_bar', qty: 1 } }),
+  iron_bar: recipe({ id: 'iron_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 2, minLevel: 1, inputs: [{ item: 'iron_ore', qty: 2 }], output: { item: 'iron_bar', qty: 1 } }),
+  duskiron_bar: recipe({ id: 'duskiron_bar', kind: 'refine', station: 'smelter', skill: 'smelting', tier: 3, minLevel: 2, inputs: [{ item: 'duskiron_ore', qty: 2 }, { item: 'iron_bar', qty: 1 }], output: { item: 'duskiron_bar', qty: 1 } }),
+  pine_plank: recipe({ id: 'pine_plank', kind: 'refine', station: 'sawmill', skill: 'woodworking', tier: 1, minLevel: 0, inputs: [{ item: 'pine_log', qty: 2 }], output: { item: 'pine_plank', qty: 1 } }),
+  leather: recipe({ id: 'leather', kind: 'refine', station: 'tannery', skill: 'tanning', tier: 1, minLevel: 0, inputs: [{ item: 'rough_hide', qty: 2 }], output: { item: 'leather', qty: 1 } }),
+  // Tools
+  copper_pickaxe: recipe({ id: 'copper_pickaxe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_pickaxe', qty: 1 } }),
+  iron_pickaxe: recipe({ id: 'iron_pickaxe', kind: 'craft', station: 'forge', skill: 'toolcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_pickaxe', qty: 1 } }),
+  // Weapons
+  copper_sword: recipe({ id: 'copper_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 1, minLevel: 0, inputs: [{ item: 'copper_bar', qty: 3 }, { item: 'pine_plank', qty: 1 }], output: { item: 'copper_sword', qty: 1 } }),
+  iron_sword: recipe({ id: 'iron_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'iron_sword', qty: 1 } }),
+  duskiron_sword: recipe({ id: 'duskiron_sword', kind: 'craft', station: 'forge', skill: 'weaponcraft', tier: 3, minLevel: 2, inputs: [{ item: 'duskiron_bar', qty: 2 }, { item: 'pine_plank', qty: 1 }], output: { item: 'duskiron_sword', qty: 1 } }),
+  // Armor
+  leather_jerkin: recipe({ id: 'leather_jerkin', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 1, minLevel: 0, inputs: [{ item: 'leather', qty: 3 }], output: { item: 'leather_jerkin', qty: 1 } }),
+  iron_mail: recipe({ id: 'iron_mail', kind: 'craft', station: 'forge', skill: 'armorcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'leather', qty: 2 }], output: { item: 'iron_mail', qty: 1 } }),
+  wraithhide_armor: recipe({ id: 'wraithhide_armor', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 3, minLevel: 2, inputs: [{ item: 'wraith_essence', qty: 2 }, { item: 'leather', qty: 3 }, { item: 'iron_bar', qty: 1 }], output: { item: 'wraithhide_armor', qty: 1 } }),
+};
+
+export interface NodeDef { id: string; name: string; item: string; tier: number; skill: SkillId; maxCharges: number }
+export const NODE_TYPES: Record<string, NodeDef> = {
+  copper_vein: { id: 'copper_vein', name: 'Copper Vein', item: 'copper_ore', tier: 1, skill: 'mining', maxCharges: 10 },
+  iron_vein: { id: 'iron_vein', name: 'Iron Vein', item: 'iron_ore', tier: 2, skill: 'mining', maxCharges: 10 },
+  pine_grove: { id: 'pine_grove', name: 'Pine Grove', item: 'pine_log', tier: 1, skill: 'woodcutting', maxCharges: 10 },
+  duskiron_vein: { id: 'duskiron_vein', name: 'Duskiron Vein', item: 'duskiron_ore', tier: 3, skill: 'mining', maxCharges: 6 },
+};
+
+export interface DropDef { item: string; min: number; max: number; chance: number }
+export interface MobDef { id: string; name: string; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number }
+export const MOB_TYPES: Record<string, MobDef> = {
+  wolf: { id: 'wolf', name: 'Wolf', hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1 }], respawnMs: 6000 },
+  boar: { id: 'boar', name: 'Boar', hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1 }], respawnMs: 6000 },
+  wraith: { id: 'wraith', name: 'Wraith', hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }], respawnMs: 8000 },
+};
+
+export interface ZoneDef {
+  id: ZoneId;
+  name: string;
+  safety: Safety;
+  description: string;
+  adjacent: ZoneId[];
+  stations: StationId[];
+  hasBank: boolean;
+  hasForum: boolean;
+  hasQuestBoard: boolean;
+  pvp: boolean;
+  /** Death drops carried + equipped items into a loot bag. */
+  fullLoot: boolean;
+  nodes: { type: string; count: number }[];
+  mobs: { type: string; count: number }[];
+}
+
+export const ZONES: Record<ZoneId, ZoneDef> = {
+  town: {
+    id: 'town', name: 'Brightwater (Town)', safety: 'safe', description: 'No combat. Bank, crafting stations, quest board, trade forum.',
+    adjacent: ['wilds'], stations: ['smelter', 'sawmill', 'tannery', 'forge', 'workbench'], hasBank: true, hasForum: true, hasQuestBoard: true,
+    pvp: false, fullLoot: false, nodes: [], mobs: [],
+  },
+  wilds: {
+    id: 'wilds', name: 'Greenreach (Safe Wilderness)', safety: 'safe-wild', description: 'Basic resources and PvE. Dying here keeps your gear and inventory.',
+    adjacent: ['town', 'frontier'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
+    pvp: false, fullLoot: false,
+    nodes: [{ type: 'copper_vein', count: 2 }, { type: 'iron_vein', count: 3 }, { type: 'pine_grove', count: 2 }],
+    mobs: [{ type: 'wolf', count: 3 }, { type: 'boar', count: 3 }],
+  },
+  frontier: {
+    id: 'frontier', name: 'The Ashen Frontier (Lethal)', safety: 'lethal', description: 'Open PvP. Exclusive duskiron and wraith essence. Death drops everything you carry and wear.',
+    adjacent: ['wilds'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
+    pvp: true, fullLoot: true,
+    nodes: [{ type: 'duskiron_vein', count: 2 }],
+    mobs: [{ type: 'wraith', count: 3 }],
+  },
+};
+
+export interface QuestDef {
+  id: string;
+  name: string;
+  description: string;
+  objective: { kind: 'kill' | 'gather' | 'craft'; target: string; count: number };
+  reward: ItemStack[];
+}
+
+export const QUESTS: Record<string, QuestDef> = {
+  wolf_cull: { id: 'wolf_cull', name: 'Wolf Cull', description: 'Kill 3 wolves in the wilds.', objective: { kind: 'kill', target: 'wolf', count: 3 }, reward: [{ item: 'silver', qty: 30 }] },
+  ore_run: { id: 'ore_run', name: 'Ore Run', description: 'Mine 6 copper ore.', objective: { kind: 'gather', target: 'copper_ore', count: 6 }, reward: [{ item: 'silver', qty: 15 }] },
+  apprentice_smith: { id: 'apprentice_smith', name: 'Apprentice Smith', description: 'Craft a copper sword.', objective: { kind: 'craft', target: 'copper_sword', count: 1 }, reward: [{ item: 'silver', qty: 20 }] },
+  frontier_hunt: { id: 'frontier_hunt', name: 'Frontier Hunt', description: 'Kill a wraith in the frontier.', objective: { kind: 'kill', target: 'wraith', count: 1 }, reward: [{ item: 'silver', qty: 60 }] },
+};
+
+export const SKILLS: SkillId[] = ['mining', 'woodcutting', 'smelting', 'woodworking', 'tanning', 'toolcraft', 'weaponcraft', 'armorcraft', 'swords', 'unarmed'];
+
+/** Base durations in milliseconds at world speed 1. The server divides them by its speed factor. */
+export const TIMING = {
+  travelMs: 3000,
+  gatherMs: 1500,
+  refineMs: 1200,
+  craftMs: 2000,
+  globalCooldownMs: 1000,
+  /** No travel within this long after dealing or taking damage. */
+  combatLockMs: 5000,
+  outOfCombatMs: 4000,
+  regenIntervalMs: 1000,
+  regenFraction: 0.04,
+  nodeRegenMs: 6000,
+  lootBagTtlMs: 15 * 60_000,
+  respawnBusyMs: 1000,
+};
+
+export const BASE_HP = 100;
+export const STARTING_SILVER = 20;
+export const MAX_CRAFT_BATCH = 10;
+
+/** Skill level from XP. No global level exists; each skill grows independently through use. */
+export function levelFor(xp: number): number {
+  return Math.floor(Math.sqrt(Math.max(0, xp) / 10));
+}
+
+export const XP = {
+  gather: (tier: number) => 5 * tier * tier,
+  refine: (tier: number) => 4 * tier * tier,
+  craft: (tier: number) => 10 * tier * tier,
+};
+
+export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
+  if (from === to) return [];
+  const prev = new Map<ZoneId, ZoneId>();
+  const queue: ZoneId[] = [from];
+  const seen = new Set<ZoneId>([from]);
+  while (queue.length) {
+    const z = queue.shift()!;
+    for (const n of ZONES[z].adjacent) {
+      if (seen.has(n)) continue;
+      seen.add(n);
+      prev.set(n, z);
+      if (n === to) {
+        const path: ZoneId[] = [to];
+        let cur = to;
+        while (prev.get(cur) !== from) { cur = prev.get(cur)!; path.unshift(cur); }
+        return path;
+      }
+      queue.push(n);
+    }
+  }
+  return [];
+}
+
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING };
