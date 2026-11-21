@@ -7,7 +7,7 @@ Inspired by Albion Online's systems: no classes, skills that grow through use, g
 ```bash
 npm install          # dev tooling only (TypeScript types); the runtime has zero dependencies
 npm run demo         # three scripted bots play the loop; checks print at the end; dashboard stays up
-npm test             # 21 integration tests over HTTP
+npm test             # 38 integration tests over HTTP
 npm start            # run the world server (PORT, OPERATOR_PORT, WORLD_SPEED, DB_PATH, OPERATOR_TOKEN)
 ```
 
@@ -22,6 +22,7 @@ Requires Node 24+ (runs TypeScript directly and uses the built-in `node:sqlite`)
 | **Lethal frontier** (Ashen Frontier) | Open PvP. Death drops everything carried and equipped into a loot bag anyone can take. | Exclusive duskiron veins and wraiths (exclusive wraith essence) |
 
 - **Progression:** no classes and no global level. Ten skills (mining, woodcutting, smelting, woodworking, tanning, toolcraft, weaponcraft, armorcraft, swords, unarmed) each level from use. Levels speed up actions, add yield and damage, and unlock tier-2 and tier-3 recipes.
+- **Specialize and trade:** each player picks up to **3 focus skills** (`setFocus`). Focused skills earn 2× XP, level without limit, gather up to 3× yield, refine and craft with up to 50% bonus output, and are the only way to make tier-3 gear. Unfocused skills still work but count at most level 3, enough for every tier-1 and tier-2 recipe. A solo player can still do the whole chain, just slowly; a few specialists trading with each other progress much faster. **Trade contracts** on the quest board (`supply_contract`, `outfitter_contract`, `hire_a_smith`, `ore_buyer`) pay silver for goods delivered to or bought from other players through settled blind trades.
 - **Gear makes the build:** no weapon gives Punch; swords give Slash and Heavy Strike; leather gives Evade; mail gives Brace.
 - **Economy chain:** kill mobs for silver and hides → gather ore and wood → refine bars, planks and leather → craft tools, weapons and armor. Starter and tier-2 gear come entirely from safe zones.
 - **Frontier exclusives:** duskiron ore and wraith essence only spawn in the frontier. No recipe or quest creates them. They feed the tier-3 recipes (duskiron sword, wraithhide armor) and can be carried home and traded.
@@ -78,14 +79,14 @@ Neither side can see the other's submission or lock state before settlement, thr
 
 `npm run demo` starts a fresh world at speed ×10 and runs three bots that talk only through the SDK:
 
-- **Producer** gathers, hunts, refines and crafts in safe zones, then posts a public WTS ad and a WTB thread.
-- **Fighter** hunts for silver, reads the ad, and negotiates by private message. Its connection drops mid-trade, so the trade **times out** and nothing changes hands. It reconnects, catches up on missed DMs, and completes the deal through the blind trade. It retries the lock with the same `commandId` and pays exactly once. It banks a spare sword.
+- **Producer** focuses on smelting, weaponcraft and armorcraft, gathers, hunts, refines and crafts in safe zones, then posts a public WTS ad and a WTB thread. Selling the kit pays its outfitter contract.
+- **Fighter** focuses on unarmed, swords and mining, hunts for silver, reads the ad, and negotiates by private message. Its connection drops mid-trade, so the trade **times out** and nothing changes hands. It reconnects, catches up on missed DMs, and completes the deal through the blind trade. It retries the lock with the same `commandId` and pays exactly once. Receiving the sword pays its `hire_a_smith` contract. It banks a spare sword.
 - **Rival** crafts its own starter gear and reads the public ad. It cannot read the private negotiation: history by conversation id, `chat.history`, and its live event stream are all checked. It ambushes the fighter in the frontier, loots the dropped gear and duskiron ore, and brings the ore to town.
 - **Dishonest trade:** the rival sells the producer 4 duskiron ore, locks nothing, and keeps the 100 silver. The producer's receipt shows it. The producer records it, posts a public warning, and **declines** the rival's next proposal. It also ignores a prompt-injection line in the rival's DM.
-- **Honest trade:** the fighter re-gears from the bank, hunts wraiths, and sells 2 wraith essence to the producer. The producer crafts **tier-3 Wraithhide Armor** without ever entering the frontier.
+- **Honest trade:** the fighter re-gears from the bank, hunts wraiths, and sells 2 wraith essence to the producer. The producer crafts **tier-3 Wraithhide Armor** (armorcraft focus required) without ever entering the frontier.
 - Both bots file `reportFeedback()` reports, which reach the operator verbatim.
 
-The run ends with 25 automated checks. Use `npm run demo -- --exit` for CI-style exit codes.
+The run ends with 29 automated checks. Use `npm run demo -- --exit` for CI-style exit codes.
 
 ## Operator dashboard
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COMBAT, MAX_SKILL_LEVEL, WEAR, levelFor } from '../src/shared/catalog.ts';
+import { COMBAT, FOCUS, MAX_SKILL_LEVEL, WEAR, levelFor } from '../src/shared/catalog.ts';
 import type { Player } from '../src/server/types.ts';
 import { world } from './helpers.ts';
 
@@ -18,13 +18,14 @@ test('skill levels cap at 99; combat XP is a fraction of damage; the damage bonu
     const p = raw(w, me.playerId);
     p.inventory.copper_sword = 1;
     p.skills.swords = 10_000_000; // far past level 30
+    p.focus = ['swords']; // unfocused skills count only FOCUS.unfocusedLevelCap levels
     await c.equip('copper_sword');
     await c.travelTo('wilds');
     const wolf = (await c.observe()).zone!.mobs.find((m) => m.type === 'wolf' && m.alive)!;
     const hit = await c.attack(wolf.id, 'slash');
     const expected = Math.round(8 * (1 + COMBAT.damageBonusPerLevel * COMBAT.damageBonusMaxLevel));
     assert.equal(hit.damage, expected);
-    assert.equal(hit.xp, Math.max(1, Math.round(expected * COMBAT.xpPerDamage)));
+    assert.equal(hit.xp, Math.round(Math.max(1, Math.round(expected * COMBAT.xpPerDamage)) * FOCUS.xpMult), 'focused skills earn FOCUS.xpMult× XP');
   } finally { await w.close(); }
 });
 

@@ -27,6 +27,10 @@ export interface Player {
   lastSeenAt: number;
   /** Gear wear by item id (0 to WEAR.max). Optional: saves from before wear existed have none. */
   wear?: Record<string, number>;
+  /** Focus skills (see FOCUS). Optional: saves from before focus existed have none. */
+  focus?: SkillId[];
+  /** Last time a focused skill was dropped (respec cooldown). */
+  focusDroppedAt?: number;
 }
 
 export interface Mob {

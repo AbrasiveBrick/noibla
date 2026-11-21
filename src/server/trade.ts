@@ -8,7 +8,7 @@ import type { TradeReceipt, TradeView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Player, Trade } from './types.ts';
 import { type Bag, addItems, covers, describe, fail, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
-import { requireZone } from './world.ts';
+import { questProgress, requireZone } from './world.ts';
 
 const PROPOSAL_TTL_MS = 5 * 60_000;
 const DEFAULT_LOCK_TIMEOUT_MS = 2 * 60_000;
@@ -213,6 +213,14 @@ function settle(g: Game, t: Trade) {
   g.markPlayer(b);
   g.markTrade(t);
   storeReceipts(g, t, 'settled');
+  // Trade contracts: credit only what actually changed hands.
+  for (const [from, to] of [[a, b], [b, a]]) {
+    for (const [item, qty] of Object.entries(t.subs[from.id].items)) {
+      if (qty <= 0) continue;
+      questProgress(g, from, 'deliver', item, qty);
+      questProgress(g, to, 'procure', item, qty);
+    }
+  }
   for (const p of [a, b]) g.setLastAction(p, 'trade', `trade settled (received ${describe(toStacks(t.subs[other(t, p.id)].items))})`);
 }
 

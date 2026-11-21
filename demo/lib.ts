@@ -19,6 +19,11 @@ export interface Facts {
   refusedTradeId?: string; refusedStatus?: string;
   essenceTradeId?: string; essenceReceiptProducer?: TradeReceipt;
   producerT3?: string;
+  producerFocus?: string[];
+  fighterFocus?: string[];
+  producerContractPaid?: boolean;
+  fighterContractPaid?: boolean;
+  producerT3DeniedUnfocused?: string;
   injectionIgnored?: boolean;
   feedbackIds?: number[];
 }

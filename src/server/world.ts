@@ -2,10 +2,10 @@
 // equipment, combat, death & loot, banking, quests.
 
 import {
-  ABILITIES, BASE_HP, CATALOG, COMBAT, DEATH_SILVER_LOSS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
-  levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
+  ABILITIES, BASE_HP, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
+  effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
-import type { AbilityView, AttackResult, GearWearView, Observation, QuestProgress, ZoneView } from '../shared/protocol.ts';
+import type { AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, ZoneView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Mob, Player } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
@@ -62,9 +62,28 @@ function addWear(g: Game, p: Player, slot: Slot, amount: number) {
   g.markPlayer(p);
 }
 
-export function skillLevel(p: Player, s: SkillId): number { return levelFor(p.skills[s] ?? 0); }
+export function isFocused(p: Player, s: SkillId): boolean { return !!p.focus?.includes(s); }
 
-function gainXp(p: Player, s: SkillId, xp: number) { p.skills[s] = (p.skills[s] ?? 0) + Math.max(0, Math.round(xp)); }
+/** The level that counts for rules (see FOCUS): full trained level when focused, capped otherwise. */
+export function skillLevel(p: Player, s: SkillId): number { return effectiveLevel(p.skills[s] ?? 0, isFocused(p, s)); }
+
+/** Adds XP (multiplied when the skill is focused) and returns the amount granted. */
+function gainXp(p: Player, s: SkillId, xp: number): number {
+  const gained = Math.max(0, Math.round(xp * (isFocused(p, s) ? FOCUS.xpMult : 1)));
+  p.skills[s] = (p.skills[s] ?? 0) + gained;
+  return gained;
+}
+
+/** 1 + whole part of `bonus` + one more with probability of its fraction. */
+function rollBonus(g: Game, bonus: number): number {
+  const whole = Math.floor(bonus);
+  return whole + (g.rng() < bonus - whole ? 1 : 0);
+}
+
+export function focusView(g: Game, p: Player): FocusView {
+  const ready = (p.focusDroppedAt ?? -Infinity) + g.ms(FOCUS.respecCooldownMs);
+  return { skills: [...(p.focus ?? [])], slots: FOCUS.slots, unfocusedLevelCap: FOCUS.unfocusedLevelCap, respecReadyInMs: Math.max(0, Math.ceil(ready - g.now())) };
+}
 
 /** Abilities come from gear only: no classes. */
 export function abilitiesOf(p: Player): { id: AbilityId; source: string }[] {
@@ -134,8 +153,8 @@ function zoneView(g: Game, zone: ZoneId, viewerId: string): ZoneView {
 export function observe(g: Game, p: Player): Observation {
   const now = g.now();
   const abilities: AbilityView[] = abilitiesOf(p).map(({ id, source }) => ({ id, kind: ABILITIES[id].kind, readyInMs: Math.max(0, (p.cooldowns[id] ?? 0) - now, p.busyUntil - now), source }));
-  const skills: Record<string, { xp: number; level: number }> = {};
-  for (const s of SKILLS) skills[s] = { xp: p.skills[s] ?? 0, level: skillLevel(p, s) };
+  const skills: Record<string, SkillView> = {};
+  for (const s of SKILLS) skills[s] = { xp: p.skills[s] ?? 0, level: skillLevel(p, s), trainedLevel: levelFor(p.skills[s] ?? 0), focused: isFocused(p, s) };
   const unread = g.store.get<{ n: number }>(
     `SELECT COUNT(*) AS n FROM dm_messages m LEFT JOIN dm_reads r ON r.player_id = ? AND r.conversation_id = m.conversation_id
      WHERE m.to_id = ? AND m.id > COALESCE(r.last_read_id, 0)`, p.id, p.id)?.n ?? 0;
@@ -151,6 +170,7 @@ export function observe(g: Game, p: Player): Observation {
       equipment: { ...p.equipment }, inventory: toStacks(p.inventory), skills, abilities,
       effects: { evadeMs: Math.max(0, p.evadeUntil - now), braceMs: Math.max(0, p.braceUntil - now) },
       quests: questViews(p),
+      focus: focusView(g, p),
       gear: gearView(p),
     },
     zone: p.zone && !p.travel ? zoneView(g, p.zone, p.id) : null,
@@ -210,12 +230,11 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   const tool = bestTool(p, def.skill);
   if (tool < def.tier - 1) fail('TOOL_REQUIRED', `${def.name} (tier ${def.tier}) needs a tier ${def.tier - 1}+ ${def.skill} tool; best carried is tier ${tool}`, undefined, toolHint(def.skill, def.tier - 1));
   const level = skillLevel(p, def.skill);
-  const qty = 1 + (g.rng() < 0.1 * level ? 1 : 0);
+  const qty = 1 + rollBonus(g, Math.min(FOCUS.maxBonusYield, FOCUS.bonusYieldPerLevel * level));
   if (node!.charges === def.maxCharges) node!.nextChargeAt = now + g.ms(TIMING.nodeRegenMs);
   node!.charges--;
   addItems(p.inventory, [{ item: def.item, qty }]);
-  const xp = XP.gather(def.tier);
-  gainXp(p, def.skill, xp);
+  const xp = gainXp(p, def.skill, XP.gather(def.tier));
   const busy = g.ms(TIMING.gatherMs * Math.max(0.5, 1 - 0.05 * level));
   p.busyUntil = now + busy;
   questProgress(g, p, 'gather', def.item, qty);
@@ -250,13 +269,24 @@ function makeItem(kind: 'refine' | 'craft') {
     if (!ZONES[zone].stations.includes(r!.station)) fail('NO_STATION', `${recipeId} needs a ${r!.station}, found in town`);
     requireReady(g, p);
     const level = skillLevel(p, r!.skill);
+    const focused = isFocused(p, r!.skill);
+    if (r!.requiresFocus && !focused) {
+      fail('FOCUS_REQUIRED', `${recipeId} is a tier-${r!.tier} specialist recipe: only players focused in ${r!.skill} can make it`, undefined,
+        (p.focus?.length ?? 0) < FOCUS.slots
+          ? `add ${r!.skill} to your focus with focus.set in town (${FOCUS.slots - (p.focus?.length ?? 0)} free slot(s)), or buy ${r!.output.item} from a ${r!.skill} specialist`
+          : `your ${FOCUS.slots} focus slots are full (${p.focus!.join(', ')}); buy ${r!.output.item} from a ${r!.skill} specialist, or swap a focus skill with focus.set`);
+    }
     if (level < r!.minLevel) fail('SKILL_TOO_LOW', `${recipeId} needs ${r!.skill} level ${r!.minLevel}; you are level ${level}`);
     if (!hasItems(p.inventory, r!.inputs, count)) fail('NOT_ENOUGH_ITEMS', `missing ${missing(p.inventory, r!.inputs, count)}`);
     removeItems(p.inventory, r!.inputs, count);
-    const output: ItemStack = { item: r!.output.item, qty: r!.output.qty * count };
+    let bonus = 0;
+    if (focused) {
+      const chance = Math.min(FOCUS.maxBonusOutput, FOCUS.bonusOutputPerLevel * level);
+      for (let i = 0; i < count; i++) if (g.rng() < chance) bonus++;
+    }
+    const output: ItemStack = { item: r!.output.item, qty: r!.output.qty * count + bonus };
     addItems(p.inventory, [output]);
-    const xp = XP[kind](r!.tier) * count;
-    gainXp(p, r!.skill, xp);
+    const xp = gainXp(p, r!.skill, XP[kind](r!.tier) * count);
     const base = kind === 'refine' ? TIMING.refineMs : TIMING.craftMs;
     const busy = g.ms(base * count * Math.max(0.5, 1 - 0.05 * level));
     p.busyUntil = g.now() + busy;
@@ -264,7 +294,7 @@ function makeItem(kind: 'refine' | 'craft') {
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
     g.markPlayer(p);
-    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * count })), xp, level: skillLevel(p, r!.skill), busyMs: busy };
+    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * count })), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}) };
   };
 }
 
@@ -413,8 +443,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     mob.hp = Math.max(0, mob.hp - damage);
     mob.aggro[p.id] = (mob.aggro[p.id] ?? 0) + damage;
     if (!mob.targetId) { mob.targetId = p.id; mob.nextAttackAt = now + g.ms(mdef.attackMs); }
-    const xp = combatXp(damage);
-    gainXp(p, skill, xp);
+    const xp = gainXp(p, skill, combatXp(damage));
     g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: mob.id, targetName: mdef.name, ability, damage, targetHp: mob.hp }, { zone, actor: p });
     let loot: ItemStack[] = [];
     let killed = false;
@@ -438,8 +467,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
 
   const v = victim!;
   const res = damagePlayer(g, v, raw, { kind: 'player', id: p.id, name: p.name });
-  const xp = combatXp(res.damage);
-  gainXp(p, skill, xp);
+  const xp = gainXp(p, skill, combatXp(res.damage));
   g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: v.id, targetName: v.name, ability, damage: res.damage, dodged: res.dodged, targetHpPct: Math.round((v.hp / maxHp(v)) * 100), pvp: true }, { zone, actor: p });
   g.setLastAction(p, 'combat', res.killed ? `killed ${v.name}` : `attacking ${v.name}`);
   return { ability, targetId: v.id, damage: res.damage, dodged: res.dodged, targetHp: res.killed ? 0 : v.hp, killed: res.killed, loot: [], xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}) };
@@ -544,9 +572,30 @@ function bankOp(kind: 'deposit' | 'withdraw') {
   };
 }
 
+// ---------- specialization ----------
+
+function focusSet(g: Game, p: Player, payload: Record<string, any>) {
+  requireZone(g, p, 'town', 'choosing focus skills');
+  const raw = payload.skills;
+  if (!Array.isArray(raw)) fail('BAD_REQUEST', 'skills must be an array of skill ids');
+  const skills = [...new Set(raw as unknown[])] as SkillId[];
+  for (const s of skills) if (typeof s !== 'string' || !SKILLS.includes(s)) fail('BAD_REQUEST', `unknown skill "${String(s)}"; skills are ${SKILLS.join(', ')}`);
+  if (skills.length > FOCUS.slots) fail('BAD_REQUEST', `at most ${FOCUS.slots} focus skills`, undefined, 'specialize: pick the skills you will use most and buy the rest from other players');
+  const dropped = (p.focus ?? []).filter((s) => !skills.includes(s));
+  if (dropped.length) {
+    const readyIn = focusView(g, p).respecReadyInMs;
+    if (readyIn > 0) fail('ON_COOLDOWN', `you can drop a focus skill again in ${Math.ceil(readyIn / 1000)}s`, readyIn, 'adding skills to free slots is always allowed');
+    p.focusDroppedAt = g.now();
+  }
+  p.focus = skills;
+  g.setLastAction(p, 'focus', skills.length ? `focused on ${skills.join(', ')}` : 'cleared focus');
+  g.markPlayer(p);
+  return focusView(g, p);
+}
+
 // ---------- quests ----------
 
-export function questProgress(g: Game, p: Player, kind: 'kill' | 'gather' | 'craft', target: string, amount: number) {
+export function questProgress(g: Game, p: Player, kind: 'kill' | 'gather' | 'craft' | 'deliver' | 'procure', target: string, amount: number) {
   for (const [questId, q] of Object.entries(p.quests)) {
     const def = QUESTS[questId];
     if (q.status !== 'active' || def.objective.kind !== kind || def.objective.target !== target) continue;
@@ -715,6 +764,7 @@ export const worldCommands: Record<string, CommandDef> = {
     return { id: o!.id, name: o!.name, online: g.isOnline(o!.id), zone: sameZone ? o!.zone : null, createdAt: o!.createdAt };
   }),
   move: rw(move),
+  'focus.set': rw(focusSet),
   gather: rw(gather),
   refine: rw(makeItem('refine')),
   craft: rw(makeItem('craft')),

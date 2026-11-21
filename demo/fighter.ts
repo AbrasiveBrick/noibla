@@ -12,6 +12,9 @@ export async function runFighter(c: GameClient, facts: Facts) {
   facts.fighterId = me.playerId;
 
   // --- Earn silver in the safe wilderness, bare-handed ---
+  facts.fighterFocus = (await c.setFocus(['unarmed', 'swords', 'mining'])).skills;
+  await c.acceptQuest('hire_a_smith');
+  say(`focused on ${facts.fighterFocus.join(', ')}; gear will come from a smith (hire_a_smith contract)`);
   await c.acceptQuest('wolf_cull');
   await c.travelTo('wilds');
   say('hunting wolves and boars barehanded (Punch is the only ability without a weapon)');
@@ -65,6 +68,9 @@ export async function runFighter(c: GameClient, facts: Facts) {
   say(`locked 150 silver (retried the same commandId: replayed=${!!(replay.ok && replay.replayed)}) · received ${fmt(receipt.actual.youReceived)} · silver ${facts.silverBeforeLock} → ${facts.silverAfterLock}`);
 
   // --- Gear up, bank the spare ---
+  const hired = await c.claimQuest('hire_a_smith');
+  facts.fighterContractPaid = hired.reward.some((s) => s.item === 'silver');
+  say(`hire_a_smith contract paid ${fmt(hired.reward)}`);
   await c.equip('iron_sword');
   await c.equip('iron_mail');
   const silver = await c.count('silver');

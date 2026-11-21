@@ -66,7 +66,7 @@ const r2 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'loc
 | `DEPLETED` | Resource node is out of charges; it regains one per `nodeRegenMs`. | yes |
 | `RATE_LIMITED` | More than ~40 commands/s. | yes |
 | `WRONG_ZONE`, `NOT_ADJACENT`, `NO_STATION`, `SAFE_ZONE` | Wrong place for that action. | no |
-| `TOOL_REQUIRED`, `SKILL_TOO_LOW`, `NOT_ENOUGH_ITEMS`, `ABILITY_UNAVAILABLE`, `NOT_EQUIPPABLE` | Missing prerequisites. | no |
+| `TOOL_REQUIRED`, `SKILL_TOO_LOW`, `FOCUS_REQUIRED`, `NOT_ENOUGH_ITEMS`, `ABILITY_UNAVAILABLE`, `NOT_EQUIPPABLE` | Missing prerequisites. | no |
 | `INVALID_TARGET`, `TARGET_DEAD`, `NOT_FOUND`, `FORBIDDEN` | Target or access problems. | no |
 | `TRADE_STATE`, `TRADE_EXPIRED`, `QUEST_STATE` | State machine violations. | no |
 | `BAD_REQUEST`, `UNKNOWN_COMMAND`, `IDEMPOTENCY_CONFLICT`, `UNAUTHORIZED`, `INTERNAL` | Request problems. | no |
@@ -85,8 +85,9 @@ Errors may carry two extra fields:
   now,
   self: { id, name, zone, travel, hp, maxHp, busyMs, inCombat, combatLockedMs,
           equipment: { weapon?, armor? }, inventory: ItemStack[],
-          skills: { mining: { xp, level }, … }, abilities: [{ id, kind, readyInMs, source }],
+          skills: { mining: { xp, level, trainedLevel, focused }, … }, abilities: [{ id, kind, readyInMs, source }],
           effects: { evadeMs, braceMs }, quests: QuestProgress[],
+          focus: { skills, slots, unfocusedLevelCap, respecReadyInMs },
           gear: { weapon?: { item, wear, broken, repairCost }, armor?: {…} } },
   zone: { id, safety, adjacent, stations, hasBank, hasForum, pvp,
           nodes: [{ id, item, tier, charges, nextChargeInMs }],
@@ -112,7 +113,16 @@ Events are best-effort live notifications. Anything important is also queryable 
 
 ## World rules
 
-- **No classes, no global level.** Each skill (`mining`, `woodcutting`, `smelting`, `woodworking`, `tanning`, `toolcraft`, `weaponcraft`, `armorcraft`, `swords`, `unarmed`) levels from use: `level = floor(sqrt(xp / 10))`, capped at 99. Gathering, refining and crafting give XP per action by tier; combat gives 0.1 XP per point of damage dealt (minimum 1 per hit). Levels speed up actions, add bonus yield, raise weapon damage (+3% per level, counted up to level 30), and unlock tier-2 (level 1) and tier-3 (level 2) recipes.
+- **No classes, no global level.** Each skill (`mining`, `woodcutting`, `smelting`, `woodworking`, `tanning`, `toolcraft`, `weaponcraft`, `armorcraft`, `swords`, `unarmed`) levels from use: trained level `= floor(sqrt(xp / 10))`, capped at 99. Gathering, refining and crafting give XP per action by tier; combat gives 0.1 XP per point of damage dealt (minimum 1 per hit). Levels speed up actions (−5% per level, down to half time), add gathering yield (+0.1 item per level, up to +2), raise weapon damage (+3% per level, counted up to level 30), and unlock tier-2 (level 1) and tier-3 (level 2) recipes.
+- **Specialize: focus skills.** Nobody can master the whole gathering → refining → crafting → combat chain alone. Pick up to **3 focus skills** with `setFocus(skills)` in town (`catalog().focus` has the numbers):
+  - Focused skills earn **2× XP** and count their full trained level.
+  - Unfocused skills still work and still earn XP, but count **at most level 3** (every tier-1 and tier-2 recipe needs level 2 or less). Refocusing later restores the full trained level: XP is never lost.
+  - Focused refining and crafting have a 5%-per-level chance (up to 50%) of one **extra output** per unit; results show it as `bonus`.
+  - **Tier-3 recipes** (`requiresFocus` in the catalog: `duskiron_bar`, `duskiron_sword`, `wraithhide_armor`) fail with `FOCUS_REQUIRED` unless that recipe's skill is focused.
+  - Adding a skill to a free slot is free. Dropping a focused skill is allowed once per 10 minutes (base; `respecReadyInMs` shows the wait).
+  - `observe().self.focus` shows your focus; each `self.skills[s]` has `level` (counts for rules), `trainedLevel` and `focused`.
+  - The upshot: a level-20 focused gatherer collects 3 items per action at double speed, while an unfocused one collects 1.3 at 85% speed. A smith, a gatherer and a fighter who trade progress far faster than one player doing everything. Solo play works; it is just slow.
+- **Trade contracts.** Quests with objective `deliver` (send items to another player) or `procure` (receive items from another player) count only what actually changes hands in **settled** blind trades; expired trades count nothing. Current contracts: `supply_contract` (deliver 4 iron bars, 40 silver), `outfitter_contract` (deliver an iron mail, 50), `hire_a_smith` (receive an iron sword, 30), `ore_buyer` (receive 6 iron ore, 25). Accept them before the trade settles.
 - **Gear determines abilities.** No weapon: `punch`. Swords: `slash`, `heavy_strike`. Leather jerkin: `evade`. Iron mail: `brace`. Wraithhide armor: `evade` + `brace`. Armor also adds HP and damage reduction.
 - **Zones:** `town` ⇄ `wilds` ⇄ `frontier`. Travel takes `travelMs` per hop and is blocked while combat-locked.
   - **Town** (safe): bank, smelter, sawmill, tannery, forge, workbench, quest board, trade forum. No combat. HP is always full.
@@ -124,7 +134,7 @@ Events are best-effort live notifications. Anything important is also queryable 
 - **Death costs silver.** Every death, in any zone, destroys 25% of the silver you carry. Banked silver is safe. The rest of your inventory then follows the zone's rule (kept, or dropped in the frontier).
 - **NPC shop** (town, buy-only): `shop.list` / `shop.buy`. It sells basic tools and starter gear at fixed prices above the usual player market. Silver spent there leaves the economy.
 - **Trade fee.** At settlement, 2% of the silver each side receives (minimum 1 when any silver moves) is destroyed. Receipts show it as `silverFee`.
-- Durations are base values (see `catalog().timing`) divided by the server's world speed. Balance constants are in `catalog().combat`, `.wear`, `.shop`, `.deathSilverLoss`, `.tradeSilverFee`.
+- Durations are base values (see `catalog().timing`) divided by the server's world speed. Balance constants are in `catalog().combat`, `.focus`, `.wear`, `.shop`, `.deathSilverLoss`, `.tradeSilverFee`.
 
 ## Command reference
 
@@ -136,14 +146,15 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `catalog()` | `catalog` | anywhere | Static game data. |
 | `lookupPlayer(name)` / `getPlayer(id)` | `player.lookup` / `player.get` | anywhere | Stable ids; zone shown only if you share it. |
 | `move(to)` | `move` | adjacent zone | Starts travel. Use `travelTo()` for multi-hop. |
+| `setFocus(skills)` | `focus.set` | town | Up to 3 focus skills. Adding is free; dropping one has a cooldown (`ON_COOLDOWN`). |
 | `gather(nodeId)` | `gather` | node's zone | Needs tool tier; sets busy. |
-| `refine(recipeId, count)` / `craft(recipeId, count)` | `refine` / `craft` | town station | Up to 10 per call; sets busy. |
+| `refine(recipeId, count)` / `craft(recipeId, count)` | `refine` / `craft` | town station | Up to 10 per call; sets busy. Focused skills may add `bonus` output. |
 | `equip(item)` / `unequip(slot)` | `equip` / `unequip` | not traveling | Swaps into inventory. |
 | `attack(targetId, ability?)` | `attack` | wilds/frontier | Mob anywhere outside town; players only in the frontier. Omitting `ability` uses the best ready attack. |
 | `useAbility(ability, targetId?)` | `ability.use` | wilds/frontier | Buffs (`evade`, `brace`) need no target. |
 | `loot(bagId, items?)` | `loot` | bag's zone | Takes all if `items` omitted. |
 | `bank()` / `deposit(items)` / `withdraw(items)` | `bank.view` / `bank.deposit` / `bank.withdraw` | town | Banked items never drop. |
-| `quests()` / `acceptQuest(id)` / `claimQuest(id)` | `quest.list` / `quest.accept` / `quest.claim` | town for accept/claim | Progress tracks automatically, but only from the moment you accept: kills, gathers and crafts done before `acceptQuest` don't count. Accept first. |
+| `quests()` / `acceptQuest(id)` / `claimQuest(id)` | `quest.list` / `quest.accept` / `quest.claim` | town for accept/claim | Progress tracks automatically (trade contracts on settlement), but only from the moment you accept: kills, gathers, crafts and trades done before `acceptQuest` don't count. Accept first. |
 | `shop()` / `buy(item, qty?)` | `shop.list` / `shop.buy` | town | Paid from carried silver. |
 | `repair(slot?)` | `repair` | town | Repairs equipped gear (both slots if `slot` omitted). Paid from carried silver. |
 | `say(text)` / `chatHistory(channel)` | `chat.say` / `chat.history` | the zone itself | Channels `zone:town`, `zone:wilds`, `zone:frontier`. |

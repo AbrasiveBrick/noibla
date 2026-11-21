@@ -417,7 +417,8 @@
     const series = (pick, live) => [...hist.map((r) => [r.ts, pick(r)]), [now, live]];
     const wealth = b.silver.carried + b.silver.banked, total = sumLevels(b.skillLevels);
     const sp = (label, pts, cur) => `<span class="muted">${label}</span>${sparkline(pts)}<b class="num">${fmt(cur)}</b>`;
-    const skills = Object.entries(b.skillLevels).map(([k, v]) => `<span class="${v ? '' : 'zero'}">${esc(k)}</span><span class="num ${v ? '' : 'zero'}">${v}</span>`).join('');
+    const focus = b.focus || [];
+    const skills = Object.entries(b.skillLevels).map(([k, v]) => `<span class="${v ? '' : 'zero'}"${focus.includes(k) ? ' title="focus skill"' : ''}>${focus.includes(k) ? '★ ' : ''}${esc(k)}</span><span class="num ${v ? '' : 'zero'}">${v}</span>`).join('');
     const gear = Object.entries(b.gear).map(([slot, g]) => `<div><span class="muted">${esc(slot)}</span> ${esc(nm(g.item))}${g.broken ? ' <span class="chip bad">broken</span>' : ''}
       <div class="wear ${g.broken ? 'broken' : ''}" title="wear ${g.wear}/${100}"><i style="width:${Math.min(100, g.wear)}%"></i></div>
       <span class="muted">wear ${g.wear}% · repair ${g.repairCost ? `${g.repairCost} silver` : 'not needed'}</span></div>`).join('') || '<span class="muted">nothing equipped</span>';
@@ -427,7 +428,7 @@
     return `<tr class="card"><td colspan="6"><div class="cardgrid">
       <div><h3>Progress <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">${hist.length ? `since ${t(hist[0].ts)}` : 'no snapshots yet'}</span></h3>
         <div class="spark">${sp('wealth', series((r) => r.carried + r.banked, wealth), wealth)}${sp('total lvl', series((r) => r.totalLevel, total), total)}${sp('kills', series((r) => r.kills, b.kills), b.kills)}</div></div>
-      <div><h3>Skill levels · total ${total}</h3><div class="skills">${skills}</div></div>
+      <div><h3>Trained skill levels · total ${total}${focus.length ? ' <span class="muted" style="font-weight:400">★ focus</span>' : ''}</h3><div class="skills">${skills}</div></div>
       <div><h3>Combat</h3><div>K/D <b>${b.kills}/${b.deaths}</b> <span class="muted">(${kd})</span></div>
         <div>Combat lock ${lock ? `<b class="broke">${(lock / 1000).toFixed(1)}s left</b>` : '<span class="muted">none</span>'}</div>
         <h3 style="margin-top:10px">Wealth</h3><div>${fmt(b.silver.carried)} carried · ${fmt(b.silver.banked)} banked · <b>${fmt(wealth)}</b> total</div></div>
