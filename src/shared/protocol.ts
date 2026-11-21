@@ -13,7 +13,7 @@ export type ErrorCode =
   | 'BUSY' | 'TRAVELING' | 'COMBAT_LOCKED' | 'ON_COOLDOWN'
   | 'WRONG_ZONE' | 'NOT_ADJACENT' | 'NO_STATION' | 'OUT_OF_RANGE' | 'SAFE_ZONE'
   | 'DEPLETED' | 'TOOL_REQUIRED' | 'SKILL_TOO_LOW' | 'FOCUS_REQUIRED'
-  | 'NOT_ENOUGH_ITEMS' | 'NOT_EQUIPPABLE' | 'INVALID_TARGET' | 'TARGET_DEAD' | 'ABILITY_UNAVAILABLE'
+  | 'NOT_ENOUGH_ITEMS' | 'NOT_EQUIPPABLE' | 'INVALID_TARGET' | 'TARGET_DEAD' | 'ABILITY_UNAVAILABLE' | 'CORRUPTED'
   | 'QUEST_STATE' | 'TRADE_STATE' | 'TRADE_EXPIRED' | 'NAME_TAKEN' | 'INTERNAL';
 
 /** Errors that do not depend on game state changing hands; safe to retry with the same commandId later. */
@@ -103,6 +103,18 @@ export interface UniqueItem {
   corrupted: boolean;
   craftedBy: string;
   craftedAt: number;
+}
+
+export interface ItemModifyResult {
+  item: UniqueItem;
+  orb: string;
+  /** transmute: magic · augment: added · alteration/chaos: rerolled · regal: rare · scour: normal · annul: removed · vaal: better | bricked | unchanged */
+  outcome: string;
+  fee: number;
+  feeCut: number;
+  luck: number;
+  before: { rarity: Rarity; affixes: AffixRoll[] };
+  xp: number;
 }
 
 
@@ -248,7 +260,8 @@ export interface Commands {
    */
   move: { payload: { to: string } | { x: number; y: number }; result: { travel: TravelView | null; pos: Pos; distance: number } };
   // Skills: gathering, refining, crafting
-  gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number } };
+  /** `shards`: orb shards found by a shard_find tool. */
+  gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number; shards?: number } };
   /** `bonus`: extra outputs from focused specialization (already included in `output.qty`). */
   refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; inputsSaved?: number } };
   /** Gear recipes create unique items, listed in `items` (their ids are in your inventory). */
@@ -256,6 +269,12 @@ export interface Commands {
   'focus.set': { payload: { skills: string[] }; result: FocusView };
   // Equipment & combat
   'item.inspect': { payload: { item: string }; result: { item: UniqueItem } };
+  /** Use one orb on a unique you carry or wear (town altar). `orb`: transmute|augment|alteration|regal|chaos|scour|annul|vaal (or orb_<name>). Pays a silver fee. */
+  'item.modify': { payload: { item: string; orb: string }; result: ItemModifyResult };
+  /** Destroy a carried (not equipped) unique for orb shards (town altar). */
+  'item.salvage': { payload: { item: string }; result: { salvaged: string; shards: number; inventoryShards: number } };
+  /** What item.modify would cost you now: fee, fee cut, luck, max affix tier. */
+  'item.quote': { payload: { item: string; orb: string }; result: { item: string; orb: string; fee: number; feeCut: number; luck: number; mods: number; corrupted: boolean; maxAffixTier: number } };
   equip: { payload: { item: string }; result: { equipment: Partial<Record<Slot, string>> } };
   unequip: { payload: { slot: Slot }; result: { equipment: Partial<Record<Slot, string>> } };
   attack: { payload: { targetId: string; ability?: AbilityId }; result: AttackResult };
@@ -335,7 +354,7 @@ export type EventType =
   // private to the two DM participants
   | 'dm.message'
   // operator only
-  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired' | 'shop' | 'repair';
+  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired' | 'shop' | 'repair' | 'item.modified' | 'item.salvaged';
 
 export interface GameEvent<D = any> {
   id: number;

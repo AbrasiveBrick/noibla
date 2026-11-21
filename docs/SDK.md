@@ -161,7 +161,7 @@ Events are best-effort live notifications. Anything important is also queryable 
 - **Trade contracts.** Quests with objective `deliver` (send items to another player) or `procure` (receive items from another player) count only what actually changes hands in **settled** blind trades; expired trades count nothing. Current contracts: `supply_contract` (deliver 4 iron bars, 40 silver), `outfitter_contract` (deliver an iron mail, 50), `hire_a_smith` (receive an iron sword, 30), `ore_buyer` (receive 6 iron ore, 25). Accept them before the trade settles.
 - **Gear determines abilities.** No weapon: `punch`. Swords: `slash`, `heavy_strike`. Leather jerkin: `evade`. Iron mail: `brace`. Wraithhide armor: `evade` + `brace`. Armor also adds HP and damage reduction.
 - **Regions** of the [map](#the-map), west to east: `town` → `wilds` → `frontier`. Walking takes time per tile; leaving a region is blocked while combat-locked.
-  - **Town** (safe): bank, smelter, sawmill, tannery, forge, workbench, quest board and shop around the plaza; the trade forum. No combat. HP is always full.
+  - **Town** (safe): bank, smelter, sawmill, tannery, forge, workbench, altar (orbs, salvage), quest board and shop around the plaza; the trade forum. No combat. HP is always full.
   - **Wilds** (safe wilderness): copper/iron veins, pine groves, wolves and boars (silver + hides). Dying here keeps everything.
   - **Frontier** (lethal): open PvP, duskiron veins and wraiths (silver + wraith essence). Dying drops **everything carried and equipped** into a loot bag anyone can take. Bank and skills are always safe.
 - **Tools go in the `tool` slot** (the third slot beside `weapon` and `armor`). Every job needs its own tool family equipped: pickaxe (mining), axe (woodcutting), skinning knife (hides from beasts you kill), tongs (smelting), saw (woodworking), needle (tanning), hammer (toolcraft, weaponcraft, armorcraft). Tiers: copper (1), iron (2), duskiron (3). A job of tier T (node, recipe or beast) needs a tool of tier ≥ max(1, T−1): copper tools do tier 1–2 work, tier-3 work (duskiron veins, duskiron bars, tier-3 gear) needs iron tools. Without the right tool the command fails with `TOOL_REQUIRED`; killing a wolf or boar without a skinning knife drops no hides (the attack result's `note` says so).
@@ -177,6 +177,21 @@ Events are best-effort live notifications. Anything important is also queryable 
   - **Refining tools** (tongs, saw, needle): `refine_output` (extra output per unit, even unfocused), `save_inputs` (a unit keeps its inputs; results show `inputsSaved`), `refine_speed`.
   - **Crafting tools** (hammer): `craft_ilvl` (higher item level on what you craft), `mod_odds` (better orb odds), `orb_fee` (lower orb fees).
   - Only equipped items count. `observe().self.gear[slot]` shows `ilvl`, `rarity`, `corrupted` and readable `affixes` lines.
+- **Currency orbs** modify unique gear at the **altar** in town: `modifyItem(itemId, orb)` (`item.modify`). Each use consumes one orb and destroys a silver fee: `baseFee × (1 + 0.5 × mods)` where `mods` counts the item's earlier modifications (`catalog().orbs`). Corrupted items can never be modified again (`CORRUPTED`). A refused orb (wrong rarity, full item) is not consumed, and retrying the same `commandId` never spends a second orb.
+  | Orb | Effect | Base fee |
+  |---|---|---|
+  | `transmute` | normal → magic with 1 affix | 4 |
+  | `augment` | add an affix to a magic item with < 2 | 6 |
+  | `alteration` | reroll a magic item (1 affix, 35%: 2) | 4 |
+  | `regal` | magic → rare, adding an affix | 20 |
+  | `chaos` | reroll a rare item (3 affixes, 35%: 4) | 25 |
+  | `scour` | remove all affixes → normal | 4 |
+  | `annul` | remove one random affix | 15 |
+  | `vaal` | corrupt: ~25% one affix gains a tier (past the ilvl cap), ~25% bricked (all affixes gone), ~50% unchanged; locked afterwards | 30 |
+  - **Your modding terms**: the equipped hammer's `orb_fee` and 2% per **enchanting** level cut fees (up to 60%); its `mod_odds` and 1% per enchanting level add **luck** (up to 50%), which pushes rolls to higher affix tiers and moves Vaal's bricked odds into "better". `quoteModify(itemId, orb)` shows fee, cut, luck and the item's max affix tier. A skilled enchanter with a good hammer is far cheaper: commission one by sending your item in a blind trade with their fee, and receiving it back.
+  - **Where orbs come from:** mob drops (wolves and boars: orb shards, Transmute, Alteration, Augment, rare Scour/Annul; Regal, Chaos and Vaal **only from frontier wraiths**); **enchanting** at the altar fuses 10 `orb_shard` into an orb (Scour/Annul add leather/iron; Regal/Chaos/Vaal add wraith essence and need an enchanting focus); `salvage(itemId)` (`item.salvage`) destroys a carried unique for shards (1/2/4 by tier, +1 per affix, +2 if rare); gathering tools with `shard_find`; the shop sells Transmute (150) and Augment (250) only.
+  - **Repairs cost more for rarer gear:** magic ×1.5, rare ×2.5, corrupted +0.5.
+  - `rerollUntil(itemId, affix, { maxSilver, minTier?, orb: 'alteration' | 'chaos' })` rerolls until the affix lands, the next fee would pass the budget, or orbs run out (Alteration transmutes a normal item first and tries an Augment between rerolls).
 - **Frontier exclusives** (`duskiron_ore`, `wraith_essence`) are never craftable, never quest rewards, and only spawn in the frontier. They feed the tier-3 recipes (`duskiron_bar` → `duskiron_sword`, `wraithhide_armor`). Once carried out they can be traded like anything else.
 - **Gear wears out.** An equipped weapon gains 0.25 wear per attack, equipped armor 1 wear per hit taken (dodged hits don't count), the equipped tool 0.5 per use. At 100 wear the item is **broken**: weapon power, armor defense and armor HP are halved. `repair` at the forge removes all wear from equipped gear for silver: a full repair costs 10 / 30 / 80 silver for tier 1 / 2 / 3, and partial wear costs proportionally. Wear is tracked per item type, so unequipping doesn't reset it. `observe().self.gear` shows wear and repair cost.
 - **Death costs silver.** Every death, in any region, destroys 25% of the silver you carry. Banked silver is safe. The rest of your inventory then follows the region's rule (kept, or dropped in the frontier, as a loot bag where you died). You respawn on the town plaza.
@@ -199,6 +214,9 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `refine(recipeId, count)` / `craft(recipeId, count)` | `refine` / `craft` | within 3 tiles of the recipe's station | Up to 10 per call; sets busy. Focused skills may add `bonus` output. |
 | `equip(item)` / `unequip(slot)` | `equip` / `unequip` | not walking | Swaps into inventory. |
 | `inspect(id)` | `item.inspect` | anywhere | Public details of a unique item. |
+| `modifyItem(id, orb)` | `item.modify` | within 3 tiles of the altar | Uses one orb + silver fee on a carried or worn unique. |
+| `quoteModify(id, orb)` | `item.quote` | anywhere you own it | Fee, fee cut, luck, max affix tier. |
+| `salvage(id)` | `item.salvage` | within 3 tiles of the altar | Destroys a carried unique for orb shards. |
 | `attack(targetId, ability?)` | `attack` | within 1.5 tiles, outside town | Mobs in the wilds and frontier; players only when both of you are in the frontier. Omitting `ability` uses the best ready attack. |
 | `useAbility(ability, targetId?)` | `ability.use` | outside town | Buffs (`evade`, `brace`) need no target. |
 | `loot(bagId, items?)` | `loot` | within 1.5 tiles of the bag | Takes all if `items` omitted. |
