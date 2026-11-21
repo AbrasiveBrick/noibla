@@ -58,6 +58,13 @@
   .ev.death { background: color-mix(in srgb, var(--bad) 9%, transparent); }
   .ev.forum { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .ev.dm { background: color-mix(in srgb, var(--warn) 9%, transparent); }
+  .ev details > summary { cursor: pointer; list-style: none; }
+  .ev details > summary::-webkit-details-marker { display: none; }
+  .ev details > summary::before { content: '▸ '; color: var(--muted); }
+  .ev details[open] > summary::before { content: '▾ '; }
+  .ev .sub { margin: 4px 0 2px; padding-left: 12px; border-left: 2px solid var(--line); font-size: 12px; }
+  .ev .sub div { padding: 1px 0; }
+  .ev.roll { color: var(--muted); } .ev.roll b { color: var(--ink); }
   .ev .quote { color: var(--muted); font-style: italic; }
   .kept { color: var(--good); font-weight: 600; white-space: nowrap; } .broke { color: var(--bad); font-weight: 600; white-space: nowrap; }
   .party { margin: 2px 0; }
@@ -117,8 +124,13 @@
           <option value="dm">Private messages</option>
           <option value="system">Presence</option>
         </select>
-        <label class="chk"><input type="checkbox" id="fHits"> show every combat hit</label>
+        <select id="fRoutine" aria-label="Routine events">
+          <option value="rollup">Routine: rolled up per bot</option>
+          <option value="each">Routine: every event (incl. hits)</option>
+          <option value="hide">Routine: hidden</option>
+        </select>
       </div>
+      <div class="note" id="feedVolume" style="padding-top:8px"></div>
       <div id="feed"></div>
     </section>
 
@@ -160,6 +172,11 @@
     'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'dm',
     'command.failed': 'debug', feedback: 'debug',
   };
+  // High-volume activity that is rolled up per bot by default.
+  const ROUTINE = new Set(['combat.hit', 'combat.buff', 'combat.kill', 'gather', 'travel.depart', 'travel.arrive', 'bank', 'player.online', 'player.offline']);
+  const ROLLUP_GAP_MS = 5 * 60_000;
+  const VOLUME_LABEL = { 'combat.hit': 'hits', 'combat.kill': 'kills', gather: 'gathers', 'travel.arrive': 'trips', bank: 'bank ops', 'command.failed': 'failures', 'player.online': 'logins' };
+  const openRollups = new Set();
   const $ = (id) => document.getElementById(id);
   let token = null;
   try { token = sessionStorage.getItem('opToken'); } catch {}
@@ -311,28 +328,99 @@
     }</tbody></table>` : '<div class="empty">No feedback yet.</div>';
   }
 
+  // Whose routine stream an event belongs to: the actor, or the player a mob hit.
+  function routineOwner(ev) { return ev.actorId || (ev.data && ev.data.targetId) || ''; }
+
+  function rollupSummary(evs) {
+    const kills = {}, gathered = {}; let silver = 0, trips = 0, dealt = 0, taken = 0, buffs = 0, bank = 0, presence = '';
+    const zones = [];
+    const owner = routineOwner(evs[0]);
+    for (let i = evs.length - 1; i >= 0; i--) { // oldest first
+      const ev = evs[i], d = ev.data || {};
+      switch (ev.type) {
+        case 'combat.kill':
+          kills[d.targetType] = (kills[d.targetType] || 0) + 1;
+          for (const l of d.loot || []) if (l.item === 'silver') silver += l.qty;
+          break;
+        case 'combat.hit': if (d.attackerId === owner) dealt++; else taken++; break;
+        case 'combat.buff': buffs++; break;
+        case 'gather': gathered[d.item] = (gathered[d.item] || 0) + d.qty; break;
+        case 'travel.arrive': trips++; if (zones[zones.length - 1] !== d.from) zones.push(d.from); zones.push(d.to); break;
+        case 'bank': bank++; break;
+        case 'player.online': presence = 'came online'; break;
+        case 'player.offline': presence = 'went offline'; break;
+      }
+    }
+    const nKills = Object.values(kills).reduce((x, y) => x + y, 0);
+    const parts = [];
+    if (nKills) parts.push(`${nKills} kill${nKills > 1 ? 's' : ''} (${Object.entries(kills).sort((x, y) => y[1] - x[1]).map(([k, n]) => `${esc(k)} ×${n}`).join(', ')})`);
+    if (silver) parts.push(`+${silver} silver`);
+    const g = Object.entries(gathered);
+    if (g.length) parts.push(`gathered ${g.map(([k, n]) => `${n}× ${esc(nm(k))}`).join(', ')}`);
+    if (dealt || taken) parts.push(`${dealt} hits dealt, ${taken} taken`);
+    if (buffs) parts.push(`${buffs} buffs`);
+    if (zones.length) parts.push(zones.length <= 4 ? zones.map(zoneTag).join(' → ') : `${trips} trips, ended in ${zoneTag(zones[zones.length - 1])}`);
+    if (bank) parts.push(`${bank} bank op${bank > 1 ? 's' : ''}`);
+    if (presence) parts.push(presence);
+    return parts.join(' · ');
+  }
+
   function renderFeed() {
-    const bot = $('fBot').value, zone = $('fZone').value, type = $('fType').value, hits = $('fHits').checked;
-    const list = [];
-    for (let i = events.length - 1; i >= 0 && list.length < 400; i--) {
+    const bot = $('fBot').value, zone = $('fZone').value, type = $('fType').value, mode = $('fRoutine').value;
+    const rows = [];          // { ev } or { group: { key, owner, name, evs } }
+    const open = new Map();   // owner -> group still accepting older events
+    const volume = {};
+    for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i];
       const cat = CATEGORY[ev.type] || 'system';
-      if (cat === 'debug') continue;
-      if (type && cat !== type) continue;
-      if (!type && !hits && ev.type === 'combat.hit') continue;
       if (zone && ev.zone !== zone) continue;
       if (bot && !involved(ev).includes(bot)) continue;
-      list.push(ev);
+      volume[ev.type] = (volume[ev.type] || 0) + 1;
+      if (rows.length >= 400) continue;
+      if (cat === 'debug') continue;
+      if (type) { if (cat === type) rows.push({ ev }); continue; }
+      if (ROUTINE.has(ev.type)) {
+        if (mode === 'hide') continue;
+        if (mode === 'each') { rows.push({ ev }); continue; }
+        const owner = routineOwner(ev);
+        let g = open.get(owner);
+        if (!g || g.evs[g.evs.length - 1].ts - ev.ts > ROLLUP_GAP_MS) {
+          g = { owner, name: '', evs: [] };
+          open.set(owner, g);
+          rows.push({ group: g });
+        }
+        g.evs.push(ev);
+        if (!g.name && (ev.actorName || ev.data.name)) g.name = ev.actorName || ev.data.name;
+        if (!g.name && ev.data.targetId === owner) g.name = ev.data.targetName;
+        continue;
+      }
+      // A notable event ends that bot's current rollup, so rollups never span it.
+      for (const id of involved(ev)) open.delete(id);
+      rows.push({ ev });
     }
-    $('feedCount').textContent = `${list.length} shown`;
-    $('feed').innerHTML = list.map((ev) => {
-      const cat = CATEGORY[ev.type] || 'system';
+    $('feedCount').textContent = `${rows.length} rows · ${events.length} events buffered`;
+    $('feedVolume').textContent = Object.entries(VOLUME_LABEL).filter(([k]) => volume[k]).map(([k, l]) => `${volume[k]} ${l}`).join(' · ') + (events.length ? ' in the buffered window' : '');
+    $('feed').innerHTML = rows.map((r) => {
+      if (r.group) {
+        const g = r.group, newest = g.evs[0], oldest = g.evs[g.evs.length - 1];
+        const key = `${g.owner}:${oldest.id}`;
+        const span = Math.round((newest.ts - oldest.ts) / 60000);
+        const shown = g.evs.slice(0, 80);
+        return `<div class="ev roll"><time>${t(newest.ts)}</time><span class="tag">routine ×${g.evs.length}</span>
+          <details data-key="${esc(key)}"${openRollups.has(key) ? ' open' : ''}><summary><b>${esc(g.name || '?')}</b> ${rollupSummary(g.evs)}${span ? ` <span class="muted">· ${span}m</span>` : ''}</summary>
+          <div class="sub">${shown.map((ev) => `<div><span class="mono muted">${t(ev.ts)}</span> ${describe(ev)}</div>`).join('')}${g.evs.length > shown.length ? `<div class="muted">… ${g.evs.length - shown.length} older</div>` : ''}</div></details></div>`;
+      }
+      const ev = r.ev, cat = CATEGORY[ev.type] || 'system';
       const cls = cat === 'deaths' && ev.type === 'player.death' ? 'death' : cat === 'forum' ? 'forum' : cat === 'dm' ? 'dm' : '';
       return `<div class="ev ${cls}"><time>${t(ev.ts)}</time><span class="tag">${ev.zone ? esc(ev.zone) : esc(cat)}</span><span>${describe(ev)}</span></div>`;
     }).join('') || '<div class="empty" style="padding:10px 14px">No matching activity.</div>';
   }
 
-  for (const id of ['fBot', 'fZone', 'fType', 'fHits']) $(id).addEventListener('change', renderFeed);
+  $('feed').addEventListener('toggle', (e) => {
+    const k = e.target.dataset && e.target.dataset.key;
+    if (k) { if (e.target.open) openRollups.add(k); else openRollups.delete(k); }
+  }, true);
+  for (const id of ['fBot', 'fZone', 'fType', 'fRoutine']) $(id).addEventListener('change', renderFeed);
   $('fTransient').addEventListener('change', render);
   if (token) start(); else showLogin();
 })();
