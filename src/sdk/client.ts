@@ -367,9 +367,12 @@ export class GameClient {
   refineItem(recipeId: string, count = 1) { return this.make(recipeId, count, 'refine'); }
   craftItem(recipeId: string, count = 1) { return this.make(recipeId, count, 'craft'); }
 
-  /** Waits (out of combat) until HP reaches `pct` of max. */
+  /** Waits (out of combat) until HP reaches `pct` of max: a fraction (0.9) or a percent (90). */
   async restUntil(pct = 0.9, timeoutMs = 60_000): Promise<Observation> {
-    return this.waitFor(async () => { const o = await this.observe(); return o.self.hp >= o.self.maxHp * pct ? o : null; }, { timeoutMs, intervalMs: 150, what: 'HP regen' });
+    // Accept percent too (restUntil(80)): a fraction > 1 could never be reached.
+    const frac = pct > 1 ? pct / 100 : pct;
+    if (!(frac > 0 && frac <= 1)) throw new RangeError(`restUntil(${pct}): pass a fraction like 0.9 or a percent like 90`);
+    return this.waitFor(async () => { const o = await this.observe(); return o.self.hp >= o.self.maxHp * frac ? o : null; }, { timeoutMs, intervalMs: 150, what: 'HP regen' });
   }
 
   /**

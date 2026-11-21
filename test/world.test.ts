@@ -152,6 +152,8 @@ test('quests track progress and pay out in town', async () => {
     await c.acceptQuest('ore_run');
     const dup = await c.request('quest.accept', { questId: 'ore_run' });
     assert.equal(!dup.ok && dup.error.code, 'QUEST_STATE');
+    const early = await c.request('quest.claim', { questId: 'ore_run' });
+    assert.match(!early.ok && early.error.hint || '', /only .* after accepting count/i);
     await c.travelTo('wilds');
     await c.gatherItem('copper_ore', 6);
     const q = (await c.quests()).mine.find((x) => x.questId === 'ore_run')!;
@@ -162,5 +164,8 @@ test('quests track progress and pay out in town', async () => {
     const before = await c.count('silver');
     await c.claimQuest('ore_run');
     assert.equal(await c.count('silver'), before + 15);
+    // restUntil takes a fraction or a percent; at full HP both resolve at once.
+    assert.equal((await c.restUntil(80, 2000)).self.hp, (await c.restUntil(0.8, 2000)).self.maxHp);
+    await assert.rejects(c.restUntil(0), RangeError);
   } finally { await w.close(); }
 });

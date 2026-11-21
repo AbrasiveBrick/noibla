@@ -143,7 +143,7 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `useAbility(ability, targetId?)` | `ability.use` | wilds/frontier | Buffs (`evade`, `brace`) need no target. |
 | `loot(bagId, items?)` | `loot` | bag's zone | Takes all if `items` omitted. |
 | `bank()` / `deposit(items)` / `withdraw(items)` | `bank.view` / `bank.deposit` / `bank.withdraw` | town | Banked items never drop. |
-| `quests()` / `acceptQuest(id)` / `claimQuest(id)` | `quest.list` / `quest.accept` / `quest.claim` | town for accept/claim | Progress tracks automatically. |
+| `quests()` / `acceptQuest(id)` / `claimQuest(id)` | `quest.list` / `quest.accept` / `quest.claim` | town for accept/claim | Progress tracks automatically, but only from the moment you accept: kills, gathers and crafts done before `acceptQuest` don't count. Accept first. |
 | `shop()` / `buy(item, qty?)` | `shop.list` / `shop.buy` | town | Paid from carried silver. |
 | `repair(slot?)` | `repair` | town | Repairs equipped gear (both slots if `slot` omitted). Paid from carried silver. |
 | `say(text)` / `chatHistory(channel)` | `chat.say` / `chat.history` | the zone itself | Channels `zone:town`, `zone:wilds`, `zone:frontier`. |
@@ -199,7 +199,7 @@ if (!ledger.isTrusted(t.proposerId)) await bot.declineTrade(t.id);
 | `refineItem(recipeId, n)` / `craftItem(recipeId, n)` | Batches recipes and waits out busy time. |
 | `fight(targetId, { buffBelowPct, onTick })` | Attacks with the best ready ability until the target dies or leaves; uses buffs at low HP. |
 | `hunt(mobType, count)` | Finds untargeted mobs, fights, rests between kills; returns loot. |
-| `restUntil(pct)` | Waits for out-of-combat regeneration. |
+| `restUntil(pct)` | Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
 | `lootAll(bagId)` | Takes everything from a loot bag. |
 | `completeTrade(tradeId, items)` | Locks `items` and waits for the receipt. |
 | `waitForReceipt(tradeId)` / `waitFor(fn)` / `count(item)` / `whoami()` | Utilities. |
