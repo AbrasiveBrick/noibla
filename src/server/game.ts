@@ -27,7 +27,12 @@ const COMMAND_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 const NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{2,19}$/;
 const RATE_PER_SEC = 40;
 const RATE_BURST = 80;
-const ONLINE_WINDOW_MS = 10_000;
+/** A bot without an open event stream counts as online this long after its last command. Agents often think for 10-30 s between calls. */
+const ONLINE_WINDOW_MS = 60_000;
+/** Identical failures (same command type and error code, back to back) before the error carries `repeated`. */
+const REPEAT_THRESHOLD = 3;
+/** High-volume operator events pruned after `EVENT_RETENTION_MS`; trades, deaths, quests, chat etc. are kept. */
+const PRUNABLE_EVENTS = ['combat.hit', 'combat.buff', 'gather', 'travel.depart', 'travel.arrive', 'player.online', 'player.offline', 'command.failed', 'bank', 'shop', 'repair'];
 
 export class Game {
   readonly store: Store;
@@ -54,6 +59,8 @@ export class Game {
   private eventSeq: number;
   private rate = new Map<string, { tokens: number; at: number }>();
   private online = new Set<string>();
+  private failStreak = new Map<string, { key: string; n: number }>();
+  private flushedEventSeq = -1;
   readonly recentCommands = new Map<string, { ts: number; type: string; commandId: string; ok: boolean; code?: string }[]>();
   private timer: NodeJS.Timeout | null = null;
   private tickMs: number;
@@ -131,7 +138,10 @@ export class Game {
       const t = this.trades.get(id);
       if (t) this.store.run('INSERT INTO trades(id, status, data) VALUES(?, ?, ?) ON CONFLICT(id) DO UPDATE SET status = excluded.status, data = excluded.data', id, t.status, JSON.stringify(t));
     }
-    this.store.setMeta('event_seq', String(this.eventSeq));
+    if (this.eventSeq !== this.flushedEventSeq) {
+      this.store.setMeta('event_seq', String(this.eventSeq));
+      this.flushedEventSeq = this.eventSeq;
+    }
     this.clearDirty();
   }
 
@@ -235,7 +245,7 @@ export class Game {
     const p: Player = {
       id: newId('p'), name, createdAt: now, zone: 'town', travel: null, hp: BASE_HP,
       inventory: { silver: STARTING_SILVER }, bank: {}, equipment: {}, skills: {},
-      busyUntil: 0, cooldowns: {}, evadeUntil: 0, braceUntil: 0, lastCombatAt: 0, combatLockUntil: 0, lastRegenAt: 0,
+      busyUntil: 0, cooldowns: {}, evadeUntil: 0, braceUntil: 0, lastCombatAt: 0, combatLockUntil: 0, lastRegenAt: 0, wear: {},
       quests: {}, stats: { kills: 0, deaths: 0 }, lastAction: { type: 'register', summary: 'arrived in Brightwater', at: now }, lastSeenAt: now,
     };
     this.mutate(() => {
@@ -311,6 +321,7 @@ export class Game {
         response = { ok: true, commandId, result: def.run(this, p, payload as Record<string, any>) };
       }
       this.noteCommand(p.id, type, commandId, true);
+      this.failStreak.delete(p.id);
       return response;
     } catch (e) {
       if (e instanceof GameError) return this.failure(p, type, commandId, e);
@@ -351,6 +362,18 @@ export class Game {
     }
     const error: ApiError = { code: err.code, message: err.message };
     if (err.retryAfterMs !== undefined) error.retryAfterMs = err.retryAfterMs;
+    if (err.hint) error.hint = err.hint;
+    const key = `${type}:${err.code}`;
+    const prev = this.failStreak.get(p.id);
+    const n = prev?.key === key ? prev.n + 1 : 1;
+    this.failStreak.set(p.id, { key, n });
+    if (n >= REPEAT_THRESHOLD) {
+      error.repeated = n;
+      const advice = err.transient
+        ? `You got this same error ${n} times in a row: wait retryAfterMs before sending it again.`
+        : `You got this same error ${n} times in a row: retrying will not change the outcome. Change something first.`;
+      error.hint = error.hint ? `${error.hint} ${advice}` : advice;
+    }
     return commandId ? { ok: false, commandId, error } : { ok: false, error };
   }
 
@@ -403,6 +426,14 @@ export class Game {
 
   pruneCommands(olderThanMs = 24 * 3600_000) {
     this.store.run('DELETE FROM commands WHERE at < ?', this.now() - olderThanMs);
+  }
+
+  /** Housekeeping: drops old idempotency records, high-volume operator events and old failure rows. */
+  prune(opts: { commandsMs?: number; eventsMs?: number; failuresMs?: number } = {}) {
+    const now = this.now();
+    this.pruneCommands(opts.commandsMs);
+    this.store.run(`DELETE FROM events WHERE ts < ? AND type IN (${PRUNABLE_EVENTS.map(() => '?').join(', ')})`, now - (opts.eventsMs ?? 24 * 3600_000), ...PRUNABLE_EVENTS);
+    this.store.run('DELETE FROM failures WHERE ts < ?', now - (opts.failuresMs ?? 7 * 24 * 3600_000));
   }
 }
 

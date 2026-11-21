@@ -6,15 +6,17 @@ import { TRANSIENT_ERRORS } from '../shared/protocol.ts';
 export class GameError extends Error {
   readonly code: ErrorCode;
   readonly retryAfterMs?: number;
-  constructor(code: ErrorCode, message: string, retryAfterMs?: number) {
+  readonly hint?: string;
+  constructor(code: ErrorCode, message: string, retryAfterMs?: number, hint?: string) {
     super(message);
     this.code = code;
     if (retryAfterMs !== undefined) this.retryAfterMs = Math.max(1, Math.ceil(retryAfterMs));
+    if (hint) this.hint = hint;
   }
   get transient() { return TRANSIENT_ERRORS.has(this.code); }
 }
 
-export const fail = (code: ErrorCode, message: string, retryAfterMs?: number): never => { throw new GameError(code, message, retryAfterMs); };
+export const fail = (code: ErrorCode, message: string, retryAfterMs?: number, hint?: string): never => { throw new GameError(code, message, retryAfterMs, hint); };
 
 export function newId(prefix: string): string { return `${prefix}_${randomBytes(6).toString('hex')}`; }
 export function sha256(s: string): string { return createHash('sha256').update(s).digest('hex'); }
@@ -72,10 +74,13 @@ export function reqInt(p: Record<string, any>, key: string, min: number, max: nu
 
 /** Strips control characters (keeps newlines and tabs) and trims. Text stays player-authored data. */
 export function cleanText(p: Record<string, any>, key: string, max: number): string {
-  const raw = reqStr(p, key, max * 2);
+  const tooLong = (len: number) => fail('BAD_REQUEST', `${key} exceeds ${max} characters (got ${len})`, undefined, `shorten ${key} by at least ${len - max} characters, or split it into several messages`);
+  const raw = p[key];
+  if (typeof raw !== 'string' || raw.length === 0) fail('BAD_REQUEST', `${key} must be a non-empty string`);
+  if (raw.length > max * 2) tooLong(raw.length);
   const t = raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F‪-‮⁦-⁩]/g, '').trim();
   if (!t) fail('BAD_REQUEST', `${key} is empty`);
-  if (t.length > max) fail('BAD_REQUEST', `${key} exceeds ${max} characters`);
+  if (t.length > max) tooLong(t.length);
   return t;
 }
 

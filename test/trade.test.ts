@@ -36,11 +36,15 @@ test('blind trade settles whatever was locked, even a broken promise, and receip
     assert.equal(rb.counterpartyKeptWord, false);
     assert.equal(rb.youKeptWord, true);
     assert.equal(await b.count('silver'), 15);
-    assert.equal(await a.count('silver'), 25);
+    // Alice received 5 silver; the 2% settlement fee (minimum 1) destroys 1 of it.
+    assert.equal(await a.count('silver'), 24);
 
     const ra = (await a.receipts()).receipts;
     assert.equal(ra.length, 1);
     assert.equal(ra[0].youKeptWord, false);
+    assert.equal(ra[0].silverFee, 1);
+    assert.deepEqual(ra[0].actual.youReceived, silver(5), 'receipts show the gross amount sent');
+    assert.equal(rb.silverFee, undefined, 'no fee when no silver was received');
     assert.equal(ra[0].ownerId, alice.playerId);
     // Each player only ever sees their own receipt.
     assert.ok((await b.receipts()).receipts.every((r) => r.ownerId === bob.playerId));
@@ -91,7 +95,7 @@ test('retrying a command with the same commandId never duplicates a transfer', a
     assert.equal(r2.ok && r2.replayed, true);
     assert.deepEqual(r1.ok && r1.result, r2.ok && r2.result);
     assert.equal(await a.count('silver'), 10);
-    assert.equal(await b.count('silver'), 30);
+    assert.equal(await b.count('silver'), 29, 'received 10, minus the 1-silver settlement fee');
     const conflict = await a.request('trade.lock', { tradeId: trade.id, items: silver(1) }, { commandId: 'lock-once' });
     assert.equal(!conflict.ok && conflict.error.code, 'IDEMPOTENCY_CONFLICT');
     // Bank deposits are also replay-safe.

@@ -25,6 +25,8 @@ export interface Player {
   stats: { kills: number; deaths: number };
   lastAction: { type: string; summary: string; at: number } | null;
   lastSeenAt: number;
+  /** Gear wear by item id (0 to WEAR.max). Optional: saves from before wear existed have none. */
+  wear?: Record<string, number>;
 }
 
 export interface Mob {

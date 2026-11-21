@@ -156,7 +156,7 @@
     'player.death': 'deaths', 'player.respawn': 'deaths',
     'loot.dropped': 'looting', 'loot.taken': 'looting', 'loot.expired': 'looting',
     'forum.thread': 'forum', 'forum.reply': 'forum', 'chat.message': 'chat',
-    'trade.closed': 'trade', 'trade.activity': 'trade', bank: 'bank', quest: 'bank',
+    'trade.closed': 'trade', 'trade.activity': 'trade', bank: 'bank', quest: 'bank', shop: 'bank', repair: 'bank',
     'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'dm',
     'command.failed': 'debug', feedback: 'debug',
   };
@@ -220,7 +220,7 @@
       case 'combat.hit': return `<b>${esc(d.attackerName)}</b> hit ${esc(d.targetName)} with ${esc(d.ability)} for ${d.damage}${d.dodged ? ' (dodged)' : ''}${d.pvp ? ' · <b>PvP</b>' : ''}`;
       case 'combat.buff': return `<b>${esc(d.name)}</b> used ${esc(d.ability)}`;
       case 'combat.kill': return `<b>${esc(d.killerName)}</b> killed a ${esc(d.targetType)} · loot ${stacks(d.loot)}`;
-      case 'player.death': return `<b>${esc(d.victimName)}</b> was killed by ${esc(d.killerName)} in ${zoneTag(d.zone)} — ${d.fullLoot ? `dropped ${stacks(d.dropped)}` : 'kept everything (safe zone)'}`;
+      case 'player.death': return `<b>${esc(d.victimName)}</b> was killed by ${esc(d.killerName)} in ${zoneTag(d.zone)} — ${d.fullLoot ? `dropped ${stacks(d.dropped)}` : 'kept their items (safe zone)'}${d.silverLost ? ` · ${d.silverLost} silver destroyed` : ''}`;
       case 'player.respawn': return `<b>${esc(d.name)}</b> respawned in town`;
       case 'loot.dropped': return `Loot bag of <b>${esc(d.ownerName)}</b> on the ground: ${stacks(d.items)}`;
       case 'loot.taken': return `<b>${esc(d.looterName)}</b> looted ${stacks(d.items)} from ${esc(d.ownerName)}'s bag`;
@@ -228,6 +228,8 @@
       case 'chat.message': return `<b>${esc(d.message.authorName)}</b> <span class="muted">[${esc(d.message.channel)}]</span> <span class="quote">“${esc(d.message.text)}”</span>`;
       case 'forum.thread': return `<b>${esc(d.thread.authorName)}</b> posted ad <b>“${esc(d.thread.title)}”</b> <span class="quote">${esc(d.body)}</span>`;
       case 'forum.reply': return `<b>${esc(d.post.authorName)}</b> replied to “${esc(d.threadTitle)}”: <span class="quote">${esc(d.post.body)}</span>`;
+      case 'shop': return `<b>${esc(d.name)}</b> bought ${d.qty}× ${esc(nm(d.item))} from the shop for ${d.paid} silver`;
+      case 'repair': return `<b>${esc(d.name)}</b> repaired ${d.repaired.map((j) => esc(nm(j.item))).join(', ')} for ${d.paid} silver`;
       case 'bank': return `<b>${esc(d.name)}</b> ${d.action === 'deposit' ? 'banked' : 'withdrew'} ${stacks(d.items)}`;
       case 'quest': return `<b>${esc(d.name)}</b> quest ${esc(d.questId)}: ${esc(d.status)}${d.reward ? ` (${stacks(d.reward)})` : ''}`;
       case 'dm.sent': return d.text === undefined

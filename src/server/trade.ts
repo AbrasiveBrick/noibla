@@ -3,11 +3,11 @@
 // When both lock, both submissions transfer atomically, whatever they contain.
 // If the lock deadline passes first, reservations return and nothing moves.
 
-import type { ItemStack } from '../shared/catalog.ts';
+import { TRADE_SILVER_FEE, type ItemStack } from '../shared/catalog.ts';
 import type { TradeReceipt, TradeView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Player, Trade } from './types.ts';
-import { addItems, covers, describe, fail, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
+import { type Bag, addItems, covers, describe, fail, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
 import { requireZone } from './world.ts';
 
 const PROPOSAL_TTL_MS = 5 * 60_000;
@@ -162,6 +162,7 @@ function makeReceipt(g: Game, t: Trade, ownerId: string, outcome: 'settled' | 'e
     actual: { youSent: toStacks(sent), youReceived: toStacks(received) },
     counterpartyKeptWord: outcome === 'settled' ? covers(received, t.terms[them]) : null,
     youKeptWord: outcome === 'settled' ? covers(sent, t.terms[ownerId]) : null,
+    ...(outcome === 'settled' && silverFee(received) ? { silverFee: silverFee(received) } : {}),
     at: g.now(),
   };
 }
@@ -186,11 +187,24 @@ function storeReceipts(g: Game, t: Trade, outcome: 'settled' | 'expired') {
   g.emit('trade.closed', { kind: 'operator' }, { tradeId: t.id, outcome, createdAt: t.createdAt, closedAt: t.closedAt, parties }, { zone: 'town' });
 }
 
+/** Settlement fee: a share of the silver a party receives is destroyed (minimum 1 when any silver moves). */
+export function silverFee(received: Bag): number {
+  const silver = received.silver ?? 0;
+  return silver > 0 ? Math.max(1, Math.floor(silver * TRADE_SILVER_FEE)) : 0;
+}
+
+function deliver(to: Player, items: Bag) {
+  const net = { ...items };
+  const fee = silverFee(items);
+  if (fee) { net.silver -= fee; if (net.silver <= 0) delete net.silver; }
+  addItems(to.inventory, toStacks(net));
+}
+
 function settle(g: Game, t: Trade) {
   const a = g.players.get(t.proposerId)!;
   const b = g.players.get(t.counterpartyId)!;
-  addItems(b.inventory, toStacks(t.subs[a.id].items));
-  addItems(a.inventory, toStacks(t.subs[b.id].items));
+  deliver(b, t.subs[a.id].items);
+  deliver(a, t.subs[b.id].items);
   t.status = 'settled';
   t.closedAt = g.now();
   g.markPlayer(a);

@@ -132,11 +132,11 @@ export const NODE_TYPES: Record<string, NodeDef> = {
 };
 
 export interface DropDef { item: string; min: number; max: number; chance: number }
-export interface MobDef { id: string; name: string; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number }
+export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number }
 export const MOB_TYPES: Record<string, MobDef> = {
-  wolf: { id: 'wolf', name: 'Wolf', hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1 }], respawnMs: 6000 },
-  boar: { id: 'boar', name: 'Boar', hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1 }], respawnMs: 6000 },
-  wraith: { id: 'wraith', name: 'Wraith', hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }], respawnMs: 8000 },
+  wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1 }], respawnMs: 6000 },
+  boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1 }], respawnMs: 6000 },
+  wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }], respawnMs: 8000 },
 };
 
 export interface ZoneDef {
@@ -216,10 +216,46 @@ export const BASE_HP = 100;
 export const STARTING_SILVER = 20;
 export const MAX_CRAFT_BATCH = 10;
 
-/** Skill level from XP. No global level exists; each skill grows independently through use. */
+export const MAX_SKILL_LEVEL = 99;
+
+/** Skill level from XP, capped at MAX_SKILL_LEVEL. No global level exists; each skill grows independently through use. */
 export function levelFor(xp: number): number {
-  return Math.floor(Math.sqrt(Math.max(0, xp) / 10));
+  return Math.min(MAX_SKILL_LEVEL, Math.floor(Math.sqrt(Math.max(0, xp) / 10)));
 }
+
+/** Combat: XP per point of damage dealt, and the weapon-skill damage bonus (+3% per level, counted up to level 30). */
+export const COMBAT = {
+  xpPerDamage: 0.1,
+  damageBonusPerLevel: 0.03,
+  damageBonusMaxLevel: 30,
+};
+
+/** Fraction of carried (not banked) silver destroyed on any death, before the rest is dropped or kept. */
+export const DEATH_SILVER_LOSS = 0.25;
+
+/** Trades: fraction of the silver each party receives that is destroyed at settlement (minimum 1 when any silver moves). */
+export const TRADE_SILVER_FEE = 0.02;
+
+/**
+ * Gear wear. Equipped weapons wear per attack, equipped armor per hit taken. At `max` the item is broken:
+ * its power, defense and HP bonus are multiplied by `brokenMultiplier` until repaired in town.
+ * A full repair (from `max` wear) costs `repairCostByTier[tier]` silver; partial wear costs proportionally (rounded up).
+ */
+export const WEAR = {
+  max: 100,
+  perAttack: 0.25,
+  perHitTaken: 1,
+  brokenMultiplier: 0.5,
+  repairCostByTier: { 1: 10, 2: 30, 3: 80 } as Record<number, number>,
+};
+
+/** NPC shop in town. Buy-only and priced above the player market, so it caps prices and removes silver. */
+export const SHOP: Record<string, number> = {
+  copper_pickaxe: 60,
+  copper_sword: 60,
+  leather_jerkin: 80,
+  iron_pickaxe: 300,
+};
 
 export const XP = {
   gather: (tier: number) => 5 * tier * tier,
@@ -250,4 +286,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL };

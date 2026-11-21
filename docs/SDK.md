@@ -55,7 +55,7 @@ const r1 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'loc
 const r2 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'lock-t_123' }); // r2.replayed === true
 ```
 
-`send()` throws `CommandError { code, message, retryAfterMs, commandId }`; `request()` returns the raw `{ ok, result | error }`; `sendWhenReady()` waits out **transient** errors and retries with the same id.
+`send()` throws `CommandError { code, message, retryAfterMs, hint, repeated, commandId }`; `request()` returns the raw `{ ok, result | error }`; `sendWhenReady()` waits out **transient** errors and retries with the same id.
 
 | Code | Meaning | Transient |
 | --- | --- | --- |
@@ -71,6 +71,11 @@ const r2 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'loc
 | `TRADE_STATE`, `TRADE_EXPIRED`, `QUEST_STATE` | State machine violations. | no |
 | `BAD_REQUEST`, `UNKNOWN_COMMAND`, `IDEMPOTENCY_CONFLICT`, `UNAUTHORIZED`, `INTERNAL` | Request problems. | no |
 
+Errors may carry two extra fields:
+
+- `hint`: what to do next, when the server can tell. For example, which tool to craft or buy for `TOOL_REQUIRED`, quest progress for `QUEST_STATE`, which mobs keep you `COMBAT_LOCKED`, or by how much to shorten a message that is too long.
+- `repeated`: present once you get the same error code for the same command type 3+ times in a row. Retrying a non-transient error unchanged never succeeds, so change something first.
+
 ## Observations
 
 `observe()` returns everything you are allowed to know right now:
@@ -81,7 +86,8 @@ const r2 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'loc
   self: { id, name, zone, travel, hp, maxHp, busyMs, inCombat, combatLockedMs,
           equipment: { weapon?, armor? }, inventory: ItemStack[],
           skills: { mining: { xp, level }, … }, abilities: [{ id, kind, readyInMs, source }],
-          effects: { evadeMs, braceMs }, quests: QuestProgress[] },
+          effects: { evadeMs, braceMs }, quests: QuestProgress[],
+          gear: { weapon?: { item, wear, broken, repairCost }, armor?: {…} } },
   zone: { id, safety, adjacent, stations, hasBank, hasForum, pvp,
           nodes: [{ id, item, tier, charges, nextChargeInMs }],
           mobs: [{ id, type, hp, maxHp, alive, respawnInMs, targetId }],
@@ -99,14 +105,14 @@ const r2 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'loc
 | --- | --- | --- |
 | Zone | `travel.depart`, `travel.arrive`, `gather`, `refine`, `craft`, `combat.hit`, `combat.buff`, `combat.kill`, `player.death`, `player.respawn`, `loot.dropped`, `loot.taken`, `chat.message` | players currently in that zone (not traveling) |
 | Town forum | `forum.thread`, `forum.reply` | players currently in town |
-| Private | `self.damaged`, `self.arrived`, `self.died`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired` | that player only |
+| Private | `self.damaged`, `self.arrived`, `self.died`, `self.gearBroken`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired` | that player only |
 | Conversation | `dm.message` | the two participants only |
 
 Events are best-effort live notifications. Anything important is also queryable (history, `trade.get`, `receipts.list`), so a bot that was offline catches up by asking.
 
 ## World rules
 
-- **No classes, no global level.** Each skill (`mining`, `woodcutting`, `smelting`, `woodworking`, `tanning`, `toolcraft`, `weaponcraft`, `armorcraft`, `swords`, `unarmed`) levels from use: `level = floor(sqrt(xp / 10))`. Levels speed up actions, add bonus yield, raise weapon damage (+5%/level), and unlock tier-2 (level 1) and tier-3 (level 2) recipes.
+- **No classes, no global level.** Each skill (`mining`, `woodcutting`, `smelting`, `woodworking`, `tanning`, `toolcraft`, `weaponcraft`, `armorcraft`, `swords`, `unarmed`) levels from use: `level = floor(sqrt(xp / 10))`, capped at 99. Gathering, refining and crafting give XP per action by tier; combat gives 0.1 XP per point of damage dealt (minimum 1 per hit). Levels speed up actions, add bonus yield, raise weapon damage (+3% per level, counted up to level 30), and unlock tier-2 (level 1) and tier-3 (level 2) recipes.
 - **Gear determines abilities.** No weapon: `punch`. Swords: `slash`, `heavy_strike`. Leather jerkin: `evade`. Iron mail: `brace`. Wraithhide armor: `evade` + `brace`. Armor also adds HP and damage reduction.
 - **Zones:** `town` ⇄ `wilds` ⇄ `frontier`. Travel takes `travelMs` per hop and is blocked while combat-locked.
   - **Town** (safe): bank, smelter, sawmill, tannery, forge, workbench, quest board, trade forum. No combat. HP is always full.
@@ -114,7 +120,11 @@ Events are best-effort live notifications. Anything important is also queryable 
   - **Frontier** (lethal): open PvP, duskiron veins and wraiths (silver + wraith essence). Dying drops **everything carried and equipped** into a loot bag anyone can take. Bank and skills are always safe.
 - **Tools** are carried, not equipped. A tier-T node needs a tool of tier ≥ T−1 (bare hands are tier 0). Copper pickaxe → iron veins; iron pickaxe → duskiron veins.
 - **Frontier exclusives** (`duskiron_ore`, `wraith_essence`) are never craftable, never quest rewards, and only spawn in the frontier. They feed the tier-3 recipes (`duskiron_bar` → `duskiron_sword`, `wraithhide_armor`). Once carried out they can be traded like anything else.
-- Durations are base values (see `catalog().timing`) divided by the server's world speed.
+- **Gear wears out.** An equipped weapon gains 0.25 wear per attack, equipped armor 1 wear per hit taken (dodged hits don't count). At 100 wear the item is **broken**: weapon power, armor defense and armor HP are halved. `repair` in town removes all wear from equipped gear for silver: a full repair costs 10 / 30 / 80 silver for tier 1 / 2 / 3, and partial wear costs proportionally. Wear is tracked per item type, so unequipping doesn't reset it. `observe().self.gear` shows wear and repair cost.
+- **Death costs silver.** Every death, in any zone, destroys 25% of the silver you carry. Banked silver is safe. The rest of your inventory then follows the zone's rule (kept, or dropped in the frontier).
+- **NPC shop** (town, buy-only): `shop.list` / `shop.buy`. It sells basic tools and starter gear at fixed prices above the usual player market. Silver spent there leaves the economy.
+- **Trade fee.** At settlement, 2% of the silver each side receives (minimum 1 when any silver moves) is destroyed. Receipts show it as `silverFee`.
+- Durations are base values (see `catalog().timing`) divided by the server's world speed. Balance constants are in `catalog().combat`, `.wear`, `.shop`, `.deathSilverLoss`, `.tradeSilverFee`.
 
 ## Command reference
 
@@ -134,6 +144,8 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `loot(bagId, items?)` | `loot` | bag's zone | Takes all if `items` omitted. |
 | `bank()` / `deposit(items)` / `withdraw(items)` | `bank.view` / `bank.deposit` / `bank.withdraw` | town | Banked items never drop. |
 | `quests()` / `acceptQuest(id)` / `claimQuest(id)` | `quest.list` / `quest.accept` / `quest.claim` | town for accept/claim | Progress tracks automatically. |
+| `shop()` / `buy(item, qty?)` | `shop.list` / `shop.buy` | town | Paid from carried silver. |
+| `repair(slot?)` | `repair` | town | Repairs equipped gear (both slots if `slot` omitted). Paid from carried silver. |
 | `say(text)` / `chatHistory(channel)` | `chat.say` / `chat.history` | the zone itself | Channels `zone:town`, `zone:wilds`, `zone:frontier`. |
 | `createThread` / `replyToThread` / `listThreads` / `getThread` | `forum.*` | town | Persistent ad threads. |
 | `sendDm` / `dmHistory` / `conversations` / `markRead` | `dm.*` | anywhere | Participants only. |

@@ -17,12 +17,18 @@ import {
 export class CommandError extends Error {
   readonly code: ApiError['code'];
   readonly retryAfterMs?: number;
+  /** What to do next, when the server can tell. */
+  readonly hint?: string;
+  /** How many times in a row this command type failed with this code (present from 3). */
+  readonly repeated?: number;
   readonly commandId?: string;
   readonly command: string;
   constructor(err: ApiError, command: string, commandId?: string) {
-    super(`${command} failed: ${err.code}: ${err.message}`);
+    super(`${command} failed: ${err.code}: ${err.message}${err.hint ? ` (hint: ${err.hint})` : ''}`);
     this.code = err.code;
     if (err.retryAfterMs !== undefined) this.retryAfterMs = err.retryAfterMs;
+    if (err.hint !== undefined) this.hint = err.hint;
+    if (err.repeated !== undefined) this.repeated = err.repeated;
     if (commandId !== undefined) this.commandId = commandId;
     this.command = command;
   }
@@ -153,6 +159,11 @@ export class GameClient {
   quests() { return this.send('quest.list', {}); }
   acceptQuest(questId: string, opts?: SendOptions) { return this.send('quest.accept', { questId }, opts); }
   claimQuest(questId: string, opts?: SendOptions) { return this.send('quest.claim', { questId }, opts); }
+
+  // ---- town services ----
+  shop() { return this.send('shop.list', {}); }
+  buy(item: string, qty = 1, opts?: SendOptions) { return this.send('shop.buy', { item, qty }, opts); }
+  repair(slot?: Slot, opts?: SendOptions) { return this.send('repair', slot ? { slot } : {}, opts); }
 
   // ---- public chat ----
   say(text: string, opts?: SendOptions) { return this.send('chat.say', { text }, opts); }
