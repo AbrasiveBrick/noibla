@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World Monitor</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #1d2330; --muted: #5d6677; --line: #e1e4ea; --soft: #f0f2f5;
+    --accent: #2f6fde; --good: #1f8a4c; --bad: #c43d3d; --warn: #b7791f; --lethal: #c43d3d; --wild: #3d8b5a; --town: #2f6fde;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151b; --panel: #1a1e26; --ink: #e5e8ee; --muted: #949cab; --line: #2a303b; --soft: #222833;
+      --accent: #6b9cff; --good: #4cc27f; --bad: #ff7272; --warn: #e3b25a; --lethal: #ff7272; --wild: #6fcf97; --town: #6b9cff;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151b; --panel: #1a1e26; --ink: #e5e8ee; --muted: #949cab; --line: #2a303b; --soft: #222833;
+    --accent: #6b9cff; --good: #4cc27f; --bad: #ff7272; --warn: #e3b25a; --lethal: #ff7272; --wild: #6fcf97; --town: #6b9cff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: baseline; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  header .stats { display: flex; gap: 16px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+  header .stats b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  header .status { margin-left: auto; font-size: 12px; color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; padding: 16px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 980px) { main { grid-template-columns: minmax(0, 1fr); } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+  section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  section > h2 .count { font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .body { padding: 10px 14px; overflow-x: auto; }
+  .span2 { grid-column: 1 / -1; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .muted { color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
+  .dot.on { background: var(--good); }
+  .zone { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; border: 1px solid currentColor; white-space: nowrap; }
+  .zone.town { color: var(--town); } .zone.wilds { color: var(--wild); } .zone.frontier { color: var(--lethal); } .zone.transit { color: var(--muted); }
+  .hp { width: 90px; height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .hp > i { display: block; height: 100%; background: var(--good); }
+  .hp.low > i { background: var(--bad); }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  select, input[type=password], button { font: inherit; font-size: 13px; color: var(--ink); background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  button { cursor: pointer; }
+  label.chk { font-size: 12px; color: var(--muted); display: inline-flex; gap: 5px; align-items: center; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  #feed { max-height: 640px; overflow-y: auto; padding: 4px 0; }
+  .ev { display: grid; grid-template-columns: 64px 74px minmax(0, 1fr); gap: 8px; padding: 5px 14px; font-size: 13px; border-bottom: 1px solid var(--soft); }
+  .ev time { color: var(--muted); font-family: var(--mono); font-size: 11px; padding-top: 2px; }
+  .ev .tag { font-size: 11px; color: var(--muted); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev.death { background: color-mix(in srgb, var(--bad) 9%, transparent); }
+  .ev.forum { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .ev .quote { color: var(--muted); font-style: italic; }
+  .kept { color: var(--good); font-weight: 600; white-space: nowrap; } .broke { color: var(--bad); font-weight: 600; white-space: nowrap; }
+  .party { margin: 2px 0; }
+  .empty { color: var(--muted); padding: 10px 0; font-size: 13px; }
+  #login { max-width: 420px; margin: 12vh auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 22px; }
+  #login h1 { font-size: 18px; margin: 0 0 6px; }
+  #login p { color: var(--muted); margin: 0 0 14px; font-size: 13px; }
+  #login form { display: flex; gap: 8px; }
+  #login input { flex: 1; min-width: 0; }
+  #login .err { color: var(--bad); font-size: 13px; margin-top: 10px; min-height: 1em; }
+  .note { font-size: 12px; color: var(--muted); padding: 0 14px 10px; }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>World Monitor</h1>
+  <p>Read-only operator view. Enter the operator credential (not a bot token). It is kept in this tab's session storage only.</p>
+  <form id="loginForm"><input id="tokenInput" type="password" autocomplete="off" placeholder="op_…" aria-label="Operator token"><button type="submit">Open</button></form>
+  <div class="err" id="loginErr"></div>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1>World Monitor</h1>
+    <div class="stats">
+      <span>Bots online <b id="sOnline">0</b>/<b id="sBots">0</b></span>
+      <span>Settled trades <b id="sSettled">0</b></span>
+      <span>Timeouts <b id="sTimeouts">0</b></span>
+      <span>Pending trades <b id="sPending">0</b></span>
+      <span>World speed <b id="sSpeed">1</b>×</span>
+    </div>
+    <div class="status" id="status">connecting…</div>
+  </header>
+  <main>
+    <section>
+      <h2>World view <span class="count muted" id="worldCount"></span></h2>
+      <div class="body"><table><thead><tr><th>Bot</th><th>Where</th><th>HP</th><th>Gear</th><th>K/D</th><th>Last did</th></tr></thead><tbody id="world"></tbody></table></div>
+    </section>
+
+    <section style="grid-row: span 2">
+      <h2>Live activity <span class="count muted" id="feedCount"></span></h2>
+      <div class="filters">
+        <select id="fBot" aria-label="Filter by bot"><option value="">All bots</option></select>
+        <select id="fZone" aria-label="Filter by zone"><option value="">All zones</option></select>
+        <select id="fType" aria-label="Filter by event type">
+          <option value="">All events</option>
+          <option value="travel">Travel</option>
+          <option value="gathering">Gathering</option>
+          <option value="crafting">Refining &amp; crafting</option>
+          <option value="combat">Combat</option>
+          <option value="deaths">Deaths</option>
+          <option value="looting">Looting</option>
+          <option value="forum">Trade posts</option>
+          <option value="chat">Zone chat</option>
+          <option value="trade">Trades</option>
+          <option value="bank">Bank &amp; quests</option>
+          <option value="system">Presence &amp; private msgs</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="fHits"> show every combat hit</label>
+      </div>
+      <div id="feed"></div>
+    </section>
+
+    <section>
+      <h2>Trades <span class="count muted">promised vs. actually changed hands</span></h2>
+      <div class="body" id="settled"></div>
+      <h2 style="border-top:1px solid var(--line)">Timeouts <span class="count muted">nothing changed hands</span></h2>
+      <div class="body" id="timeouts"></div>
+    </section>
+
+    <section class="span2">
+      <h2>Debug: failed commands <span class="count muted" id="failCount"></span>
+        <label class="chk" style="margin-left:auto"><input type="checkbox" id="fTransient"> include transient (busy, cooldown, travel)</label>
+      </h2>
+      <div class="note">Trade submission/lock failures are redacted so nothing reveals a pending trade. Private message contents are never shown here.</div>
+      <div class="body"><table><thead><tr><th>Time</th><th>Bot</th><th>Command ID</th><th>Command</th><th>Code</th><th>Reason</th></tr></thead><tbody id="failures"></tbody></table></div>
+    </section>
+
+    <section class="span2">
+      <h2>Bot feedback reports <span class="count muted" id="fbCount"></span></h2>
+      <div class="body" id="feedback"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  const TRANSIENT = new Set(['BUSY', 'TRAVELING', 'COMBAT_LOCKED', 'ON_COOLDOWN', 'RATE_LIMITED', 'DEPLETED']);
+  const CATEGORY = {
+    'travel.depart': 'travel', 'travel.arrive': 'travel',
+    gather: 'gathering', refine: 'crafting', craft: 'crafting',
+    'combat.hit': 'combat', 'combat.buff': 'combat', 'combat.kill': 'combat',
+    'player.death': 'deaths', 'player.respawn': 'deaths',
+    'loot.dropped': 'looting', 'loot.taken': 'looting', 'loot.expired': 'looting',
+    'forum.thread': 'forum', 'forum.reply': 'forum', 'chat.message': 'chat',
+    'trade.closed': 'trade', bank: 'bank', quest: 'bank',
+    'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'system',
+    'command.failed': 'debug', feedback: 'debug',
+  };
+  const $ = (id) => document.getElementById(id);
+  let token = null;
+  try { token = sessionStorage.getItem('opToken'); } catch {}
+  let since = 0, events = [], state = null, timer = null, items = {};
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const nm = (id) => items[id] || id;
+  const stacks = (list) => (list && list.length) ? list.map((s) => `${s.qty}× ${esc(nm(s.item))}`).join(', ') : '<span class="muted">nothing</span>';
+  const t = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
+  const ago = (ts) => { const s = Math.max(0, Math.round((Date.now() - ts) / 1000)); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`; };
+  const zoneTag = (z) => z ? `<span class="zone ${esc(z)}">${esc(z)}</span>` : '';
+
+  function showLogin(msg) {
+    $('app').hidden = true; $('login').hidden = false; $('loginErr').textContent = msg || '';
+    if (timer) clearTimeout(timer);
+  }
+
+  $('loginForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    token = $('tokenInput').value.trim();
+    try { sessionStorage.setItem('opToken', token); } catch {}
+    since = 0; events = [];
+    start();
+  });
+
+  async function poll() {
+    try {
+      const res = await fetch(`/operator/state?since=${since}`, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+      if (res.status === 401) { try { sessionStorage.removeItem('opToken'); } catch {} return showLogin('That is not a valid operator credential.'); }
+      state = await res.json();
+      items = state.items;
+      if (state.events.length) { events.push(...state.events); since = state.events[state.events.length - 1].id; if (events.length > 5000) events = events.slice(-5000); }
+      $('status').textContent = `live · updated ${t(Date.now())}`;
+      render();
+    } catch (e) {
+      $('status').textContent = 'connection lost, retrying…';
+    }
+    timer = setTimeout(poll, 1000);
+  }
+
+  function start() { $('login').hidden = true; $('app').hidden = false; poll(); }
+
+  function involved(ev) {
+    const d = ev.data || {};
+    return [ev.actorId, d.playerId, d.attackerId, d.targetId, d.victimId, d.killerId, d.looterId, d.ownerId,
+      d.message && d.message.authorId, d.thread && d.thread.authorId, d.post && d.post.authorId,
+      ...(d.parties || []).map((p) => p.id)].filter(Boolean);
+  }
+
+  function describe(ev) {
+    const d = ev.data || {}; const a = esc(ev.actorName || d.name || '');
+    switch (ev.type) {
+      case 'travel.depart': return `<b>${esc(d.name)}</b> left ${zoneTag(d.from)} for ${zoneTag(d.to)}`;
+      case 'travel.arrive': return `<b>${esc(d.name)}</b> arrived in ${zoneTag(d.to)}`;
+      case 'gather': return `<b>${esc(d.name)}</b> gathered ${d.qty}× ${esc(nm(d.item))}`;
+      case 'refine': return `<b>${esc(d.name)}</b> refined ${stacks([d.output])} at the ${esc(d.station)}`;
+      case 'craft': return `<b>${esc(d.name)}</b> crafted ${stacks([d.output])} at the ${esc(d.station)}`;
+      case 'combat.hit': return `<b>${esc(d.attackerName)}</b> hit ${esc(d.targetName)} with ${esc(d.ability)} for ${d.damage}${d.dodged ? ' (dodged)' : ''}${d.pvp ? ' · <b>PvP</b>' : ''}`;
+      case 'combat.buff': return `<b>${esc(d.name)}</b> used ${esc(d.ability)}`;
+      case 'combat.kill': return `<b>${esc(d.killerName)}</b> killed a ${esc(d.targetType)} · loot ${stacks(d.loot)}`;
+      case 'player.death': return `<b>${esc(d.victimName)}</b> was killed by ${esc(d.killerName)} in ${zoneTag(d.zone)} — ${d.fullLoot ? `dropped ${stacks(d.dropped)}` : 'kept everything (safe zone)'}`;
+      case 'player.respawn': return `<b>${esc(d.name)}</b> respawned in town`;
+      case 'loot.dropped': return `Loot bag of <b>${esc(d.ownerName)}</b> on the ground: ${stacks(d.items)}`;
+      case 'loot.taken': return `<b>${esc(d.looterName)}</b> looted ${stacks(d.items)} from ${esc(d.ownerName)}'s bag`;
+      case 'loot.expired': return `A loot bag decayed: ${stacks(d.items)}`;
+      case 'chat.message': return `<b>${esc(d.message.authorName)}</b> <span class="muted">[${esc(d.message.channel)}]</span> <span class="quote">“${esc(d.message.text)}”</span>`;
+      case 'forum.thread': return `<b>${esc(d.thread.authorName)}</b> posted ad <b>“${esc(d.thread.title)}”</b> <span class="quote">${esc(d.body)}</span>`;
+      case 'forum.reply': return `<b>${esc(d.post.authorName)}</b> replied to “${esc(d.threadTitle)}”: <span class="quote">${esc(d.post.body)}</span>`;
+      case 'bank': return `<b>${esc(d.name)}</b> ${d.action === 'deposit' ? 'banked' : 'withdrew'} ${stacks(d.items)}`;
+      case 'quest': return `<b>${esc(d.name)}</b> quest ${esc(d.questId)}: ${esc(d.status)}${d.reward ? ` (${stacks(d.reward)})` : ''}`;
+      case 'dm.sent': return `<b>${esc(d.name)}</b> sent a private message <span class="muted">(content not shown)</span>`;
+      case 'trade.closed': return d.outcome === 'settled'
+        ? `Trade settled: ${d.parties.map((p) => `<b>${esc(p.name)}</b> ${p.keptWord ? '<span class="kept">kept word</span>' : '<span class="broke">broke word</span>'}`).join(' · ')}`
+        : `Trade timed out between ${d.parties.map((p) => `<b>${esc(p.name)}</b>`).join(' and ')} — nothing changed hands`;
+      case 'player.online': return `<b>${esc(d.name)}</b> came online`;
+      case 'player.offline': return `<b>${esc(d.name)}</b> went offline`;
+      case 'command.failed': return `<b>${esc(d.name)}</b> ${esc(d.type)} failed: ${esc(d.code)}`;
+      case 'feedback': return `<b>${esc(d.name)}</b> sent feedback (${esc(d.category)}): ${esc(d.summary)}`;
+      default: return `${a} ${esc(ev.type)}`;
+    }
+  }
+
+  function render() {
+    const s = state;
+    // stats
+    $('sBots').textContent = s.bots.length;
+    $('sOnline').textContent = s.bots.filter((b) => b.online).length;
+    $('sSettled').textContent = s.trades.settled.length;
+    $('sTimeouts').textContent = s.trades.timeouts.length;
+    $('sPending').textContent = s.trades.pendingCount;
+    $('sSpeed').textContent = s.speed;
+
+    // world view
+    $('world').innerHTML = s.bots.map((b) => {
+      const pct = Math.round((b.hp / b.maxHp) * 100);
+      const where = b.travel ? `<span class="zone transit">${esc(b.travel.from)} → ${esc(b.travel.to)}</span>` : zoneTag(b.zone);
+      const gear = [b.equipment.weapon, b.equipment.armor].filter(Boolean).map(nm).map(esc).join(', ') || '<span class="muted">none</span>';
+      return `<tr><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b><div class="mono muted">${esc(b.id)}</div></td>
+        <td>${where}</td><td>${b.hp}/${b.maxHp}<div class="hp ${pct < 35 ? 'low' : ''}"><i style="width:${pct}%"></i></div></td>
+        <td>${gear}</td><td>${b.kills}/${b.deaths}</td>
+        <td>${b.lastAction ? `${esc(b.lastAction.summary)}<div class="muted">${ago(b.lastAction.at)}</div>` : ''}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="empty">No bots registered yet.</td></tr>';
+    $('worldCount').textContent = `${s.bots.length} bots`;
+
+    // filter options
+    const fb = $('fBot'), fz = $('fZone');
+    if (fb.options.length - 1 !== s.bots.length) {
+      const cur = fb.value;
+      fb.innerHTML = '<option value="">All bots</option>' + s.bots.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
+      fb.value = cur;
+    }
+    if (fz.options.length === 1) fz.innerHTML += s.zones.map((z) => `<option value="${esc(z.id)}">${esc(z.id)}</option>`).join('');
+    renderFeed();
+
+    // trades
+    $('settled').innerHTML = s.trades.settled.length ? `<table><thead><tr><th>Settled</th><th>Bot</th><th>Promised</th><th>Actually sent</th><th>Received</th><th></th></tr></thead><tbody>${
+      s.trades.settled.map((tr) => tr.parties.map((p, i) => `<tr>${i === 0 ? `<td rowspan="2" class="mono">${t(tr.closedAt)}<div class="muted">${esc(tr.tradeId)}</div></td>` : ''}
+        <td><b>${esc(p.name)}</b></td><td>${stacks(p.promised)}</td><td>${stacks(p.sent)}</td><td>${stacks(p.received)}</td>
+        <td>${p.keptWord ? '<span class="kept">kept word</span>' : '<span class="broke">broke word</span>'}</td></tr>`).join('')).join('')
+    }</tbody></table>` : '<div class="empty">No settled trades yet.</div>';
+    $('timeouts').innerHTML = s.trades.timeouts.length ? `<table><thead><tr><th>Expired</th><th>Bot</th><th>Promised</th><th>Locked before deadline</th></tr></thead><tbody>${
+      s.trades.timeouts.map((tr) => tr.parties.map((p, i) => `<tr>${i === 0 ? `<td rowspan="2" class="mono">${t(tr.closedAt)}<div class="muted">${esc(tr.tradeId)}</div></td>` : ''}
+        <td><b>${esc(p.name)}</b></td><td>${stacks(p.promised)}</td><td>${p.locked ? 'yes' : '<b>no</b>'}</td></tr>`).join('')).join('')
+    }</tbody></table>` : '<div class="empty">No timed-out trades.</div>';
+
+    // failures
+    const showT = $('fTransient').checked;
+    const fails = s.failures.filter((f) => showT || !TRANSIENT.has(f.code));
+    $('failCount').textContent = `${fails.length} shown`;
+    $('failures').innerHTML = fails.map((f) => `<tr><td class="mono">${t(f.ts)}</td><td><b>${esc(f.name)}</b><div class="mono muted">${esc(f.playerId)}</div></td>
+      <td class="mono">${esc(f.commandId || '—')}</td><td class="mono">${esc(f.type)}</td><td class="mono">${esc(f.code)}</td><td>${esc(f.reason)}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="empty">No failed commands.</td></tr>';
+
+    // feedback
+    $('fbCount').textContent = `${s.feedback.length}`;
+    $('feedback').innerHTML = s.feedback.length ? `<table><thead><tr><th>Time</th><th>Bot</th><th>Category</th><th>Summary</th><th>Details</th><th>Recent commands</th></tr></thead><tbody>${
+      s.feedback.map((f) => `<tr><td class="mono">${t(f.ts)}</td><td><b>${esc(f.name)}</b></td><td>${esc(f.category)}</td><td>${esc(f.summary)}</td><td>${esc(f.details)}</td>
+        <td class="mono">${(f.context.recentCommands || []).slice(-5).map((c) => `${esc(c.type)} ${c.ok ? 'ok' : esc(c.code)}`).join('<br>')}</td></tr>`).join('')
+    }</tbody></table>` : '<div class="empty">No feedback yet.</div>';
+  }
+
+  function renderFeed() {
+    const bot = $('fBot').value, zone = $('fZone').value, type = $('fType').value, hits = $('fHits').checked;
+    const list = [];
+    for (let i = events.length - 1; i >= 0 && list.length < 400; i--) {
+      const ev = events[i];
+      const cat = CATEGORY[ev.type] || 'system';
+      if (cat === 'debug') continue;
+      if (type && cat !== type) continue;
+      if (!type && !hits && ev.type === 'combat.hit') continue;
+      if (zone && ev.zone !== zone) continue;
+      if (bot && !involved(ev).includes(bot)) continue;
+      list.push(ev);
+    }
+    $('feedCount').textContent = `${list.length} shown`;
+    $('feed').innerHTML = list.map((ev) => {
+      const cat = CATEGORY[ev.type] || 'system';
+      const cls = cat === 'deaths' && ev.type === 'player.death' ? 'death' : cat === 'forum' ? 'forum' : '';
+      return `<div class="ev ${cls}"><time>${t(ev.ts)}</time><span class="tag">${ev.zone ? esc(ev.zone) : esc(cat)}</span><span>${describe(ev)}</span></div>`;
+    }).join('') || '<div class="empty" style="padding:10px 14px">No matching activity.</div>';
+  }
+
+  for (const id of ['fBot', 'fZone', 'fType', 'fHits']) $(id).addEventListener('change', renderFeed);
+  $('fTransient').addEventListener('change', render);
+  if (token) start(); else showLogin();
+})();
+</script>
+</body>
+</html>
