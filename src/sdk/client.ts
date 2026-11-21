@@ -161,7 +161,7 @@ export class GameClient {
   modifyItem(item: string, orb: OrbId, opts?: SendOptions) { return this.send('item.modify', { item, orb }, opts); }
   /** Salvages a carried unique into orb shards, within range of the town altar. */
   salvage(item: string, opts?: SendOptions) { return this.send('item.salvage', { item }, opts); }
-  /** Fee, fee cut, luck and max affix tier for using `orb` on `item` right now. */
+  /** Fee, fee cut and max affix tier for using `orb` on `item` right now. */
   quoteModify(item: string, orb: OrbId, opts?: SendOptions) { return this.send('item.quote', { item, orb }, opts); }
   unequip(slot: Slot, opts?: SendOptions) { return this.send('unequip', { slot }, opts); }
   attack(targetId: string, ability?: AbilityId, opts?: SendOptions) { return this.send('attack', ability ? { targetId, ability } : { targetId }, opts); }

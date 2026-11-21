@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AFFIXES, AFFIX_TIER_MIN_ILVL, BASE_HP, WEAR, gearGroup, rollAffix } from '../src/shared/catalog.ts';
+import { AFFIXES, AFFIX_TIER_MIN_ILVL, BASE_HP, WEAR, gearGroup } from '../src/shared/catalog.ts';
+import { AFFIX_RANGES, rollAffix } from '../src/server/odds.ts';
 import type { Player } from '../src/server/types.ts';
 import { makeRng } from '../src/server/util.ts';
 import { world } from './helpers.ts';
@@ -15,7 +16,7 @@ test('affix pools: each gear group has its own pool with three tiers', () => {
   assert.equal(gearGroup('iron_tongs'), 'refining');
   assert.equal(gearGroup('duskiron_hammer'), 'crafting');
   assert.equal(gearGroup('iron_bar'), undefined);
-  for (const a of Object.values(AFFIXES)) for (const [lo, hi] of a.tiers) assert.ok(lo <= hi, a.id);
+  for (const a of Object.values(AFFIXES)) for (const [lo, hi] of AFFIX_RANGES[a.id]) assert.ok(lo <= hi, a.id);
 });
 
 test('rollAffix: matching pool only, no duplicates, tiers capped by item level', () => {
@@ -25,7 +26,7 @@ test('rollAffix: matching pool only, no duplicates, tiers capped by item level',
     assert.equal(AFFIXES[low.id].group, 'gathering');
     assert.notEqual(low.id, 'yield');
     assert.equal(low.tier, 1, 'ilvl 12 rolls tier 1 only');
-    const [lo, hi] = AFFIXES[low.id].tiers[0];
+    const [lo, hi] = AFFIX_RANGES[low.id][0];
     assert.ok(low.value >= lo && low.value <= hi);
     const high = rollAffix(rng, 'duskiron_sword', AFFIX_TIER_MIN_ILVL[2], [])!;
     assert.equal(AFFIXES[high.id].group, 'combat');
@@ -89,5 +90,38 @@ test('gathering, refining and crafting tool affixes change yield, inputs, wear a
     const gth = await c.gather(vein.id);
     assert.equal(gth.qty, (1 + 1) * 2, 'yield rolls one bonus item, double drop doubles it');
     assert.equal((await c.observe()).self.gear.tool?.wear, WEAR.perToolUse * 0.5);
+  } finally { await w.close(); }
+});
+
+test('catalog() carries no probabilities; chance-based affix values are hidden from players', async () => {
+  const w = await world();
+  try {
+    const c = await w.bot('Peeker');
+    const cat = await c.catalog();
+    const bad: string[] = [];
+    const walk = (v: unknown, path: string) => {
+      if (Array.isArray(v)) return v.forEach((x, i) => walk(x, `${path}[${i}]`));
+      if (typeof v === 'string') { if (/\d+(\.\d+)?\s*%\s*(chance|odds)|~\s*\d+\s*%|\d+\s*%\s*:/i.test(v)) bad.push(`${path}: "${v}"`); return; }
+      if (!v || typeof v !== 'object') return;
+      for (const [k, x] of Object.entries(v)) {
+        if (path !== 'catalog.affixes' && /chance|weight|odds|luck|prob|^tiers$|bonusOutput|bonusYield|extraAffix/i.test(k)) bad.push(`${path}.${k}`);
+        walk(x, `${path}.${k}`);
+      }
+    };
+    walk(cat, 'catalog');
+    for (const [id, m] of Object.entries(cat.mobs)) assert.ok(!Array.isArray(m.silver), `${id}.silver must not be a numeric range`);
+    assert.deepEqual(bad, []);
+    // An item with a chance affix shows its tier, not its value.
+    const g = w.server.game;
+    const p = g.players.get((await c.whoami()).playerId)!;
+    const id = 'copper_pickaxe#0badc0de';
+    g.uniques.set(id, { id, base: 'copper_pickaxe', ilvl: 40, rarity: 'magic', affixes: [{ id: 'double_drop', tier: 3, value: 15 }, { id: 'durable', tier: 1, value: 12 }], mods: 1, corrupted: false, craftedBy: 'x', craftedAt: 0 });
+    p.inventory[id] = 1;
+    const seen = (await c.inspect(id)).item.affixes;
+    assert.deepEqual(seen, [{ id: 'double_drop', tier: 3 }, { id: 'durable', tier: 1, value: 12 }]);
+    await c.equip(id);
+    assert.deepEqual((await c.observe()).self.gear.tool?.affixes, ['T3 a chance to double a gather or a hide drop', 'T1 12% less tool wear']);
+    const op = await w.operator();
+    assert.ok(op.bots.find((b: any) => b.id === p.id).gear.tool.affixes[0].includes('15'), 'the operator sees the real value');
   } finally { await w.close(); }
 });

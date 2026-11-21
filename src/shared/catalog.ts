@@ -71,12 +71,12 @@ export const ITEMS: Record<string, ItemDef> = {
   // Currency orbs: modify unique gear at the altar in town with item.modify (see ORBS).
   orb_transmute: { id: 'orb_transmute', name: 'Orb of Transmutation', kind: 'orb', tier: 1, description: 'Normal → magic with one affix.' },
   orb_augment: { id: 'orb_augment', name: 'Orb of Augmentation', kind: 'orb', tier: 1, description: 'Adds an affix to a magic item with room for one.' },
-  orb_alteration: { id: 'orb_alteration', name: 'Orb of Alteration', kind: 'orb', tier: 1, description: 'Rerolls a magic item: new 1–2 affixes.' },
+  orb_alteration: { id: 'orb_alteration', name: 'Orb of Alteration', kind: 'orb', tier: 1, description: 'Rerolls a magic item: new affixes (one, sometimes two).' },
   orb_scour: { id: 'orb_scour', name: 'Orb of Scouring', kind: 'orb', tier: 2, description: 'Removes every affix: back to normal.' },
   orb_annul: { id: 'orb_annul', name: 'Orb of Annulment', kind: 'orb', tier: 2, description: 'Removes one random affix.' },
   orb_regal: { id: 'orb_regal', name: 'Regal Orb', kind: 'orb', tier: 3, description: 'Magic → rare, adding one affix. Drops only from frontier wraiths (or enchanted from wraith essence).' },
-  orb_chaos: { id: 'orb_chaos', name: 'Chaos Orb', kind: 'orb', tier: 3, description: 'Rerolls a rare item: new 3–4 affixes. Drops only from frontier wraiths (or enchanted from wraith essence).' },
-  orb_vaal: { id: 'orb_vaal', name: 'Vaal Orb', kind: 'orb', tier: 3, description: 'Corrupts: ~25% one affix upgrades a tier, ~25% bricked (all affixes destroyed), ~50% unchanged. Corrupted items can never be modified again.' },
+  orb_chaos: { id: 'orb_chaos', name: 'Chaos Orb', kind: 'orb', tier: 3, description: 'Rerolls a rare item: new affixes (three, sometimes four). Drops only from frontier wraiths (or enchanted from wraith essence).' },
+  orb_vaal: { id: 'orb_vaal', name: 'Vaal Orb', kind: 'orb', tier: 3, description: 'Corrupts: one affix may jump a tier, the item may be bricked (all affixes destroyed), or nothing may change. Corrupted items can never be modified again.' },
   // Tools: equip one in the tool slot. Each job needs its own tool family (see TOOL_FAMILIES).
   copper_pickaxe: { id: 'copper_pickaxe', name: 'Copper Pickaxe', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['mining'], description: 'Tier 1. Mines veins (wilds and frontier).' },
   iron_pickaxe: { id: 'iron_pickaxe', name: 'Iron Pickaxe', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['mining'], description: 'Tier 2. Mines veins (wilds and frontier).' },
@@ -231,59 +231,40 @@ export interface AffixDef {
   group: GearGroup;
   /** `{v}` is replaced by the rolled value. */
   text: string;
-  /** Value range [min, max] for tiers 1 (weakest) to 3 (strongest). */
-  tiers: [[number, number], [number, number], [number, number]];
+  /** A chance-based effect: players see the tier but not the value (odds stay server-side). */
+  hiddenValue?: boolean;
 }
 
 /** Minimum item level for each affix tier (index 0 = tier 1). An item can only roll tiers its item level allows. */
 export const AFFIX_TIER_MIN_ILVL = [1, 20, 35];
-/** Relative odds of each allowed tier when an affix rolls (higher tiers are rarer). */
-export const AFFIX_TIER_WEIGHT = [6, 3, 1];
 
 const affix = (a: AffixDef): AffixDef => a;
 export const AFFIXES: Record<string, AffixDef> = {
   // Weapons and armor
-  damage: affix({ id: 'damage', group: 'combat', text: '+{v}% attack damage', tiers: [[4, 8], [9, 15], [16, 25]] }),
-  max_hp: affix({ id: 'max_hp', group: 'combat', text: '+{v} max HP', tiers: [[5, 10], [11, 20], [21, 35]] }),
-  attack_speed: affix({ id: 'attack_speed', group: 'combat', text: '{v}% shorter global cooldown after attacks', tiers: [[3, 5], [6, 9], [10, 15]] }),
-  guard: affix({ id: 'guard', group: 'combat', text: '{v}% shorter Evade and Brace cooldowns', tiers: [[5, 10], [11, 18], [19, 30]] }),
+  damage: affix({ id: 'damage', group: 'combat', text: '+{v}% attack damage' }),
+  max_hp: affix({ id: 'max_hp', group: 'combat', text: '+{v} max HP' }),
+  attack_speed: affix({ id: 'attack_speed', group: 'combat', text: '{v}% shorter global cooldown after attacks' }),
+  guard: affix({ id: 'guard', group: 'combat', text: '{v}% shorter Evade and Brace cooldowns' }),
   // Gathering tools
-  gather_speed: affix({ id: 'gather_speed', group: 'gathering', text: '{v}% faster gathering', tiers: [[4, 8], [9, 14], [15, 22]] }),
-  yield: affix({ id: 'yield', group: 'gathering', text: '+{v}% bonus yield (adds to the skill bonus, past its cap)', tiers: [[5, 12], [13, 25], [26, 40]] }),
-  double_drop: affix({ id: 'double_drop', group: 'gathering', text: '{v}% chance to double a gather or a hide drop', tiers: [[3, 6], [7, 11], [12, 18]] }),
-  durable: affix({ id: 'durable', group: 'gathering', text: '{v}% less tool wear', tiers: [[10, 20], [21, 35], [36, 55]] }),
-  shard_find: affix({ id: 'shard_find', group: 'gathering', text: '+{v}% chance to find an orb shard per gather or skinned kill', tiers: [[2, 4], [5, 7], [8, 12]] }),
+  gather_speed: affix({ id: 'gather_speed', group: 'gathering', text: '{v}% faster gathering' }),
+  yield: affix({ id: 'yield', group: 'gathering', text: 'more bonus yield (adds to the skill bonus, past its cap)', hiddenValue: true }),
+  double_drop: affix({ id: 'double_drop', group: 'gathering', text: 'a chance to double a gather or a hide drop', hiddenValue: true }),
+  durable: affix({ id: 'durable', group: 'gathering', text: '{v}% less tool wear' }),
+  shard_find: affix({ id: 'shard_find', group: 'gathering', text: 'a chance to find an orb shard per gather or skinned kill', hiddenValue: true }),
   // Refining tools
-  refine_output: affix({ id: 'refine_output', group: 'refining', text: '{v}% chance of one extra output per unit', tiers: [[4, 8], [9, 15], [16, 25]] }),
-  save_inputs: affix({ id: 'save_inputs', group: 'refining', text: '{v}% chance per unit to keep its inputs', tiers: [[3, 6], [7, 11], [12, 18]] }),
-  refine_speed: affix({ id: 'refine_speed', group: 'refining', text: '{v}% faster refining', tiers: [[5, 10], [11, 18], [19, 28]] }),
+  refine_output: affix({ id: 'refine_output', group: 'refining', text: 'a chance of one extra output per unit', hiddenValue: true }),
+  save_inputs: affix({ id: 'save_inputs', group: 'refining', text: 'a chance per unit to keep its inputs', hiddenValue: true }),
+  refine_speed: affix({ id: 'refine_speed', group: 'refining', text: '{v}% faster refining' }),
   // Crafting tools (hammers)
-  craft_ilvl: affix({ id: 'craft_ilvl', group: 'crafting', text: '+{v} item level on items you craft', tiers: [[1, 2], [3, 5], [6, 9]] }),
-  mod_odds: affix({ id: 'mod_odds', group: 'crafting', text: '{v}% better odds when you use orbs (higher affix tiers, safer Vaal)', tiers: [[5, 10], [11, 20], [21, 35]] }),
-  orb_fee: affix({ id: 'orb_fee', group: 'crafting', text: '{v}% lower orb station fees', tiers: [[5, 10], [11, 20], [21, 35]] }),
+  craft_ilvl: affix({ id: 'craft_ilvl', group: 'crafting', text: '+{v} item level on items you craft' }),
+  mod_odds: affix({ id: 'mod_odds', group: 'crafting', text: 'better odds when you use orbs (higher affix tiers, safer Vaal)', hiddenValue: true }),
+  orb_fee: affix({ id: 'orb_fee', group: 'crafting', text: '{v}% lower orb station fees' }),
 };
 
-export function affixText(id: string, value: number): string {
-  return (AFFIXES[id]?.text ?? id).replace('{v}', String(value));
-}
-
-/**
- * Rolls one affix for a base: an id from its group's pool not already on the item, a tier allowed by `ilvl`
- * (weighted toward low tiers; `luck` in [0, 1) shifts weight toward high tiers), and a value in that tier's range.
- * Returns null when no affix is left to roll. `rng` returns [0, 1).
- */
-export function rollAffix(rng: () => number, base: string, ilvl: number, exclude: string[], luck = 0): { id: string; tier: number; value: number } | null {
-  const group = gearGroup(base);
-  const pool = Object.values(AFFIXES).filter((a) => a.group === group && !exclude.includes(a.id));
-  if (!pool.length) return null;
-  const def = pool[Math.floor(rng() * pool.length)];
-  const allowed = AFFIX_TIER_MIN_ILVL.map((m, i) => (ilvl >= m ? i : -1)).filter((i) => i >= 0);
-  const weights = allowed.map((i) => AFFIX_TIER_WEIGHT[i] * (1 + luck * 3 * i));
-  let r = rng() * weights.reduce((a, b) => a + b, 0);
-  let t = allowed[0];
-  for (let k = 0; k < allowed.length; k++) { r -= weights[k]; if (r < 0) { t = allowed[k]; break; } }
-  const [lo, hi] = def.tiers[t];
-  return { id: def.id, tier: t + 1, value: lo + Math.floor(rng() * (hi - lo + 1)) };
+/** Readable affix line. A missing value (hidden from players) leaves the text without a number. */
+export function affixText(id: string, value?: number): string {
+  const t = AFFIXES[id]?.text ?? id;
+  return value === undefined ? t.replace(/\+?\{v\}%?\s*/, '') : t.replace('{v}', String(value));
 }
 
 export interface NodeDef { id: string; name: string; item: string; tier: number; skill: SkillId; maxCharges: number }
@@ -294,13 +275,15 @@ export const NODE_TYPES: Record<string, NodeDef> = {
   duskiron_vein: { id: 'duskiron_vein', name: 'Duskiron Vein', item: 'duskiron_ore', tier: 3, skill: 'mining', maxCharges: 6 },
 };
 
+/** How often a drop happens, in words. Exact odds are server-side only. */
+export type DropFrequency = 'always' | 'often' | 'sometimes' | 'rarely' | 'very rarely';
 /** `skin`: only drops when the killer has a skinning knife equipped (tier >= requiredToolTier(mob tier)). */
-export interface DropDef { item: string; min: number; max: number; chance: number; skin?: boolean }
-export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number }
+export interface DropInfo { item: string; frequency: DropFrequency; skin?: boolean }
+export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; respawnMs: number; silver: 'some' | 'more' | 'plenty'; drops: DropInfo[] }
 export const MOB_TYPES: Record<string, MobDef> = {
-  wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1, skin: true }, { item: 'orb_shard', min: 1, max: 1, chance: 0.12 }, { item: 'orb_transmute', min: 1, max: 1, chance: 0.02 }, { item: 'orb_alteration', min: 1, max: 1, chance: 0.015 }], respawnMs: 6000 },
-  boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1, skin: true }, { item: 'orb_shard', min: 1, max: 2, chance: 0.15 }, { item: 'orb_augment', min: 1, max: 1, chance: 0.02 }, { item: 'orb_scour', min: 1, max: 1, chance: 0.005 }, { item: 'orb_annul', min: 1, max: 1, chance: 0.004 }], respawnMs: 6000 },
-  wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }, { item: 'orb_shard', min: 1, max: 3, chance: 0.3 }, { item: 'orb_regal', min: 1, max: 1, chance: 0.03 }, { item: 'orb_chaos', min: 1, max: 1, chance: 0.03 }, { item: 'orb_vaal', min: 1, max: 1, chance: 0.02 }], respawnMs: 8000 },
+  wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, respawnMs: 6000, silver: 'some', drops: [{ item: 'rough_hide', frequency: 'always', skin: true }, { item: 'orb_shard', frequency: 'sometimes' }, { item: 'orb_transmute', frequency: 'rarely' }, { item: 'orb_alteration', frequency: 'rarely' }] },
+  boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, respawnMs: 6000, silver: 'more', drops: [{ item: 'rough_hide', frequency: 'always', skin: true }, { item: 'orb_shard', frequency: 'sometimes' }, { item: 'orb_augment', frequency: 'rarely' }, { item: 'orb_scour', frequency: 'very rarely' }, { item: 'orb_annul', frequency: 'very rarely' }] },
+  wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, respawnMs: 8000, silver: 'plenty', drops: [{ item: 'wraith_essence', frequency: 'always' }, { item: 'orb_shard', frequency: 'often' }, { item: 'orb_regal', frequency: 'rarely' }, { item: 'orb_chaos', frequency: 'rarely' }, { item: 'orb_vaal', frequency: 'rarely' }] },
 };
 
 export interface ZoneDef {
@@ -397,8 +380,8 @@ export function levelFor(xp: number): number {
  * - Focused skills earn `xpMult`× XP and count their full trained level.
  * - Unfocused skills still work and still earn XP, but count at most `unfocusedLevelCap` levels
  *   (enough for every tier-1 and tier-2 recipe). Refocusing later restores the full trained level: XP is never lost.
- * - Level perks: action speed −5%/level (floor 50%), gathering bonus yield +`bonusYieldPerLevel`/level (up to +`maxBonusYield` items),
- *   weapon damage (see COMBAT). Focused refining and crafting also get a `bonusOutputPerLevel`/level chance of one extra output per unit (up to `maxBonusOutput`).
+ * - Level perks: action speed −5%/level (floor 50%), more gathering yield as you level (up to a cap),
+ *   weapon damage (see COMBAT). Focused refining and crafting sometimes produce extra output, more often at higher levels.
  * - Tier-3 recipes (`requiresFocus`) can only be made by players focused in that recipe's skill.
  * - Adding a skill to a free slot is free. Dropping a focused skill is allowed once per `respecCooldownMs`.
  * Nobody can master the whole gathering → refining → crafting → combat chain alone: specialists trade with each other.
@@ -407,10 +390,6 @@ export const FOCUS = {
   slots: 3,
   xpMult: 2,
   unfocusedLevelCap: 3,
-  bonusYieldPerLevel: 0.1,
-  maxBonusYield: 2,
-  bonusOutputPerLevel: 0.05,
-  maxBonusOutput: 0.5,
   respecCooldownMs: 10 * 60_000,
 };
 
@@ -456,8 +435,8 @@ export type OrbId = 'transmute' | 'augment' | 'alteration' | 'regal' | 'chaos' |
 /**
  * Orb use (`item.modify` at the altar in town). Each use consumes one orb and pays a silver fee that is destroyed:
  * `baseFee × (1 + feeGrowth × item.mods)`, reduced by the modder's equipped hammer `orb_fee` affix and enchanting level
- * (`feeCutPerLevel` per effective level, up to `maxFeeCut`). Luck = hammer `mod_odds`% + `luckPerLevel` × enchanting level
- * (capped at `maxLuck`): it shifts affix tiers upward and makes Vaal safer.
+ * (`feeCutPerLevel` per effective level, up to `maxFeeCut`). The hammer's `mod_odds` affix and enchanting level also
+ * improve roll odds (higher affix tiers, safer Vaal); the odds themselves are server-side only.
  */
 export const ORBS = {
   items: { transmute: 'orb_transmute', augment: 'orb_augment', alteration: 'orb_alteration', regal: 'orb_regal', chaos: 'orb_chaos', scour: 'orb_scour', annul: 'orb_annul', vaal: 'orb_vaal' } as Record<OrbId, string>,
@@ -465,12 +444,6 @@ export const ORBS = {
   feeGrowth: 0.5,
   feeCutPerLevel: 0.02,
   maxFeeCut: 0.6,
-  luckPerLevel: 0.01,
-  maxLuck: 0.5,
-  /** Vaal outcome odds before luck: better, bricked (luck moves bricked odds into better). */
-  vaal: { better: 0.25, bricked: 0.25 },
-  /** Chance an Alteration rolls a second affix, and a Chaos a fourth. */
-  extraAffixChance: 0.35,
   /** Orbs crafted from this many shards. */
   shardsPerOrb: 10,
   /** Shards from salvaging a unique: tier shards + one per affix (+2 if rare). */
