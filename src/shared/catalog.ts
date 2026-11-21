@@ -1,6 +1,8 @@
 // Static game data shared by the server and the SDK.
 // Everything here is public knowledge: bots can fetch it with the `catalog` command.
 
+import { STARTERS } from './starters.ts';
+
 export type ZoneId = 'town' | 'wilds' | 'frontier';
 export type Safety = 'safe' | 'safe-wild' | 'lethal';
 export type StationId = 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench';
@@ -248,4 +250,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS };

@@ -11,6 +11,7 @@
     "start": "node src/server/main.ts",
     "demo": "node demo/run-demo.ts",
     "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "starters": "node scripts/starters.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
