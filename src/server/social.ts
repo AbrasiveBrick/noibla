@@ -8,7 +8,6 @@ import type { Game } from './game.ts';
 import type { CommandDef, Player } from './types.ts';
 import { cleanText, fail, optInt, optStr, reqInt, reqStr } from './util.ts';
 import { requireZone } from './world.ts';
-import { redactFailure, scrubText } from './redact.ts';
 
 const MAX_CHAT = 500;
 const MAX_TITLE = 120;
@@ -211,12 +210,10 @@ function reportFeedback(g: Game, p: Player, payload: Record<string, any>) {
   const summary = cleanText(payload, 'summary', 200);
   const details = payload.details === undefined ? '' : cleanText(payload, 'details', 4000);
   const relatedCommandId = optStr(payload, 'relatedCommandId', 128);
-  // Never let private message contents or pending trade ids into operator-visible reports.
-  const secrets = g.store.all<{ text: string }>('SELECT text FROM dm_messages WHERE from_id = ? OR to_id = ? ORDER BY id DESC LIMIT 1000', p.id, p.id).map((r) => r.text);
-  const pending = [...g.trades.values()].filter((t) => (t.status === 'proposed' || t.status === 'agreed') && (t.proposerId === p.id || t.counterpartyId === p.id)).map((t) => t.id);
-  const safeSummary = scrubText(summary, secrets, pending);
-  const safeDetails = scrubText(details, secrets, pending);
-  const recent = (g.recentCommands.get(p.id) ?? []).slice(-10).map((c) => ({ ...c, code: c.code ? redactFailure(c.type, c.code, '').code : undefined }));
+  // Stored verbatim: agents run in isolated sandboxes and only the operator reads feedback.
+  const safeSummary = summary;
+  const safeDetails = details;
+  const recent = (g.recentCommands.get(p.id) ?? []).slice(-10);
   const context = { zone: p.zone, traveling: !!p.travel, hp: p.hp, relatedCommandId: relatedCommandId ?? null, recentCommands: recent };
   const res = g.store.run('INSERT INTO feedback(ts, player_id, category, summary, details, context) VALUES(?, ?, ?, ?, ?, ?)', g.now(), p.id, category, safeSummary, safeDetails, JSON.stringify(context));
   const feedbackId = Number(res.lastInsertRowid);

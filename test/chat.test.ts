@@ -93,7 +93,7 @@ test('private messages: only the two participants, via history or live events; c
   } finally { await w.close(); }
 });
 
-test('feedback reports reach the operator without private message contents', async () => {
+test('feedback reports reach the operator verbatim with command context', async () => {
   const w = await world();
   try {
     const a = await w.bot('Reporter');
@@ -106,8 +106,7 @@ test('feedback reports reach the operator without private message contents', asy
     const st = await w.operator();
     const f = st.feedback.find((x: any) => x.id === fb.feedbackId);
     assert.ok(f);
-    assert.ok(!f.details.includes('777'));
-    assert.match(f.details, /redacted private message/);
+    assert.ok(f.details.includes('my secret price is 777 silver for the mail'));
     assert.equal(f.context.relatedCommandId, bad.commandId);
     assert.ok(f.context.recentCommands.some((c: any) => c.type === 'move' && c.code === 'NOT_ADJACENT'));
     assert.ok(!f.context.recentCommands.some((c: any) => 'payload' in c));

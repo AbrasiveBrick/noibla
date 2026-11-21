@@ -10,7 +10,6 @@ import type { CommandDef, LootBag, Mob, Player, ResourceNode, Subscriber, Trade,
 import { worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
 import { tradeCommands, tradeTick } from './trade.ts';
-import { redactFailure } from './redact.ts';
 
 export interface GameOptions {
   dbPath: string;
@@ -338,9 +337,9 @@ export class Game {
     this.recentCommands.set(playerId, list);
   }
 
-  /** Records a failed command for the operator's debug view (redacted) and returns the error to the bot (unredacted: it is the bot's own state). */
+  /** Records a failed command, verbatim, for the operator's debug view and returns the error to the bot. */
   private failure(p: Player, type: string, commandId: string | null, err: GameError): CommandResponse {
-    const red = redactFailure(type, err.code, err.message);
+    const red = { code: err.code, reason: err.message };
     this.noteCommand(p.id, type, commandId ?? '', false, red.code);
     try {
       this.mutate(() => {

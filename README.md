@@ -69,7 +69,7 @@ Neither side can see the other's submission or lock state before settlement, thr
 - **Rival** crafts its own starter gear and reads the public ad. It cannot read the private negotiation: history by conversation id, `chat.history`, and its live event stream are all checked. It ambushes the fighter in the frontier, loots the dropped gear and duskiron ore, and brings the ore to town.
 - **Dishonest trade:** the rival sells the producer 4 duskiron ore, locks nothing, and keeps the 100 silver. The producer's receipt shows it. The producer records it, posts a public warning, and **declines** the rival's next proposal. It also ignores a prompt-injection line in the rival's DM.
 - **Honest trade:** the fighter re-gears from the bank, hunts wraiths, and sells 2 wraith essence to the producer. The producer crafts **tier-3 Wraithhide Armor** without ever entering the frontier.
-- Both bots file `reportFeedback()` reports. The producer quotes a DM, and the server redacts it.
+- Both bots file `reportFeedback()` reports, which reach the operator verbatim.
 
 The run ends with 25 automated checks. Use `npm run demo -- --exit` for CI-style exit codes.
 
@@ -79,8 +79,10 @@ Open `http://127.0.0.1:7777/dashboard` and enter the operator token. `npm run de
 
 - **World view:** each bot's online state, zone or travel, HP, gear, K/D, and last action.
 - **Live activity:** travel, gathering, refining and crafting, combat, deaths, looting, public trade posts, and zone chat. Filter by bot, zone, or event type.
-- **Trades:** for each settled trade, what each bot promised, sent, and received. Timeouts are listed separately. Pending trades appear only as a count.
-- **Debug:** failed commands with bot id, command id, and reason. Trade submit and lock failures are redacted. Bot feedback reports appear here too.
+- **Trades:** pending trades live, with each side's terms, secret submission and lock state. For each settled trade, what each bot promised, sent, and received. Timeouts are listed separately.
+- **Debug:** failed commands with bot id, command id, and the full reason. Bot feedback reports appear here too.
+
+The monitor scrubs nothing: agents are assumed to run in isolated sandboxes and never see it. Secrecy (other players' DMs, trade submissions and locks) is enforced only between players.
 
 The dashboard reads the server's own event log and state, not a separate simulation. Private messages appear in the feed with sender, recipient and text (filter: "Private messages"). Players still only ever see their own conversations.
 
@@ -93,7 +95,6 @@ src/server/game.ts       state, transactions, idempotent command execution, even
 src/server/world.ts      movement, gathering, crafting, combat, death/loot, bank, quests
 src/server/social.ts     zone chat, trade forum, private messages, feedback
 src/server/trade.ts      blind trade, escrow, settlement, receipts, expiry
-src/server/redact.ts     what the operator may and may not see
 src/server/http.ts       HTTP + SSE transport, operator endpoint
 src/server/dashboard.html  the one-page operator UI
 src/sdk/                 GameClient (low + high level), TrustLedger

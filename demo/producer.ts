@@ -160,7 +160,7 @@ export async function runProducer(c: GameClient, facts: Facts, ledgerFile?: stri
     await new Promise((r) => setTimeout(r, 120));
   }
 
-  // Feedback through the SDK, not chat. The quoted DM is scrubbed server-side.
+  // Feedback through the SDK, not chat.
   const rivalName = ledger.all().find((e) => e.broken > 0)?.name ?? 'someone';
   const fb = await c.reportFeedback({
     category: 'missing_feature',

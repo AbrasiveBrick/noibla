@@ -15,6 +15,13 @@ const DEFAULT_LOCK_TIMEOUT_MS = 2 * 60_000;
 const MAX_OPEN_TRADES = 20;
 
 const isOpen = (t: Trade) => t.status === 'proposed' || t.status === 'agreed';
+
+/** Operator-only record of each trade step (the counterparty never sees it). */
+function opLog(g: Game, p: Player, t: Trade, action: string, items?: ItemStack[]) {
+  const withName = g.players.get(other(t, p.id))?.name ?? 'unknown';
+  g.setLastAction(p, 'trade', `${action} ${t.id} with ${withName}${items ? `: ${describe(items)}` : ''}`);
+  g.emit('trade.activity', { kind: 'operator' }, { tradeId: t.id, action, playerId: p.id, name: p.name, withName, items: items ?? null, terms: { [p.name]: toStacks(t.terms[p.id]), [withName]: toStacks(t.terms[other(t, p.id)]) } }, { zone: 'town', actor: p });
+}
 const other = (t: Trade, id: string) => (t.proposerId === id ? t.counterpartyId : t.proposerId);
 
 export function tradeView(g: Game, t: Trade, viewerId: string): TradeView {
@@ -72,7 +79,7 @@ function propose(g: Game, p: Player, payload: Record<string, any>) {
   g.trades.set(t.id, t);
   g.markTrade(t);
   g.emit('trade.proposed', { kind: 'player', playerId: to }, { trade: tradeView(g, t, to) }, {});
-  g.setLastAction(p, 'trade', 'trade activity');
+  opLog(g, p, t, 'proposed');
   return { trade: tradeView(g, t, p.id) };
 }
 
@@ -87,7 +94,7 @@ function accept(g: Game, p: Player, payload: Record<string, any>) {
   t.lockDeadline = now + t.lockTimeoutMs;
   g.markTrade(t);
   for (const id of [t.proposerId, t.counterpartyId]) g.emit('trade.agreed', { kind: 'player', playerId: id }, { trade: tradeView(g, t, id) }, {});
-  g.setLastAction(p, 'trade', 'trade activity');
+  opLog(g, p, t, 'accepted terms of');
   return { trade: tradeView(g, t, p.id) };
 }
 
@@ -100,7 +107,7 @@ function close(g: Game, p: Player, payload: Record<string, any>, kind: 'declined
   t.closedAt = g.now();
   g.markTrade(t);
   for (const id of [t.proposerId, t.counterpartyId]) g.emit(kind === 'declined' ? 'trade.declined' : 'trade.cancelled', { kind: 'player', playerId: id }, { trade: tradeView(g, t, id) }, {});
-  g.setLastAction(p, 'trade', 'trade activity');
+  opLog(g, p, t, kind);
   return { trade: tradeView(g, t, p.id) };
 }
 
@@ -125,7 +132,7 @@ function submit(g: Game, p: Player, payload: Record<string, any>) {
   const t = getTrade(g, p, payload);
   requireLockable(g, p, t);
   setSubmission(g, p, t, stacks(payload.items ?? [], 'items'));
-  g.setLastAction(p, 'trade', 'trade activity');
+  opLog(g, p, t, 'submitted to', toStacks(t.subs[p.id].items));
   return { trade: tradeView(g, t, p.id) };
 }
 
@@ -139,7 +146,7 @@ function lock(g: Game, p: Player, payload: Record<string, any>) {
   sub.lockedAt = g.now();
   t.subs[p.id] = sub;
   g.markTrade(t);
-  g.setLastAction(p, 'trade', 'trade activity');
+  opLog(g, p, t, 'locked', toStacks(sub.items));
   const both = t.subs[t.proposerId]?.locked && t.subs[t.counterpartyId]?.locked;
   if (both) settle(g, t);
   return { trade: tradeView(g, t, p.id), receipt: both ? receiptFor(g, t.id, p.id) : null };

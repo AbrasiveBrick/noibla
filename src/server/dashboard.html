@@ -123,7 +123,9 @@
     </section>
 
     <section>
-      <h2>Trades <span class="count muted">promised vs. actually changed hands</span></h2>
+      <h2>Pending trades <span class="count muted">live: terms, secret submissions, locks</span></h2>
+      <div class="body" id="pending"></div>
+      <h2 style="border-top:1px solid var(--line)">Settled trades <span class="count muted">promised vs. actually changed hands</span></h2>
       <div class="body" id="settled"></div>
       <h2 style="border-top:1px solid var(--line)">Timeouts <span class="count muted">nothing changed hands</span></h2>
       <div class="body" id="timeouts"></div>
@@ -133,7 +135,7 @@
       <h2>Debug: failed commands <span class="count muted" id="failCount"></span>
         <label class="chk" style="margin-left:auto"><input type="checkbox" id="fTransient"> include transient (busy, cooldown, travel)</label>
       </h2>
-      <div class="note">Trade submission/lock failures are redacted so nothing reveals a pending trade.</div>
+      <div class="note">Shown verbatim, including trade submission and lock failures.</div>
       <div class="body"><table><thead><tr><th>Time</th><th>Bot</th><th>Command ID</th><th>Command</th><th>Code</th><th>Reason</th></tr></thead><tbody id="failures"></tbody></table></div>
     </section>
 
@@ -154,7 +156,7 @@
     'player.death': 'deaths', 'player.respawn': 'deaths',
     'loot.dropped': 'looting', 'loot.taken': 'looting', 'loot.expired': 'looting',
     'forum.thread': 'forum', 'forum.reply': 'forum', 'chat.message': 'chat',
-    'trade.closed': 'trade', bank: 'bank', quest: 'bank',
+    'trade.closed': 'trade', 'trade.activity': 'trade', bank: 'bank', quest: 'bank',
     'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'dm',
     'command.failed': 'debug', feedback: 'debug',
   };
@@ -231,6 +233,7 @@
       case 'dm.sent': return d.text === undefined
         ? `<b>${esc(d.name)}</b> sent a private message`
         : `<b>${esc(d.name)}</b> → <b>${esc(d.toName)}</b> <span class="muted">[private]</span> <span class="quote">“${esc(d.text)}”</span>`;
+      case 'trade.activity': return `<b>${esc(d.name)}</b> ${esc(d.action)} <span class="mono">${esc(d.tradeId)}</span> with ${esc(d.withName)}${d.items ? `: ${stacks(d.items)}` : ''}`;
       case 'trade.closed': return d.outcome === 'settled'
         ? `Trade settled: ${d.parties.map((p) => `<b>${esc(p.name)}</b> ${p.keptWord ? '<span class="kept">kept word</span>' : '<span class="broke">broke word</span>'}`).join(' · ')}`
         : `Trade timed out between ${d.parties.map((p) => `<b>${esc(p.name)}</b>`).join(' and ')} — nothing changed hands`;
@@ -284,6 +287,11 @@
       s.trades.timeouts.map((tr) => tr.parties.map((p, i) => `<tr>${i === 0 ? `<td rowspan="2" class="mono">${t(tr.closedAt)}<div class="muted">${esc(tr.tradeId)}</div></td>` : ''}
         <td><b>${esc(p.name)}</b></td><td>${stacks(p.promised)}</td><td>${p.locked ? 'yes' : '<b>no</b>'}</td></tr>`).join('')).join('')
     }</tbody></table>` : '<div class="empty">No timed-out trades.</div>';
+
+    $('pending').innerHTML = s.trades.pending.length ? `<table><thead><tr><th>Trade</th><th>Bot</th><th>Promised</th><th>Submitted</th><th>Locked</th></tr></thead><tbody>${
+      s.trades.pending.map((tr) => tr.parties.map((p, i) => `<tr>${i === 0 ? `<td rowspan="2" class="mono">${esc(tr.tradeId)}<div class="muted">${esc(tr.status)}${tr.lockDeadline ? ` · ${Math.max(0, Math.round((tr.lockDeadline - s.now) / 1000))}s left` : ''}</div></td>` : ''}
+        <td><b>${esc(p.name)}</b></td><td>${stacks(p.promised)}</td><td>${p.submitted ? stacks(p.submitted) : '<span class="muted">—</span>'}</td><td>${p.locked ? '<b>yes</b>' : 'no'}</td></tr>`).join('')).join('')
+    }</tbody></table>` : '<div class="empty">No pending trades.</div>';
 
     // failures
     const showT = $('fTransient').checked;

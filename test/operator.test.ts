@@ -20,7 +20,7 @@ test('operator and bot credentials are separate', async () => {
   } finally { await w.close(); }
 });
 
-test('debug view lists failed commands with bot and command ids, redacting pending-trade details', async () => {
+test('debug view lists failed commands verbatim; pending trades show submissions and locks', async () => {
   const w = await world();
   try {
     const a = await w.bot('Trader');
@@ -35,19 +35,22 @@ test('debug view lists failed commands with bot and command ids, redacting pendi
     assert.equal(bad.ok, false);
     const st = await w.operator();
     const lock = st.failures.find((f: any) => f.commandId === 'second-lock');
-    assert.equal(lock.code, 'TRADE_REJECTED');
-    assert.match(lock.reason, /redacted/);
-    assert.ok(!/already locked/i.test(JSON.stringify(st)));
+    assert.equal(lock.code, 'TRADE_STATE');
+    assert.match(lock.reason, /already locked/);
     const mv = st.failures.find((f: any) => f.commandId === 'bad-move');
     assert.equal(mv.code, 'BAD_REQUEST');
     assert.equal(mv.name, (await a.whoami()).name);
-    // World view: last action for trade work stays generic.
+    // Nothing is hidden from the operator: last action, live trade steps, submissions and locks.
     const bot = st.bots.find((x: any) => x.id === a.playerId);
-    assert.equal(bot.lastAction.summary, 'trade activity');
-    // Pending trades appear only as a count.
+    assert.match(bot.lastAction.summary, new RegExp(`^locked ${trade.id}`));
+    assert.ok(st.events.some((e: any) => e.type === 'trade.activity' && e.data.tradeId === trade.id && e.data.action === 'locked'));
     assert.equal(st.trades.pendingCount, 1);
+    const [mine, theirs] = st.trades.pending[0].parties;
+    assert.deepEqual(mine.submitted, [{ item: 'silver', qty: 2 }]);
+    assert.equal(mine.locked, true);
+    assert.equal(theirs.submitted, null);
+    assert.equal(theirs.locked, false);
     assert.equal(st.trades.settled.length + st.trades.timeouts.length, 0);
-    assert.ok(!JSON.stringify(st).includes(trade.id));
   } finally { await w.close(); }
 });
 
