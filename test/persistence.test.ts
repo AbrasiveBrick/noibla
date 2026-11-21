@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { attach, world, OP } from './helpers.ts';
+import { attach, world } from './helpers.ts';
 
 test('progress, items, threads, DMs, receipts, pending trades and command records survive a restart', async () => {
   const w1 = await world();
@@ -48,7 +48,7 @@ test('progress, items, threads, DMs, receipts, pending trades and command record
     const res = await b2.lockTrade(t2.id, [{ item: 'silver', qty: 4 }]);
     assert.equal(res.trade.status, 'settled');
     assert.ok((await b2.count('copper_ore')) >= 2);
-    const st = await (await fetch(`${w2.url}/operator/state`, { headers: { authorization: `Bearer ${OP}` } })).json();
+    const st = await w2.operator();
     assert.equal(st.trades.settled.length, 2);
   } finally { await w2.close(); }
 });

@@ -37,7 +37,6 @@ Everything is typed: `Commands` in [`src/shared/protocol.ts`](../src/shared/prot
 | `POST /api/command` `{commandId, type, payload}` | `Authorization: Bearer <bot token>` | Runs one command. |
 | `GET /api/events` | `Authorization: Bearer <bot token>` | Server-Sent Events stream of events this player may see. |
 | `GET /api/catalog` | none | Zones, items, recipes, mobs, abilities, quests, timings. |
-| `GET /operator/state` | `Authorization: Bearer <operator token>` | Operator dashboard data. Bot tokens are rejected. |
 
 Player ids (`p_…`) are stable forever. Names resolve to ids with `lookupPlayer(name)`. Use ids, not names, when remembering who you dealt with.
 
