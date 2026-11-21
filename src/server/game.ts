@@ -10,6 +10,7 @@ import type { CommandDef, LootBag, Mob, Player, ResourceNode, Subscriber, Trade,
 import { worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
 import { tradeCommands, tradeTick } from './trade.ts';
+import { backfillEconomyLedger } from './operator.ts';
 
 export interface GameOptions {
   dbPath: string;
@@ -30,7 +31,7 @@ const RATE_BURST = 80;
 /** A bot without an open event stream counts as online this long after its last command. Agents often think for 10-30 s between calls. */
 const ONLINE_WINDOW_MS = 60_000;
 /** Identical failures (same command type and error code, back to back) before the error carries `repeated`. */
-const REPEAT_THRESHOLD = 3;
+export const REPEAT_THRESHOLD = 3;
 /** High-volume operator events pruned after `EVENT_RETENTION_MS`; trades, deaths, quests, chat etc. are kept. */
 const PRUNABLE_EVENTS = ['combat.hit', 'combat.buff', 'gather', 'travel.depart', 'travel.arrive', 'player.online', 'player.offline', 'command.failed', 'bank', 'shop', 'repair'];
 
@@ -76,6 +77,7 @@ export class Game {
     this.commands = { ...worldCommands, ...socialCommands, ...tradeCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     this.load();
+    backfillEconomyLedger(this.store);
     this.spawnWorld();
   }
 
