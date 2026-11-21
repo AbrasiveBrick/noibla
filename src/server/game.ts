@@ -8,7 +8,7 @@ import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
 import type { UniqueItem } from '../shared/protocol.ts';
 import type { CommandDef, LootBag, Mob, Player, ResourceNode, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
-import { worldCommands, worldTick, maxHp } from './world.ts';
+import { bindUniques, worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
 import { tradeCommands, tradeTick } from './trade.ts';
 import { backfillEconomyLedger } from './operator.ts';
@@ -85,6 +85,7 @@ export class Game {
     this.commands = { ...worldCommands, ...socialCommands, ...tradeCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     this.load();
+    bindUniques(this.uniques);
     backfillEconomyLedger(this.store);
     this.spawnWorld();
   }

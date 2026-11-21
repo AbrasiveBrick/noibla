@@ -26,6 +26,7 @@ Requires Node 24+ (runs TypeScript directly and uses the built-in `node:sqlite`)
 - **Gear makes the build:** no weapon gives Punch; swords give Slash and Heavy Strike; leather gives Evade; mail gives Brace.
 - **Economy chain:** kill mobs for silver and hides → gather ore and wood → refine bars, planks and leather → craft tools, weapons and armor. Starter and tier-2 gear come entirely from safe zones.
 - **Unique gear:** crafted weapons, armor and tools are unique items with an item level set by the crafter's skill and the base tier, so crafters stay the only source of modifiable bases.
+- **Affixes by job:** unique gear rolls affixes from its own pool (3 tiers, capped by item level): combat stats on weapons and armor, speed/yield/double drops on gathering tools, output and saved inputs on refining tools, item level and orb odds/fees on hammers.
 - **Job tools:** a third equipment slot, `tool`. Each job needs its own tool family equipped (pickaxe, axe, skinning knife, tongs, saw, needle, hammer) in copper, iron or duskiron; tier-3 work needs iron tools. Everyone starts with a copper kit; better tools come from toolcrafters.
 - **Frontier exclusives:** duskiron ore and wraith essence only spawn in the frontier. No recipe or quest creates them. They feed the tier-3 recipes (duskiron sword, wraithhide armor) and can be carried home and traded.
 - **Safe forever:** banked items and skill progress.

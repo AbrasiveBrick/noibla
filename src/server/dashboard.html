@@ -419,7 +419,8 @@
     const sp = (label, pts, cur) => `<span class="muted">${label}</span>${sparkline(pts)}<b class="num">${fmt(cur)}</b>`;
     const focus = b.focus || [];
     const skills = Object.entries(b.skillLevels).map(([k, v]) => `<span class="${v ? '' : 'zero'}"${focus.includes(k) ? ' title="focus skill"' : ''}>${focus.includes(k) ? '★ ' : ''}${esc(k)}</span><span class="num ${v ? '' : 'zero'}">${v}</span>`).join('');
-    const gear = Object.entries(b.gear).map(([slot, g]) => `<div><span class="muted">${esc(slot)}</span> ${esc(nm(g.item))}${g.broken ? ' <span class="chip bad">broken</span>' : ''}
+    const gear = Object.entries(b.gear).map(([slot, g]) => `<div><span class="muted">${esc(slot)}</span> ${esc(nm(g.item))}${g.ilvl ? ` <span class="chip ${g.rarity === 'rare' ? 'warn' : ''}" title="item level ${g.ilvl}">${esc(g.rarity)} · ilvl ${g.ilvl}</span>` : ''}${g.corrupted ? ' <span class="chip bad">corrupted</span>' : ''}${g.broken ? ' <span class="chip bad">broken</span>' : ''}
+      ${(g.affixes || []).map((a) => `<div class="muted affix">${esc(a)}</div>`).join('')}
       <div class="wear ${g.broken ? 'broken' : ''}" title="wear ${g.wear}/${100}"><i style="width:${Math.min(100, g.wear)}%"></i></div>
       <span class="muted">wear ${g.wear}% · repair ${g.repairCost ? `${g.repairCost} silver` : 'not needed'}</span></div>`).join('') || '<span class="muted">nothing equipped</span>';
     const quests = b.quests.map((q) => `<div>${esc(q.name)} <span class="muted">${q.status === 'complete' ? 'ready to claim' : `${q.progress}/${q.goal}`}</span></div>`).join('') || '<span class="muted">none</span>';
