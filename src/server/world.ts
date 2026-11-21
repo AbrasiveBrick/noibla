@@ -1,11 +1,12 @@
 // World rules: observation, movement, gathering, refining, crafting,
 // equipment, combat, death & loot, banking, quests.
 
+import { randomBytes } from 'node:crypto';
 import {
-  ABILITIES, BASE_HP, SLOTS, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
+  ABILITIES, BASE_HP, SLOTS, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
   effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
-import type { AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, ZoneView } from '../shared/protocol.ts';
+import type { UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, ZoneView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Mob, Player } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
@@ -13,12 +14,12 @@ import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, remove
 // ---------- derived stats ----------
 
 export function maxHp(p: Player): number {
-  const armor = p.equipment.armor ? ITEMS[p.equipment.armor] : undefined;
+  const armor = p.equipment.armor ? itemDef(p.equipment.armor) : undefined;
   return BASE_HP + Math.round((armor?.hpBonus ?? 0) * gearMultiplier(p, 'armor'));
 }
 
 function defense(p: Player): number {
-  const armor = p.equipment.armor ? ITEMS[p.equipment.armor] : undefined;
+  const armor = p.equipment.armor ? itemDef(p.equipment.armor) : undefined;
   return (armor?.defense ?? 0) * gearMultiplier(p, 'armor');
 }
 
@@ -34,7 +35,7 @@ export function gearMultiplier(p: Player, slot: Slot): number {
 
 export function repairCost(item: string, wear: number): number {
   if (wear <= 0) return 0;
-  return Math.ceil(((WEAR.repairCostByTier[ITEMS[item]?.tier ?? 0] ?? 0) * wear) / WEAR.max);
+  return Math.ceil(((WEAR.repairCostByTier[itemDef(item)?.tier ?? 0] ?? 0) * wear) / WEAR.max);
 }
 
 export function gearView(p: Player): Partial<Record<Slot, GearWearView>> {
@@ -88,17 +89,17 @@ export function focusView(g: Game, p: Player): FocusView {
 /** Abilities come from gear only: no classes. */
 export function abilitiesOf(p: Player): { id: AbilityId; source: string }[] {
   const out: { id: AbilityId; source: string }[] = [];
-  const weapon = p.equipment.weapon ? ITEMS[p.equipment.weapon] : undefined;
+  const weapon = p.equipment.weapon ? itemDef(p.equipment.weapon) : undefined;
   if (weapon?.abilities) for (const a of weapon.abilities) out.push({ id: a, source: weapon.id });
   else out.push({ id: 'punch', source: 'unarmed' });
-  const armor = p.equipment.armor ? ITEMS[p.equipment.armor] : undefined;
+  const armor = p.equipment.armor ? itemDef(p.equipment.armor) : undefined;
   if (armor?.abilities) for (const a of armor.abilities) if (!out.some((o) => o.id === a)) out.push({ id: a, source: armor.id });
   return out;
 }
 
 /** Tier of the equipped tool when it does `job`, else 0. */
 export function equippedToolTier(p: Player, job: ToolJob): number {
-  const def = p.equipment.tool ? ITEMS[p.equipment.tool] : undefined;
+  const def = p.equipment.tool ? itemDef(p.equipment.tool) : undefined;
   return def?.toolFor?.includes(job) ? def.toolTier ?? 0 : 0;
 }
 
@@ -180,6 +181,7 @@ export function observe(g: Game, p: Player): Observation {
       quests: questViews(p),
       focus: focusView(g, p),
       gear: gearView(p),
+      uniques: uniquesOf(g, p),
     },
     zone: p.zone && !p.travel ? zoneView(g, p.zone, p.id) : null,
     unreadDms: unread,
@@ -254,8 +256,8 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
 
 function toolHint(p: Player, job: ToolJob, minTier: number): string {
   const family = TOOL_FAMILIES[job];
-  const fits = (item: string) => { const d = ITEMS[item]; return !!d?.toolFor?.includes(job) && (d.toolTier ?? 0) >= minTier; };
-  const carried = Object.keys(p.inventory).filter((i) => (p.inventory[i] ?? 0) > 0 && fits(i)).sort((a, b) => (ITEMS[a].toolTier ?? 0) - (ITEMS[b].toolTier ?? 0))[0];
+  const fits = (item: string) => { const d = itemDef(item); return !!d?.toolFor?.includes(job) && (d.toolTier ?? 0) >= minTier; };
+  const carried = Object.keys(p.inventory).filter((i) => (p.inventory[i] ?? 0) > 0 && fits(i)).sort((a, b) => (itemDef(a)!.toolTier ?? 0) - (itemDef(b)!.toolTier ?? 0))[0];
   if (carried) return `you carry ${carried}: equip it first with equip("${carried}") (the SDK helpers gatherItem/refineItem/craftItem do this for you).`;
   const tool = Object.values(ITEMS).filter((i) => fits(i.id)).sort((a, b) => (a.toolTier ?? 0) - (b.toolTier ?? 0))[0];
   if (!tool) return `no ${family} of tier ${minTier}+ exists`;
@@ -296,7 +298,8 @@ function makeItem(kind: 'refine' | 'craft') {
       for (let i = 0; i < count; i++) if (g.rng() < chance) bonus++;
     }
     const output: ItemStack = { item: r!.output.item, qty: r!.output.qty * count + bonus };
-    addItems(p.inventory, [output]);
+    const made = isGearKind(output.item) ? createUniques(g, p, output.item, output.qty, itemLevel(r!.tier, level)) : null;
+    addItems(p.inventory, made ? made.map((u) => ({ item: u.id, qty: 1 })) : [output]);
     const xp = gainXp(p, r!.skill, XP[kind](r!.tier) * count);
     const base = kind === 'refine' ? TIMING.refineMs : TIMING.craftMs;
     const busy = g.ms(base * count * Math.max(0.5, 1 - 0.05 * level) * slow);
@@ -306,17 +309,40 @@ function makeItem(kind: 'refine' | 'craft') {
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
     g.markPlayer(p);
-    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * count })), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}) };
+    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * count })), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(made ? { items: made } : {}) };
   };
 }
+
+/** Weapons, armor and tools are crafted as unique items. */
+function isGearKind(base: string): boolean { const k = ITEMS[base]?.kind; return k === 'weapon' || k === 'armor' || k === 'tool'; }
+
+/** Item level of a crafted base: 10 × tier + the crafter's effective skill level. */
+export function itemLevel(tier: number, level: number): number { return 10 * tier + level; }
+
+function createUniques(g: Game, p: Player, base: string, qty: number, ilvl: number): UniqueItem[] {
+  const out: UniqueItem[] = [];
+  for (let i = 0; i < qty; i++) {
+    let id: string;
+    do id = `${base}${UNIQUE_SEP}${randomHex()}`; while (g.uniques.has(id));
+    const u: UniqueItem = { id, base, ilvl, rarity: 'normal', affixes: [], mods: 0, corrupted: false, craftedBy: p.name, craftedAt: g.now() };
+    g.uniques.set(id, u);
+    g.markUnique(u);
+    out.push(u);
+  }
+  return out;
+}
+
+function randomHex(): string { return randomBytes(4).toString('hex'); }
 
 // ---------- equipment ----------
 
 function equip(g: Game, p: Player, payload: Record<string, any>) {
-  const item = reqStr(payload, 'item', 60);
-  const def = ITEMS[item];
-  if (!def?.slot) fail('NOT_EQUIPPABLE', `${item} cannot be equipped`);
+  const asked = reqStr(payload, 'item', 60);
+  const def = itemDef(asked);
+  if (!def?.slot) fail('NOT_EQUIPPABLE', `${asked} cannot be equipped`);
   if (p.travel) fail('TRAVELING', 'cannot change gear while traveling', p.travel.arriveAt - g.now());
+  // A base id picks a carried copy: the plain item first, else your best unique of that base.
+  const item = isUnique(asked) || (p.inventory[asked] ?? 0) > 0 ? asked : bestUnique(g, p.inventory, asked) ?? asked;
   removeItems(p.inventory, [{ item, qty: 1 }]);
   const slot = def!.slot!;
   const prev = p.equipment[slot];
@@ -326,6 +352,26 @@ function equip(g: Game, p: Player, payload: Record<string, any>) {
   g.setLastAction(p, 'equip', `equipped ${item}`);
   g.markPlayer(p);
   return { equipment: { ...p.equipment } };
+}
+
+/** Highest-item-level unique of `base` in the bag. */
+function bestUnique(g: Game, bag: Record<string, number>, base: string): string | undefined {
+  return Object.keys(bag).filter((k) => bag[k] > 0 && isUnique(k) && baseOf(k) === base)
+    .sort((a, b) => (g.uniques.get(b)?.ilvl ?? 0) - (g.uniques.get(a)?.ilvl ?? 0) || a.localeCompare(b))[0];
+}
+
+/** Every unique the player owns (carried, equipped, banked), for observation. */
+function uniquesOf(g: Game, p: Player): UniqueItem[] {
+  const ids = new Set<string>([...Object.keys(p.inventory), ...Object.keys(p.bank), ...Object.values(p.equipment).filter((x): x is string => !!x)]);
+  return [...ids].filter(isUnique).sort().map((id) => g.uniques.get(id)).filter((u): u is UniqueItem => !!u);
+}
+
+/** Public details of any unique item: anyone can inspect an id they were offered. */
+function inspect(g: Game, _p: Player, payload: Record<string, any>) {
+  const id = reqStr(payload, 'item', 60);
+  const u = g.uniques.get(id);
+  if (!u) fail('NOT_FOUND', `no unique item ${id}`, undefined, 'unique ids look like iron_sword#3f9a1c2b; see observe().self.uniques');
+  return { item: u! };
 }
 
 function unequip(g: Game, p: Player, payload: Record<string, any>) {
@@ -368,7 +414,7 @@ function pickAbility(g: Game, p: Player, requested: AbilityId | undefined): Abil
 
 function attackDamage(p: Player, ability: AbilityId): { damage: number; skill: SkillId } {
   const def = ABILITIES[ability];
-  const weapon = p.equipment.weapon ? ITEMS[p.equipment.weapon] : undefined;
+  const weapon = p.equipment.weapon ? itemDef(p.equipment.weapon) : undefined;
   const skill: SkillId = weapon?.weaponSkill ?? 'unarmed';
   const base = def.flatDamage ?? (weapon?.power ?? 0) * gearMultiplier(p, 'weapon') * (def.powerMult ?? 1);
   const bonusLevels = Math.min(skillLevel(p, skill), COMBAT.damageBonusMaxLevel);
@@ -565,8 +611,8 @@ function loot(g: Game, p: Player, payload: Record<string, any>) {
   const zone = requireArrived(g, p);
   const bag = g.bags.get(bagId);
   if (!bag || bag.zone !== zone) fail('NOT_FOUND', `no loot bag ${bagId} in ${zone}`);
-  const want = payload.items === undefined ? toStacks(bag!.items) : stacks(payload.items, 'items', false);
-  removeItems(bag!.items, want);
+  const asked = payload.items === undefined ? toStacks(bag!.items) : stacks(payload.items, 'items', false);
+  const want = removeItems(bag!.items, asked);
   addItems(p.inventory, want);
   g.markBag(bag!);
   if (Object.keys(bag!.items).length === 0) g.bags.delete(bag!.id);
@@ -581,9 +627,9 @@ function loot(g: Game, p: Player, payload: Record<string, any>) {
 function bankOp(kind: 'deposit' | 'withdraw') {
   return (g: Game, p: Player, payload: Record<string, any>) => {
     requireZone(g, p, 'town', 'the bank');
-    const items = stacks(payload.items, 'items', false);
-    if (kind === 'deposit') { removeItems(p.inventory, items); addItems(p.bank, items); }
-    else { removeItems(p.bank, items); addItems(p.inventory, items); }
+    const asked = stacks(payload.items, 'items', false);
+    const items = kind === 'deposit' ? removeItems(p.inventory, asked) : removeItems(p.bank, asked);
+    addItems(kind === 'deposit' ? p.bank : p.inventory, items);
     g.emit('bank', { kind: 'operator' }, { playerId: p.id, name: p.name, action: kind, items }, { zone: 'town', actor: p });
     g.setLastAction(p, 'bank', `${kind === 'deposit' ? 'banked' : 'withdrew'} ${describe(items)}`);
     g.markPlayer(p);
@@ -788,6 +834,7 @@ export const worldCommands: Record<string, CommandDef> = {
   refine: rw(makeItem('refine')),
   craft: rw(makeItem('craft')),
   equip: rw(equip),
+  'item.inspect': ro(inspect),
   unequip: rw(unequip),
   attack: rw((g, p, payload) => useAbility(g, p, payload, true)),
   'ability.use': rw((g, p, payload) => useAbility(g, p, payload, false)),

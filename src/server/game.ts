@@ -6,6 +6,7 @@ import { MOB_TYPES, NODE_TYPES, STARTER_KIT, STARTING_SILVER, BASE_HP, ZONES, ty
 import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/protocol.ts';
 import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
+import type { UniqueItem } from '../shared/protocol.ts';
 import type { CommandDef, LootBag, Mob, Player, ResourceNode, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
 import { worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
@@ -49,6 +50,8 @@ export class Game {
   readonly mobs = new Map<string, Mob>();
   readonly nodes = new Map<string, ResourceNode>();
   readonly bags = new Map<string, LootBag>();
+  /** Crafted gear instances by unique id (`<base>#<hex>`). The id sits in inventories, banks, equipment, bags and trades like any item. */
+  readonly uniques = new Map<string, UniqueItem>();
   readonly trades = new Map<string, Trade>();
   readonly commands: Record<string, CommandDef>;
 
@@ -56,6 +59,7 @@ export class Game {
   private tokenIndex = new Map<string, string>();
   private dirtyPlayers = new Set<string>();
   private dirtyBags = new Set<string>();
+  private dirtyUniques = new Set<string>();
   private dirtyTrades = new Set<string>();
   private outbox: { ev: GameEvent; vis: Visibility }[] = [];
   private subscribers = new Set<Subscriber>();
@@ -101,6 +105,10 @@ export class Game {
       this.nameIndex.set(p.name.toLowerCase(), p.id);
       this.tokenIndex.set(row.token_hash, p.id);
     }
+    for (const row of this.store.all<{ data: string }>('SELECT data FROM uniques')) {
+      const u = JSON.parse(row.data) as UniqueItem;
+      this.uniques.set(u.id, u);
+    }
     for (const row of this.store.all<{ data: string }>('SELECT data FROM loot_bags')) {
       const b = JSON.parse(row.data) as LootBag;
       this.bags.set(b.id, b);
@@ -130,12 +138,18 @@ export class Game {
 
   markPlayer(p: Player) { this.dirtyPlayers.add(p.id); }
   markBag(b: LootBag) { this.dirtyBags.add(b.id); }
+  markUnique(u: UniqueItem) { this.dirtyUniques.add(u.id); }
   markTrade(t: Trade) { this.dirtyTrades.add(t.id); }
 
   private flushDirty() {
     for (const id of this.dirtyPlayers) {
       const p = this.players.get(id);
       if (p) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), id);
+    }
+    for (const id of this.dirtyUniques) {
+      const u = this.uniques.get(id);
+      if (u) this.store.run('INSERT INTO uniques(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data', id, JSON.stringify(u));
+      else this.store.run('DELETE FROM uniques WHERE id = ?', id);
     }
     for (const id of this.dirtyBags) {
       const b = this.bags.get(id);
@@ -153,13 +167,17 @@ export class Game {
     this.clearDirty();
   }
 
-  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyTrades.clear(); }
+  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyUniques.clear(); this.dirtyTrades.clear(); }
 
   /** After a rollback, restore every touched entity from the database. */
   private reloadDirty() {
     for (const id of this.dirtyPlayers) {
       const row = this.store.get<{ data: string }>('SELECT data FROM players WHERE id = ?', id);
       if (row) this.players.set(id, JSON.parse(row.data));
+    }
+    for (const id of this.dirtyUniques) {
+      const row = this.store.get<{ data: string }>('SELECT data FROM uniques WHERE id = ?', id);
+      if (row) this.uniques.set(id, JSON.parse(row.data)); else this.uniques.delete(id);
     }
     for (const id of this.dirtyBags) {
       const row = this.store.get<{ data: string }>('SELECT data FROM loot_bags WHERE id = ?', id);

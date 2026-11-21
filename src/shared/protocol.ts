@@ -60,6 +60,8 @@ export interface SelfView {
   focus: FocusView;
   /** Wear of equipped gear (0 to catalog.wear.max). Broken gear works at reduced strength until repaired in town. */
   gear: Partial<Record<Slot, GearWearView>>;
+  /** Every crafted (unique) item you own: carried, equipped or banked. */
+  uniques: UniqueItem[];
 }
 
 export interface FocusView { skills: string[]; slots: number; unfocusedLevelCap: number; respecReadyInMs: number }
@@ -68,6 +70,28 @@ export interface GearWearView { item: string; wear: number; broken: boolean; rep
 
 export interface NodeView { id: string; type: string; item: string; tier: number; charges: number; maxCharges: number; nextChargeInMs: number }
 export interface MobView { id: string; type: string; name: string; hp: number; maxHp: number; alive: boolean; respawnInMs: number; targetId: string | null }
+export type Rarity = 'normal' | 'magic' | 'rare';
+/** One rolled modifier on a unique item (see catalog().affixes). */
+export interface AffixRoll { id: string; tier: number; value: number }
+/**
+ * A crafted gear instance. Its `id` (`<base>#<hex>`) is used wherever an item id goes: inventory, bank, equip, trades, loot.
+ * Passing the plain base id (`iron_sword`) to those commands picks one of your uniques of that base.
+ */
+export interface UniqueItem {
+  id: string;
+  base: string;
+  /** Item level: caps which affix tiers can roll. 10 × base tier + the crafter's effective skill level (plus crafting-tool bonuses). */
+  ilvl: number;
+  rarity: Rarity;
+  affixes: AffixRoll[];
+  /** Orb modifications applied so far (drives the station fee). */
+  mods: number;
+  /** Corrupted items cannot be modified again. */
+  corrupted: boolean;
+  craftedBy: string;
+  craftedAt: number;
+}
+
 export interface OtherPlayerView { id: string; name: string; hpPct: number; equipment: Partial<Record<Slot, string>>; inCombat: boolean }
 export interface LootBagView { id: string; ownerId: string; ownerName: string; items: ItemStack[]; expiresInMs: number }
 
@@ -203,9 +227,11 @@ export interface Commands {
   gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number } };
   /** `bonus`: extra outputs from focused specialization (already included in `output.qty`). */
   refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number } };
-  craft: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number } };
+  /** Gear recipes create unique items, listed in `items` (their ids are in your inventory). */
+  craft: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; items?: UniqueItem[] } };
   'focus.set': { payload: { skills: string[] }; result: FocusView };
   // Equipment & combat
+  'item.inspect': { payload: { item: string }; result: { item: UniqueItem } };
   equip: { payload: { item: string }; result: { equipment: Partial<Record<Slot, string>> } };
   unequip: { payload: { slot: Slot }; result: { equipment: Partial<Record<Slot, string>> } };
   attack: { payload: { targetId: string; ability?: AbilityId }; result: AttackResult };

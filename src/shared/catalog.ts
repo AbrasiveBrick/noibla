@@ -44,6 +44,13 @@ export interface ItemDef {
   description: string;
 }
 
+/** Crafted gear is unique: its id is `<base>#<suffix>` (for example `iron_sword#3f9a1c2b`). Stackable items use the plain id. */
+export const UNIQUE_SEP = '#';
+export function baseOf(id: string): string { const i = id.indexOf(UNIQUE_SEP); return i < 0 ? id : id.slice(0, i); }
+export function isUnique(id: string): boolean { return id.includes(UNIQUE_SEP); }
+/** Item definition for a plain or unique id. */
+export function itemDef(id: string): ItemDef | undefined { return ITEMS[baseOf(id)]; }
+
 export const ITEMS: Record<string, ItemDef> = {
   silver: { id: 'silver', name: 'Silver', kind: 'currency', tier: 0, description: 'Currency. Dropped by mobs and paid by quests.' },
   // Raw resources

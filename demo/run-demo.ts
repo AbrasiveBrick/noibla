@@ -5,6 +5,7 @@
 
 import { rmSync, mkdirSync } from 'node:fs';
 import { GameClient, type DirectMessage, type GameEvent } from '../src/sdk/index.ts';
+import { baseOf } from '../src/shared/catalog.ts';
 import { startServer } from '../src/server/main.ts';
 import { narrator, fmt, type Facts } from './lib.ts';
 import { runProducer } from './producer.ts';
@@ -89,10 +90,10 @@ try {
   expect('kit trade settled honestly both ways', !!facts.kitReceiptProducer?.counterpartyKeptWord && !!facts.kitReceiptFighter?.counterpartyKeptWord);
 
   // Frontier death, banking, looting
-  expect('fighter died in the frontier and dropped gear + ore', facts.fighterDeath?.zone === 'frontier' && ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.fighterDeath!.dropped.some((s) => s.item === i)), fmt(facts.fighterDeath?.dropped ?? []));
+  expect('fighter died in the frontier and dropped gear + ore', facts.fighterDeath?.zone === 'frontier' && ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.fighterDeath!.dropped.some((s) => baseOf(s.item) === i)), fmt(facts.fighterDeath?.dropped ?? []));
   expect('the rival, not a wraith, landed the killing blow', facts.fighterDeath?.killer === 'Rival', String(facts.fighterDeath?.killer));
-  expect('fighter\'s banked spare and skills survived death', !!facts.fighterBankAfterDeath?.some((s) => s.item === 'iron_sword') && !!facts.fighterSkillsKept);
-  expect('rival looted the fighter\'s gear and duskiron ore', ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.rivalLoot?.some((s) => s.item === i)));
+  expect('fighter\'s banked spare and skills survived death', !!facts.fighterBankAfterDeath?.some((s) => baseOf(s.item) === 'iron_sword') && !!facts.fighterSkillsKept);
+  expect('rival looted the fighter\'s gear and duskiron ore', ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.rivalLoot?.some((s) => baseOf(s.item) === i)));
 
   // Dishonest trade + refusal
   const scam = facts.scamReceiptProducer;
@@ -107,7 +108,7 @@ try {
   const st = await (await fetch(`${server.operatorUrl}/operator/state`, { headers: { authorization: `Bearer ${server.operatorToken}` } })).json();
   const producerFrontier = st.events.some((e: GameEvent) => e.type === 'travel.arrive' && e.data.playerId === pid && e.data.to === 'frontier');
   const prod = await clients.Producer.observe();
-  expect('producer crafted tier-3 gear without entering the frontier', prod.self.equipment.armor === 'wraithhide_armor' && !producerFrontier);
+  expect('producer crafted tier-3 gear without entering the frontier', baseOf(prod.self.equipment.armor ?? '') === 'wraithhide_armor' && !producerFrontier);
 
   // Specialization
   expect('producer and fighter each focused 3 different skills', facts.producerFocus?.length === 3 && facts.fighterFocus?.length === 3 && !facts.producerFocus.some((s) => facts.fighterFocus!.includes(s)), `${facts.producerFocus} / ${facts.fighterFocus}`);

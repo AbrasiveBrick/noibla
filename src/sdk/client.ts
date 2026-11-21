@@ -7,7 +7,7 @@
 // command can never duplicate items or transfers.
 
 import { randomUUID } from 'node:crypto';
-import { ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, zonePath, type ToolJob, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
+import { baseOf, itemDef, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, zonePath, type ToolJob, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
 import {
   TRANSIENT_ERRORS,
   type ApiError, type CommandResponse, type CommandType, type EventType, type FeedbackCategory, type GameEvent,
@@ -144,7 +144,10 @@ export class GameClient {
   craft(recipeId: string, count = 1, opts?: SendOptions) { return this.send('craft', { recipeId, count }, opts); }
 
   // ---- gear & combat ----
+  /** Equips an item. A base id (`iron_sword`) picks a carried plain copy, else your highest item-level unique of that base. */
   equip(item: string, opts?: SendOptions) { return this.send('equip', { item }, opts); }
+  /** Public details (base, item level, rarity, affixes) of any unique item id. */
+  inspect(item: string, opts?: SendOptions) { return this.send('item.inspect', { item }, opts); }
   unequip(slot: Slot, opts?: SendOptions) { return this.send('unequip', { slot }, opts); }
   attack(targetId: string, ability?: AbilityId, opts?: SendOptions) { return this.send('attack', ability ? { targetId, ability } : { targetId }, opts); }
   useAbility(ability: AbilityId, targetId?: string, opts?: SendOptions) { return this.send('ability.use', targetId ? { ability, targetId } : { ability }, opts); }
@@ -309,7 +312,8 @@ export class GameClient {
 
   async count(item: string, obs?: Observation): Promise<number> {
     const o = obs ?? (await this.observe());
-    return o.self.inventory.find((s) => s.item === item)?.qty ?? 0;
+    // A base id also counts carried uniques of that base (crafted gear is unique: `iron_sword#3f9a1c2b`).
+    return o.self.inventory.filter((s) => s.item === item || (!item.includes('#') && baseOf(s.item) === item)).reduce((n, s) => n + s.qty, 0);
   }
 
   async waitReady(): Promise<Observation> {
@@ -342,10 +346,10 @@ export class GameClient {
   async equipToolFor(job: ToolJob, tier = 1): Promise<string | null> {
     const need = requiredToolTier(tier);
     const obs = await this.observe();
-    const fits = (id?: string) => { const d = id ? ITEMS[id] : undefined; return !!d?.toolFor?.includes(job) && (d.toolTier ?? 0) >= need; };
+    const fits = (id?: string) => { const d = id ? itemDef(id) : undefined; return !!d?.toolFor?.includes(job) && (d.toolTier ?? 0) >= need; };
     const cur = obs.self.equipment.tool;
     if (fits(cur)) return cur!;
-    const best = obs.self.inventory.filter((s) => s.qty > 0 && fits(s.item)).sort((a, b) => (ITEMS[b.item].toolTier ?? 0) - (ITEMS[a.item].toolTier ?? 0))[0];
+    const best = obs.self.inventory.filter((s) => s.qty > 0 && fits(s.item)).sort((a, b) => (itemDef(b.item)!.toolTier ?? 0) - (itemDef(a.item)!.toolTier ?? 0))[0];
     if (!best) return null;
     await this.sendWhenReady('equip', { item: best.item });
     return best.item;
