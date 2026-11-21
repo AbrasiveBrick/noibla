@@ -66,7 +66,8 @@ export interface SelfView {
 
 export interface FocusView { skills: string[]; slots: number; unfocusedLevelCap: number; respecReadyInMs: number }
 
-export interface GearWearView { item: string; wear: number; broken: boolean; repairCost: number }
+/** Equipped item state. Unique items add their item level, rarity, corruption and readable affix lines. */
+export interface GearWearView { item: string; wear: number; broken: boolean; repairCost: number; ilvl?: number; rarity?: Rarity; corrupted?: boolean; affixes?: string[] }
 
 export interface NodeView { id: string; type: string; item: string; tier: number; charges: number; maxCharges: number; nextChargeInMs: number }
 export interface MobView { id: string; type: string; name: string; hp: number; maxHp: number; alive: boolean; respawnInMs: number; targetId: string | null }
@@ -226,7 +227,7 @@ export interface Commands {
   // Skills: gathering, refining, crafting
   gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number } };
   /** `bonus`: extra outputs from focused specialization (already included in `output.qty`). */
-  refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number } };
+  refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; inputsSaved?: number } };
   /** Gear recipes create unique items, listed in `items` (their ids are in your inventory). */
   craft: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; items?: UniqueItem[] } };
   'focus.set': { payload: { skills: string[] }; result: FocusView };

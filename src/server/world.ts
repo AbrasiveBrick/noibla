@@ -3,7 +3,7 @@
 
 import { randomBytes } from 'node:crypto';
 import {
-  ABILITIES, BASE_HP, SLOTS, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
+  ABILITIES, BASE_HP, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
   effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
 import type { UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, ZoneView } from '../shared/protocol.ts';
@@ -11,11 +11,31 @@ import type { Game } from './game.ts';
 import type { CommandDef, Mob, Player } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
 
+// ---------- affixes ----------
+
+// The unique-item registry of the running game. Stats like maxHp(p) are read from many places that only hold a
+// Player, so the Game binds its registry here once (one game per process; tests open games one at a time).
+let REGISTRY: Map<string, UniqueItem> = new Map();
+export function bindUniques(m: Map<string, UniqueItem>) { REGISTRY = m; }
+
+/** Sum of an affix's values over the items equipped in `slots`. */
+export function affixSum(p: Player, slots: Slot[], affixId: string): number {
+  let n = 0;
+  for (const slot of slots) {
+    const id = p.equipment[slot];
+    const u = id ? REGISTRY.get(id) : undefined;
+    if (u) for (const a of u.affixes) if (a.id === affixId) n += a.value;
+  }
+  return n;
+}
+const COMBAT_SLOTS: Slot[] = ['weapon', 'armor'];
+const pct = (v: number) => Math.min(0.9, v / 100);
+
 // ---------- derived stats ----------
 
 export function maxHp(p: Player): number {
   const armor = p.equipment.armor ? itemDef(p.equipment.armor) : undefined;
-  return BASE_HP + Math.round((armor?.hpBonus ?? 0) * gearMultiplier(p, 'armor'));
+  return BASE_HP + Math.round((armor?.hpBonus ?? 0) * gearMultiplier(p, 'armor')) + affixSum(p, COMBAT_SLOTS, 'max_hp');
 }
 
 function defense(p: Player): number {
@@ -44,12 +64,15 @@ export function gearView(p: Player): Partial<Record<Slot, GearWearView>> {
     const item = p.equipment[slot];
     if (!item) continue;
     const wear = wearOf(p, item);
-    out[slot] = { item, wear: Math.round(wear * 100) / 100, broken: wear >= WEAR.max, repairCost: repairCost(item, wear) };
+    const u = REGISTRY.get(item);
+    out[slot] = { item, wear: Math.round(wear * 100) / 100, broken: wear >= WEAR.max, repairCost: repairCost(item, wear),
+      ...(u ? { ilvl: u.ilvl, rarity: u.rarity, corrupted: u.corrupted, affixes: u.affixes.map((x) => `T${x.tier} ${affixText(x.id, x.value)}`) } : {}) };
   }
   return out;
 }
 
 function addWear(g: Game, p: Player, slot: Slot, amount: number) {
+  if (slot === 'tool') amount *= 1 - pct(affixSum(p, ['tool'], 'durable'));
   const item = p.equipment[slot];
   if (!item || amount <= 0) return;
   const before = wearOf(p, item);
@@ -239,12 +262,14 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   if (node!.charges <= 0) fail('DEPLETED', `${def.name} is depleted`, node!.nextChargeAt - now);
   const slow = requireTool(g, p, def.skill, def.tier, `${def.name} (tier ${def.tier})`);
   const level = skillLevel(p, def.skill);
-  const qty = 1 + rollBonus(g, Math.min(FOCUS.maxBonusYield, FOCUS.bonusYieldPerLevel * level));
+  let qty = 1 + rollBonus(g, Math.min(FOCUS.maxBonusYield, FOCUS.bonusYieldPerLevel * level) + affixSum(p, ['tool'], 'yield') / 100);
+  const doubleDrop = affixSum(p, ['tool'], 'double_drop');
+  if (doubleDrop > 0 && g.rng() < doubleDrop / 100) qty *= 2;
   if (node!.charges === def.maxCharges) node!.nextChargeAt = now + g.ms(TIMING.nodeRegenMs);
   node!.charges--;
   addItems(p.inventory, [{ item: def.item, qty }]);
   const xp = gainXp(p, def.skill, XP.gather(def.tier));
-  const busy = g.ms(TIMING.gatherMs * Math.max(0.5, 1 - 0.05 * level) * slow);
+  const busy = g.ms(TIMING.gatherMs * Math.max(0.5, 1 - 0.05 * level) * slow * (1 - pct(affixSum(p, ['tool'], 'gather_speed'))));
   p.busyUntil = now + busy;
   addWear(g, p, 'tool', WEAR.perToolUse);
   questProgress(g, p, 'gather', def.item, qty);
@@ -293,23 +318,27 @@ function makeItem(kind: 'refine' | 'craft') {
     if (!hasItems(p.inventory, r!.inputs, count)) fail('NOT_ENOUGH_ITEMS', `missing ${missing(p.inventory, r!.inputs, count)}`);
     removeItems(p.inventory, r!.inputs, count);
     let bonus = 0;
-    if (focused) {
-      const chance = Math.min(FOCUS.maxBonusOutput, FOCUS.bonusOutputPerLevel * level);
-      for (let i = 0; i < count; i++) if (g.rng() < chance) bonus++;
-    }
+    const toolOutput = kind === 'refine' ? affixSum(p, ['tool'], 'refine_output') / 100 : 0;
+    const chance = (focused ? Math.min(FOCUS.maxBonusOutput, FOCUS.bonusOutputPerLevel * level) : 0) + toolOutput;
+    if (chance > 0) for (let i = 0; i < count; i++) if (g.rng() < chance) bonus++;
+    // Refining tools with save_inputs: each unit may hand its inputs back.
+    let saved = 0;
+    const save = kind === 'refine' ? affixSum(p, ['tool'], 'save_inputs') : 0;
+    if (save > 0) { for (let i = 0; i < count; i++) if (g.rng() < save / 100) saved++; if (saved) addItems(p.inventory, r!.inputs, saved); }
     const output: ItemStack = { item: r!.output.item, qty: r!.output.qty * count + bonus };
-    const made = isGearKind(output.item) ? createUniques(g, p, output.item, output.qty, itemLevel(r!.tier, level)) : null;
+    const made = isGearKind(output.item) ? createUniques(g, p, output.item, output.qty, itemLevel(r!.tier, level) + affixSum(p, ['tool'], 'craft_ilvl')) : null;
     addItems(p.inventory, made ? made.map((u) => ({ item: u.id, qty: 1 })) : [output]);
     const xp = gainXp(p, r!.skill, XP[kind](r!.tier) * count);
     const base = kind === 'refine' ? TIMING.refineMs : TIMING.craftMs;
-    const busy = g.ms(base * count * Math.max(0.5, 1 - 0.05 * level) * slow);
+    const speed = kind === 'refine' ? pct(affixSum(p, ['tool'], 'refine_speed')) : 0;
+    const busy = g.ms(base * count * Math.max(0.5, 1 - 0.05 * level) * slow * (1 - speed));
     p.busyUntil = g.now() + busy;
     addWear(g, p, 'tool', WEAR.perToolUse * count);
     if (kind === 'craft') questProgress(g, p, 'craft', output.item, output.qty);
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
     g.markPlayer(p);
-    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * count })), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(made ? { items: made } : {}) };
+    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * (count - saved) })).filter((s) => s.qty > 0), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(saved ? { inputsSaved: saved } : {}), ...(made ? { items: made } : {}) };
   };
 }
 
@@ -418,7 +447,7 @@ function attackDamage(p: Player, ability: AbilityId): { damage: number; skill: S
   const skill: SkillId = weapon?.weaponSkill ?? 'unarmed';
   const base = def.flatDamage ?? (weapon?.power ?? 0) * gearMultiplier(p, 'weapon') * (def.powerMult ?? 1);
   const bonusLevels = Math.min(skillLevel(p, skill), COMBAT.damageBonusMaxLevel);
-  return { damage: base * (1 + COMBAT.damageBonusPerLevel * bonusLevels), skill };
+  return { damage: base * (1 + COMBAT.damageBonusPerLevel * bonusLevels) * (1 + affixSum(p, COMBAT_SLOTS, 'damage') / 100), skill };
 }
 
 function combatXp(damage: number): number {
@@ -457,13 +486,13 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
   const now = g.now();
   const ability = pickAbility(g, p, requested);
   const def = ABILITIES[ability];
-  const gcd = g.ms(TIMING.globalCooldownMs);
+  const gcd = g.ms(TIMING.globalCooldownMs * (1 - pct(affixSum(p, COMBAT_SLOTS, 'attack_speed'))));
 
   if (def.kind === 'buff') {
     if (ZONES[zone].safety === 'safe') fail('SAFE_ZONE', 'no combat in town');
     if (ability === 'evade') p.evadeUntil = now + g.ms(def.durationMs!);
     if (ability === 'brace') p.braceUntil = now + g.ms(def.durationMs!);
-    p.cooldowns[ability] = now + g.ms(def.cooldownMs);
+    p.cooldowns[ability] = now + g.ms(def.cooldownMs * (1 - pct(affixSum(p, COMBAT_SLOTS, 'guard'))));
     p.busyUntil = now + gcd;
     g.emit('combat.buff', { kind: 'zone', zone }, { playerId: p.id, name: p.name, ability }, { zone, actor: p });
     g.setLastAction(p, 'combat', `used ${ability}`);
@@ -511,7 +540,15 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
       loot = rollLoot(g, mob.type, p);
       addItems(p.inventory, loot);
       if (mdef.drops.some((d) => d.skin)) {
-        if (equippedToolTier(p, 'skinning') >= requiredToolTier(mdef.tier)) addWear(g, p, 'tool', WEAR.perToolUse);
+        if (equippedToolTier(p, 'skinning') >= requiredToolTier(mdef.tier)) {
+          addWear(g, p, 'tool', WEAR.perToolUse);
+          const dd = affixSum(p, ['tool'], 'double_drop');
+          if (dd > 0 && g.rng() < dd / 100) {
+            const extra = loot.filter((s) => mdef.drops.some((d) => d.skin && d.item === s.item));
+            addItems(p.inventory, extra);
+            loot = toStacks(Object.fromEntries([...loot, ...extra].reduce((m, s) => m.set(s.item, (m.get(s.item) ?? 0) + s.qty), new Map<string, number>())));
+          }
+        }
         else note = `no hides: equip a skinning knife (tier ${requiredToolTier(mdef.tier)}+) in the tool slot to skin ${mdef.name}s`;
       }
       g.store.ledger('created.mobs', silverIn(loot));

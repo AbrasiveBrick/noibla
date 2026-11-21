@@ -186,6 +186,86 @@ export const requiredToolTier = (tier: number): number => Math.max(1, tier - 1);
 /** Every new player starts with one copper tool of each family. Better tools come from toolcrafters. */
 export const STARTER_KIT: ItemStack[] = ['pickaxe', 'axe', 'skinning_knife', 'tongs', 'saw', 'hammer', 'needle'].map((f) => ({ item: `copper_${f}`, qty: 1 }));
 
+// ---------- affixes ----------
+
+/** Which affix pool a gear base rolls from. */
+export type GearGroup = 'combat' | 'gathering' | 'refining' | 'crafting';
+export type RarityId = 'normal' | 'magic' | 'rare';
+
+export function gearGroup(base: string): GearGroup | undefined {
+  const d = ITEMS[base];
+  if (!d) return undefined;
+  if (d.kind === 'weapon' || d.kind === 'armor') return 'combat';
+  if (d.kind !== 'tool') return undefined;
+  const job = d.toolFor?.[0];
+  if (job === 'mining' || job === 'woodcutting' || job === 'skinning') return 'gathering';
+  if (job === 'smelting' || job === 'woodworking' || job === 'tanning') return 'refining';
+  return 'crafting';
+}
+
+/** Maximum affixes per rarity. Normal items have none. */
+export const RARITY_MAX_AFFIXES: Record<RarityId, number> = { normal: 0, magic: 2, rare: 4 };
+
+export interface AffixDef {
+  id: string;
+  group: GearGroup;
+  /** `{v}` is replaced by the rolled value. */
+  text: string;
+  /** Value range [min, max] for tiers 1 (weakest) to 3 (strongest). */
+  tiers: [[number, number], [number, number], [number, number]];
+}
+
+/** Minimum item level for each affix tier (index 0 = tier 1). An item can only roll tiers its item level allows. */
+export const AFFIX_TIER_MIN_ILVL = [1, 20, 35];
+/** Relative odds of each allowed tier when an affix rolls (higher tiers are rarer). */
+export const AFFIX_TIER_WEIGHT = [6, 3, 1];
+
+const affix = (a: AffixDef): AffixDef => a;
+export const AFFIXES: Record<string, AffixDef> = {
+  // Weapons and armor
+  damage: affix({ id: 'damage', group: 'combat', text: '+{v}% attack damage', tiers: [[4, 8], [9, 15], [16, 25]] }),
+  max_hp: affix({ id: 'max_hp', group: 'combat', text: '+{v} max HP', tiers: [[5, 10], [11, 20], [21, 35]] }),
+  attack_speed: affix({ id: 'attack_speed', group: 'combat', text: '{v}% shorter global cooldown after attacks', tiers: [[3, 5], [6, 9], [10, 15]] }),
+  guard: affix({ id: 'guard', group: 'combat', text: '{v}% shorter Evade and Brace cooldowns', tiers: [[5, 10], [11, 18], [19, 30]] }),
+  // Gathering tools
+  gather_speed: affix({ id: 'gather_speed', group: 'gathering', text: '{v}% faster gathering', tiers: [[4, 8], [9, 14], [15, 22]] }),
+  yield: affix({ id: 'yield', group: 'gathering', text: '+{v}% bonus yield (adds to the skill bonus, past its cap)', tiers: [[5, 12], [13, 25], [26, 40]] }),
+  double_drop: affix({ id: 'double_drop', group: 'gathering', text: '{v}% chance to double a gather or a hide drop', tiers: [[3, 6], [7, 11], [12, 18]] }),
+  durable: affix({ id: 'durable', group: 'gathering', text: '{v}% less tool wear', tiers: [[10, 20], [21, 35], [36, 55]] }),
+  shard_find: affix({ id: 'shard_find', group: 'gathering', text: '+{v}% chance to find an orb shard per gather or skinned kill', tiers: [[2, 4], [5, 7], [8, 12]] }),
+  // Refining tools
+  refine_output: affix({ id: 'refine_output', group: 'refining', text: '{v}% chance of one extra output per unit', tiers: [[4, 8], [9, 15], [16, 25]] }),
+  save_inputs: affix({ id: 'save_inputs', group: 'refining', text: '{v}% chance per unit to keep its inputs', tiers: [[3, 6], [7, 11], [12, 18]] }),
+  refine_speed: affix({ id: 'refine_speed', group: 'refining', text: '{v}% faster refining', tiers: [[5, 10], [11, 18], [19, 28]] }),
+  // Crafting tools (hammers)
+  craft_ilvl: affix({ id: 'craft_ilvl', group: 'crafting', text: '+{v} item level on items you craft', tiers: [[1, 2], [3, 5], [6, 9]] }),
+  mod_odds: affix({ id: 'mod_odds', group: 'crafting', text: '{v}% better odds when you use orbs (higher affix tiers, safer Vaal)', tiers: [[5, 10], [11, 20], [21, 35]] }),
+  orb_fee: affix({ id: 'orb_fee', group: 'crafting', text: '{v}% lower orb station fees', tiers: [[5, 10], [11, 20], [21, 35]] }),
+};
+
+export function affixText(id: string, value: number): string {
+  return (AFFIXES[id]?.text ?? id).replace('{v}', String(value));
+}
+
+/**
+ * Rolls one affix for a base: an id from its group's pool not already on the item, a tier allowed by `ilvl`
+ * (weighted toward low tiers; `luck` in [0, 1) shifts weight toward high tiers), and a value in that tier's range.
+ * Returns null when no affix is left to roll. `rng` returns [0, 1).
+ */
+export function rollAffix(rng: () => number, base: string, ilvl: number, exclude: string[], luck = 0): { id: string; tier: number; value: number } | null {
+  const group = gearGroup(base);
+  const pool = Object.values(AFFIXES).filter((a) => a.group === group && !exclude.includes(a.id));
+  if (!pool.length) return null;
+  const def = pool[Math.floor(rng() * pool.length)];
+  const allowed = AFFIX_TIER_MIN_ILVL.map((m, i) => (ilvl >= m ? i : -1)).filter((i) => i >= 0);
+  const weights = allowed.map((i) => AFFIX_TIER_WEIGHT[i] * (1 + luck * 3 * i));
+  let r = rng() * weights.reduce((a, b) => a + b, 0);
+  let t = allowed[0];
+  for (let k = 0; k < allowed.length; k++) { r -= weights[k]; if (r < 0) { t = allowed[k]; break; } }
+  const [lo, hi] = def.tiers[t];
+  return { id: def.id, tier: t + 1, value: lo + Math.floor(rng() * (hi - lo + 1)) };
+}
+
 export interface NodeDef { id: string; name: string; item: string; tier: number; skill: SkillId; maxCharges: number }
 export const NODE_TYPES: Record<string, NodeDef> = {
   copper_vein: { id: 'copper_vein', name: 'Copper Vein', item: 'copper_ore', tier: 1, skill: 'mining', maxCharges: 10 },
@@ -393,4 +473,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, starterKit: STARTER_KIT };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, starterKit: STARTER_KIT, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };
