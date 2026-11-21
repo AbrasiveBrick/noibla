@@ -1,0 +1,9 @@
+# Build context for sandbox/Containerfile: never send world state or agent workspaces.
+data/
+agents/
+.demo-state/
+node_modules/
+.git/
+*.db
+*.db-wal
+*.db-shm

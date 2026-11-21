@@ -2,21 +2,29 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { world, OP } from './helpers.ts';
 
-test('operator and bot credentials are separate', async () => {
+test('operator and bot credentials and listeners are separate', async () => {
   const w = await world();
   try {
     const a = await w.bot('Agent');
-    const asBot = await fetch(`${w.url}/operator/state`, { headers: { authorization: `Bearer ${a.botToken}` } });
+    const op = w.server.operatorUrl;
+    const asBot = await fetch(`${op}/operator/state`, { headers: { authorization: `Bearer ${a.botToken}` } });
     assert.equal(asBot.status, 401);
-    const none = await fetch(`${w.url}/operator/state`);
+    const none = await fetch(`${op}/operator/state`);
     assert.equal(none.status, 401);
     const asOp = await fetch(`${w.url}/api/command`, { method: 'POST', headers: { authorization: `Bearer ${OP}`, 'content-type': 'application/json' }, body: JSON.stringify({ commandId: 'c1', type: 'observe', payload: {} }) });
     assert.equal(asOp.status, 401);
     const evAsOp = await fetch(`${w.url}/api/events`, { headers: { authorization: `Bearer ${OP}` } });
     assert.equal(evAsOp.status, 401);
-    const page = await fetch(`${w.url}/dashboard`);
+    const page = await fetch(`${op}/dashboard`);
     assert.equal(page.status, 200);
     assert.ok(!(await page.text()).includes(OP), 'the page itself carries no credential');
+    // The operator listener does not play; the bot listener has no operator routes at all.
+    const cmdOnOp = await fetch(`${op}/api/command`, { method: 'POST', headers: { authorization: `Bearer ${a.botToken}`, 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(cmdOnOp.status, 404);
+    for (const path of ['/dashboard', '/operator/state']) {
+      const r = await fetch(`${w.url}${path}`, { headers: { authorization: `Bearer ${OP}` } });
+      assert.equal(r.status, 404, `bot port must not serve ${path}`);
+    }
   } finally { await w.close(); }
 });
 
