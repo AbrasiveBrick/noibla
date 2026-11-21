@@ -13,7 +13,7 @@ export type ErrorCode =
   | 'WRONG_ZONE' | 'NOT_ADJACENT' | 'NO_STATION' | 'SAFE_ZONE'
   | 'DEPLETED' | 'TOOL_REQUIRED' | 'SKILL_TOO_LOW'
   | 'NOT_ENOUGH_ITEMS' | 'NOT_EQUIPPABLE' | 'INVALID_TARGET' | 'TARGET_DEAD' | 'ABILITY_UNAVAILABLE'
-  | 'QUEST_STATE' | 'TRADE_STATE' | 'TRADE_EXPIRED' | 'TRADE_REJECTED' | 'NAME_TAKEN' | 'INTERNAL';
+  | 'QUEST_STATE' | 'TRADE_STATE' | 'TRADE_EXPIRED' | 'NAME_TAKEN' | 'INTERNAL';
 
 /** Errors that do not depend on game state changing hands; safe to retry with the same commandId later. */
 export const TRANSIENT_ERRORS: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['BUSY', 'TRAVELING', 'COMBAT_LOCKED', 'ON_COOLDOWN', 'RATE_LIMITED', 'DEPLETED']);
@@ -256,7 +256,7 @@ export type EventType =
   // private to the two DM participants
   | 'dm.message'
   // operator only
-  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired';
+  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired';
 
 export interface GameEvent<D = any> {
   id: number;

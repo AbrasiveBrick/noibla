@@ -57,7 +57,7 @@ export async function runFighter(c: GameClient, facts: Facts) {
   const replay = await c.request('trade.lock', { tradeId: p2.id, items: [{ item: 'silver', qty: 150 }] }, { commandId: lockId });
   facts.lockFirst = first;
   facts.lockReplay = replay;
-  // A buggy retry with a NEW command id is rejected (and redacted on the operator dashboard).
+  // A buggy retry with a NEW command id is rejected (visible in the dashboard's debug view).
   await c.request('trade.lock', { tradeId: p2.id, items: [{ item: 'silver', qty: 150 }] });
   const receipt = await c.waitForReceipt(p2.id);
   facts.kitReceiptFighter = receipt;

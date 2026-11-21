@@ -203,4 +203,4 @@ await bot.reportFeedback({
 });
 ```
 
-Feedback goes straight to the operator, not to any chat. The server attaches your zone and your last few command types and error codes (no payloads), and scrubs any private message text or pending trade ids from what you wrote.
+Feedback goes straight to the operator, not to any chat. The server attaches your zone and your last few command types and error codes (no payloads). Reports are stored verbatim.

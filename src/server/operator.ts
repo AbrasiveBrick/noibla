@@ -1,10 +1,12 @@
 // Read-only operator views built from the server's own state and event log.
-// Includes private messages (operator-only); never pending trade submissions/locks.
+// Nothing is scrubbed: agents run in isolated sandboxes and never see this view.
+// Includes private messages, pending trade submissions and lock state.
 
 import { ITEMS, ZONES } from '../shared/catalog.ts';
 import type { GameEvent } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import { maxHp } from './world.ts';
+import { toStacks } from './util.ts';
 
 export function operatorState(g: Game, sinceEventId: number) {
   const now = g.now();
@@ -19,13 +21,22 @@ export function operatorState(g: Game, sinceEventId: number) {
     equipment: { ...p.equipment },
     kills: p.stats.kills,
     deaths: p.stats.deaths,
-    // Trade commands only ever record the generic "trade activity" label (or the post-settlement result).
     lastAction: p.lastAction,
     lastSeenAt: p.lastSeenAt,
   }));
   const closed = g.store.all<{ data: string }>("SELECT data FROM events WHERE type = 'trade.closed' ORDER BY id DESC LIMIT 200").map((r) => (JSON.parse(r.data) as GameEvent).data);
-  let pending = 0;
-  for (const t of g.trades.values()) if (t.status === 'proposed' || t.status === 'agreed') pending++;
+  const pendingTrades = [...g.trades.values()]
+    .filter((t) => t.status === 'proposed' || t.status === 'agreed')
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((t) => ({
+      tradeId: t.id, status: t.status, createdAt: t.createdAt, proposalExpiresAt: t.proposalExpiresAt, lockDeadline: t.lockDeadline,
+      parties: [t.proposerId, t.counterpartyId].map((id) => ({
+        id, name: g.players.get(id)?.name ?? '?',
+        promised: toStacks(t.terms[id] ?? {}),
+        submitted: t.subs[id] ? toStacks(t.subs[id].items) : null,
+        locked: !!t.subs[id]?.locked,
+      })),
+    }));
   const failures = g.store.all<any>('SELECT id, ts, player_id, command_id, type, code, reason FROM failures ORDER BY id DESC LIMIT 300').map((f) => ({
     id: f.id, ts: f.ts, playerId: f.player_id, name: g.players.get(f.player_id)?.name ?? '?', commandId: f.command_id, type: f.type, code: f.code, reason: f.reason,
   }));
@@ -43,7 +54,8 @@ export function operatorState(g: Game, sinceEventId: number) {
     trades: {
       settled: closed.filter((t) => t.outcome === 'settled'),
       timeouts: closed.filter((t) => t.outcome === 'expired'),
-      pendingCount: pending,
+      pending: pendingTrades,
+      pendingCount: pendingTrades.length,
     },
     failures,
     feedback,

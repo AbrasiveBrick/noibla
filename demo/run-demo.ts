@@ -115,13 +115,13 @@ try {
   const opDms = st.events.filter((e: GameEvent) => e.type === 'dm.sent').map((e: GameEvent) => e.data.text);
   expect('dashboard shows private message contents to the operator', allTexts.every((t) => opDms.includes(t)) && allTexts.some((t) => stJson.includes(t)), `${allTexts.length} DMs shown`);
   const lockFail = st.failures.find((f: any) => f.type === 'trade.lock');
-  expect('trade.lock failure is redacted in the debug view', !!lockFail && lockFail.code === 'TRADE_REJECTED' && /redacted/.test(lockFail.reason));
+  expect('trade.lock failure shows its real reason in the debug view', !!lockFail && lockFail.code === 'TRADE_STATE' && !/redacted/.test(lockFail.reason), lockFail?.reason);
   expect('dashboard shows the settled trades and the timeout separately', st.trades.settled.length >= 3 && st.trades.timeouts.length >= 1);
   const botOnOperator = await fetch(`${server.url}/operator/state`, { headers: { authorization: `Bearer ${tokens.bot}` } });
   const opOnBot = await fetch(`${server.url}/api/command`, { method: 'POST', headers: { authorization: `Bearer ${server.operatorToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ commandId: 'x', type: 'observe', payload: {} }) });
   expect('bot token cannot open the dashboard; operator token cannot play', botOnOperator.status === 401 && opOnBot.status === 401);
   const fbs = st.feedback;
-  expect('reportFeedback() reached the operator with DM quotes redacted', fbs.length >= 2 && fbs.every((f: any) => !allTexts.some((t) => `${f.summary} ${f.details}`.includes(t))) && fbs.some((f: any) => /redacted/.test(f.details)));
+  expect('reportFeedback() reached the operator verbatim', fbs.length >= 2 && fbs.some((f: any) => allTexts.some((t) => f.details.includes(t))));
 } catch (e) {
   expect('verification ran to completion', false, (e as Error).message);
 }
