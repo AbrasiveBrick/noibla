@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS watch_log (
 );
 CREATE INDEX IF NOT EXISTS watch_log_settlement ON watch_log(settlement_id, id);
 CREATE TABLE IF NOT EXISTS sightings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, player_id TEXT NOT NULL, data TEXT NOT NULL
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, player_id TEXT NOT NULL, data TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS sightings_player ON sightings(player_id, id);
 CREATE TABLE IF NOT EXISTS trades (id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL);
@@ -86,6 +86,10 @@ export class Store {
     // Audit rows from before stage 3 have no building.
     const columns = this.db.prepare('PRAGMA table_info(stockpile_log)').all() as { name: string }[];
     if (!columns.some((c) => c.name === 'building')) this.db.exec('ALTER TABLE stockpile_log ADD COLUMN building TEXT');
+    // Sightings from before every bystander got a row are all of players who saw it.
+    if (!(this.db.prepare('PRAGMA table_info(sightings)').all() as { name: string }[]).some((c) => c.name === 'seen')) {
+      this.db.exec('ALTER TABLE sightings ADD COLUMN seen INTEGER NOT NULL DEFAULT 1');
+    }
     // Rows from before stage 4 have no seq: they keep the row id they were shown with (see nextEntryId).
     for (const table of ['stockpile_log', 'watch_log']) {
       const has = (this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === 'seq');

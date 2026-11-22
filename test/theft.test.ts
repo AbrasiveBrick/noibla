@@ -25,6 +25,9 @@ const SWORD_A = 'iron_sword#aaaaaaaa', SWORD_B = 'iron_sword#bbbbbbbb';
 type Odds = Partial<typeof CRIME_ODDS>;
 const NOTHING: Odds = { witness: 0, watchtower: 0, traces: 0, tracesLocked: 0 };
 
+/** By then every witness.saw of an act has been sent: they follow it by up to a second. */
+const TOLD_BY_MS = 1000;
+
 /** Runs `fn` with these odds and no evidence otherwise. */
 function withOdds<T>(odds: Odds, fn: () => T): T {
   const real = { ...CRIME_ODDS };
@@ -311,6 +314,8 @@ test('witnesses: everyone else standing in the region may see it, and each is to
 
     const taken = withOdds({ witness: 1 }, () => f.ok(v.bea, 'stockpile.pilfer').taken);
     const present = [v.lead, v.cal, v.eve, v.stranger, v.former, v.invited, v.neighbour];
+    for (const id of present) assert.ok(!f.heard.get(id)!.some((e) => e.type === 'witness.saw'), 'not sent with the command');
+    f.pass(TOLD_BY_MS);
     const saw = { settlementId: v.sid, settlementName: 'Quiet Hold', actor: { id: v.bea, name: 'Bea' }, act: 'stockpile.pilfer', items: taken };
     for (const id of present) {
       const told = f.heard.get(id)!.filter((e) => e.type === 'witness.saw');
@@ -353,6 +358,7 @@ test('witnesses: the one who saw it is the only one who knows', () => {
       mark = thefts(f).at(-1)!.ts;
     }
     assert.ok(seers.length && seers.length < present.length);
+    f.pass(TOLD_BY_MS);
     for (const id of present) {
       const saw = seers.includes(id);
       assert.equal(f.heard.get(id)!.some((e) => e.type === 'witness.saw'), saw, f.p(id).name);
@@ -711,6 +717,39 @@ test('secrecy: the thief learns nothing of witnesses, and nor does anyone who sa
   } finally { t.done(); }
 });
 
+test('secrecy: a pilfer does the same work whether anyone saw it or not, so the clock tells the thief nothing', () => {
+  /** Everything a command does that takes time with the world waiting: the queries it runs, how much they write and where, and the streams it writes. */
+  const work = (act: 'stockpile.pilfer' | 'stash.pilfer', witness: number) => {
+    const f = fake();
+    try {
+      const v = village(f);
+      const done: string[] = [];
+      const streaming = [v.lead, v.bea, v.cal, v.eve, v.stranger, v.former, v.invited, v.neighbour];
+      for (const id of streaming) f.g.subscribe({ kind: 'player', playerId: id, send: (e) => done.push(`send ${streaming.indexOf(id)} ${e.type}`) });
+      f.g.subscribe({ kind: 'operator', send: (e) => done.push(`operator ${e.type}`) });
+      const run = f.g.store.run.bind(f.g.store);
+      f.g.store.run = ((sql: string, ...args: any[]) => {
+        // Names differ by run, not in length. Where a sighting lands in the index is the player's id.
+        done.push(`${sql} ${JSON.stringify(args).length}${sql.includes('INTO sightings') ? ` ${Object.values(v).indexOf(args[1])}` : ''}`);
+        return run(sql, ...args);
+      }) as typeof f.g.store.run;
+      // An empty stash: a random pick from a full one would change the lengths by itself.
+      withOdds({ witness }, () => f.ok(v.bea, act, act === 'stash.pilfer' ? { ownerId: v.dan } : {}));
+      const during = done.splice(0);
+      f.pass(TOLD_BY_MS);
+      return { during, told: done.filter((x) => x.endsWith('witness.saw')).length };
+    } finally { f.g.close(); }
+  };
+  for (const act of ['stockpile.pilfer', 'stash.pilfer'] as const) {
+    const unseen = work(act, 0);
+    const seen = work(act, 1);
+    assert.ok(unseen.during.some((x) => x.includes('INSERT INTO sightings')), 'bystanders who saw nothing cost a row too');
+    assert.deepEqual(seen.during, unseen.during, act);
+    assert.equal(unseen.told, 0, 'the stand-ins reach nobody');
+    assert.ok(seen.told >= 7, 'the real ones follow on a later tick');
+  }
+});
+
 test('secrecy: traces and the watchtower show only in the logs members read', () => {
   const t = twins();
   try {
@@ -806,6 +845,8 @@ test('a failed write leaves goods, evidence and events as they were', () => {
           } finally { f.g.store.run = run; }
           assert.deepEqual(state(), before, `${type}: ${broken}`);
           for (const id of witnesses) assert.deepEqual(f.heard.get(id), [], 'nothing was dispatched');
+          f.pass(TOLD_BY_MS);
+          for (const id of witnesses) assert.ok(!f.heard.get(id)!.some((e) => e.type === 'witness.saw'), 'or queued');
         }
       }
     });
@@ -832,6 +873,25 @@ test('a restart keeps the evidence, and a retried command steals once', () => {
     assert.deepEqual(logOf(f, v.dan).slice(0, 2).map((e) => e.action), ['traces', 'missing']);
     assert.ok(f.ok(v.dan, 'watchtower.log').entries.some((e: any) => e.move === 'at_pilfer'));
     assert.ok(operatorState(f.g, 0).events.some((e) => e.type === 'theft' && e.actorId === v.bea));
+  } finally {
+    f.g.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('sightings saved before bystanders got rows still read as seen', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'noibla-theft-'));
+  let f = fake({ dbPath: join(dir, 'world.db') });
+  try {
+    const v = village(f);
+    withOdds({ witness: 1 }, () => f.ok(v.bea, 'stockpile.pilfer'));
+    const before = f.ok(v.stranger, 'witness.log').entries;
+    f.g.store.db.exec('ALTER TABLE sightings DROP COLUMN seen');
+    const clock = f.now();
+    f.g.close();
+    f = fake({ dbPath: join(dir, 'world.db') }, clock, 'r');
+    assert.equal(before.length, 1);
+    assert.deepEqual(f.ok(v.stranger, 'witness.log').entries, before);
   } finally {
     f.g.close();
     rmSync(dir, { recursive: true, force: true });
