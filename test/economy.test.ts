@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { COMBAT, FOCUS, MAX_SKILL_LEVEL, SETTLEMENT, WEAR, levelFor } from '../src/shared/catalog.ts';
 import type { Player } from '../src/server/types.ts';
 import { world } from './helpers.ts';
-import { BUILDS, VALUES, bossIncomePerHour, simulate, type BuildId, type Side, type ValueId } from './village-sim.ts';
+import { BUILDS, VALUES, bossIncomePerHour, simulate, type BuildId, type Keep, type Side, type ValueId } from './village-sim.ts';
 import { MAPS, strategiesFor } from './village-strategies.ts';
 
 /** Server-side player state, for test setup only. */
@@ -137,20 +137,27 @@ test('prune drops old high-volume events and failures but keeps trade history', 
 
 // ---------- group versus solo (community plan, stage 3) ----------
 //
-// Played, not computed: village-sim.ts runs four scripted players through the real commands for 20 game minutes on a
-// fake clock, and counts what they hold. Upkeep, founding and building (paid off over two hours), walking, repairs and
-// deaths all come out of it. The silver value of every item is in VALUES there. The target must hold under all three
-// valuations (items at cost, at what quests pay, at half of shop prices), for newcomers, veterans and perfectly
-// geared players, on three maps. Each side plays the best strategy a long offline search found for exactly that
-// case (village-strategies.ts). A solo player's best includes founding alone with every building and the income,
-// recruiting two idle accounts to count as a village, and soloing every boss respawn for free.
+// Played, not computed: village-sim.ts runs four scripted players through the real commands on a fake clock and counts
+// what they hold. A run is 30 game minutes. The first 14 count as played, because materials given to the group rest
+// before they pay. The rate of the last 16 stands for the remainder of two hours. Upkeep, founding and building (paid
+// off over those two hours), walking, repairs and deaths all come out of it. The silver value of every item is in
+// VALUES there. The target must hold under all three valuations (items at cost, at what quests pay, at half of shop
+// prices), for newcomers, veterans and perfectly geared players, on three maps. Each side plays the best strategy a
+// long offline search found for exactly that case (village-strategies.ts). A solo player's best includes founding
+// alone with every building and the income, recruiting two idle accounts to count as a village, and soloing every
+// boss respawn for free.
+//
+// The negative side matters as much: a village whose members keep their own materials is searched as hard as the
+// others and must stay under the target. Without it these tests would pass a shared work rule that needs no sharing.
 
 const VALUE_IDS = Object.keys(VALUES) as ValueId[];
 const BUILD_IDS = Object.keys(BUILDS) as BuildId[];
+const KEEPS: Keep[] = ['own', 'cycle', 'swap'];
 const TARGET = { ratio: 1.5, exileLoss: 0.3, stockpileHours: [2, 4] };
+const RUN = { minutes: 30, warmMinutes: 14, seed: 21 };
 
-function play(side: Side, values: ValueId, build: BuildId, map: number) {
-  return simulate({ side, strategy: strategiesFor(values, build, map)[side], values, build, minutes: 20, map, seed: 21 });
+function play(side: Exclude<Side, 'freeRider'>, values: ValueId, build: BuildId, map: number) {
+  return simulate({ side, strategy: strategiesFor(values, build, map)[side], values, build, map, ...RUN });
 }
 
 /** Maxed players may solo bosses, so they get all of that income. Anyone else gets a quarter of it, as if four shared. */
@@ -158,13 +165,19 @@ function bossBonus(values: ValueId, build: BuildId): number {
   return bossIncomePerHour(values) / (build === 'maxed' ? 1 : 4);
 }
 
+const soloBests = new Map<string, number>();
 function bestSolo(values: ValueId, build: BuildId, map: number): number {
-  const sides = (['solo', 'founders', 'altFounders'] as const).map((side) => play(side, values, build, map).perHour);
-  return Math.max(...sides) + bossBonus(values, build);
+  const key = `${values} ${build} ${map}`;
+  if (!soloBests.has(key)) {
+    const runs = (['solo', 'founders', 'altFounders'] as const).map((side) => play(side, values, build, map));
+    for (const r of runs) assert.equal(r.shared, 0, `${key}: alone, with idle accounts or without, nothing is shared work`);
+    soloBests.set(key, Math.max(...runs.map((r) => r.perHour)) + bossBonus(values, build));
+  }
+  return soloBests.get(key)!;
 }
 
 for (const build of BUILD_IDS) {
-  test(`economy: a village of four ${build} players beats their best solo play 1.5x, and exile costs at least 30%`, () => {
+  test(`economy: a pooling village of four ${build} players beats their best solo play 1.5x, and exile costs at least 30%`, () => {
     for (const values of VALUE_IDS) {
       for (const map of MAPS) {
         const at = `${values} values, ${build}, map ${map}`;
@@ -178,6 +191,25 @@ for (const build of BUILD_IDS) {
         const loss = 1 - exiled / village.perHour;
         assert.ok(loss >= TARGET.exileLoss, `${at}: exile costs only ${Math.round(loss * 100)}%`);
       }
+    }
+  });
+
+  test(`economy: a village of four ${build} players who each keep their own materials misses the target`, () => {
+    for (const values of VALUE_IDS) {
+      for (const map of MAPS) {
+        const at = `${values} values, ${build}, map ${map}`;
+        const separate = play('separate', values, build, map);
+        const ratio = separate.perHour / bestSolo(values, build, map);
+        assert.ok(ratio < TARGET.ratio, `${at}: keeping their own pays ${ratio.toFixed(2)}x the best solo play`);
+        assert.equal(separate.shared, 0, `${at}: shared work without sharing`);
+      }
+    }
+    // Every trick, also where the search preferred another.
+    const strategy = strategiesFor('cost', build, MAPS[0]).separate;
+    for (const keep of KEEPS) {
+      const r = simulate({ side: 'separate', strategy: { ...strategy, keep }, values: 'cost', build, map: MAPS[0], ...RUN });
+      assert.equal(r.shared, 0, `${build}, ${keep}: shared work without sharing`);
+      assert.ok(r.perHour / bestSolo('cost', build, MAPS[0]) < TARGET.ratio, `${build}, ${keep}: reaches the target`);
     }
   });
 }
@@ -196,12 +228,14 @@ test('economy: without shared work the village misses the target, so the target 
 });
 
 test('economy: a working village\'s stockpile settles at 2-4 member-hours of its output', () => {
-  // The village pools what it refines and shares out only what no longer fits, for 200 minutes. Items at cost.
-  // (At half shop prices crafted gear outweighs the materials, and the same stockpile is worth fewer hours.)
-  for (const build of BUILD_IDS) {
-    const map = MAPS[0];
-    const r = simulate({ side: 'village', strategy: strategiesFor('cost', build, map).stock, values: 'cost', build, minutes: 200, stockpileFromMinute: 160, map, seed: 21 });
-    const hours = r.stockpile / r.perHour;
-    assert.ok(hours >= TARGET.stockpileHours[0] && hours <= TARGET.stockpileHours[1], `${build}: the stockpile holds ${hours.toFixed(2)} member-hours`);
+  // The village pools what it refines and shares out only what no longer fits, for 200 minutes. At cost and at quest
+  // pay. (At half shop prices crafted gear outweighs the materials, and the same stockpile is worth fewer hours.)
+  for (const values of ['cost', 'quest'] as const) {
+    for (const build of BUILD_IDS) {
+      const map = MAPS[0];
+      const r = simulate({ side: 'village', strategy: strategiesFor(values, build, map).stock, values, build, minutes: 200, stockpileFromMinute: 160, map, seed: 21 });
+      const hours = r.stockpile / r.perHour;
+      assert.ok(hours >= TARGET.stockpileHours[0] && hours <= TARGET.stockpileHours[1], `${values} values, ${build}: the stockpile holds ${hours.toFixed(2)} member-hours`);
+    }
   }
 });

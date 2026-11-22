@@ -236,7 +236,8 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `move(to)` | `move` | anywhere | Starts a walk and returns at once (`travel.arriveInMs`). `to`: a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/player id (stops within reach), or `{ x, y }`. High level: `goTo`, `moveTo`, `travelTo`. |
 | `setFocus(skills)` | `focus.set` | town | Up to 3 focus skills. Adding is free; dropping one has a cooldown (`ON_COOLDOWN`). |
 | `gather(nodeId)` | `gather` | within 1.5 tiles of the node | Needs tool tier (checked first, from anywhere); sets busy. |
-| `refine(recipeId, count)` / `craft(recipeId, count)` | `refine` / `craft` | within 3 tiles of the recipe's station, or at your plot with a working building that has it | Up to 10 per call; sets busy. Focused skills may add `bonus` output; shared work adds `shared`. |
+| `refine(recipeId, count)` / `craft(recipeId, count)` | `refine` / `craft` | within 3 tiles of the recipe's station, or at your plot with a working building that has it | Up to 10 per call; sets busy. Focused skills may add `bonus` output. |
+| `refineFromStockpile(recipeId, count)` | `refine` with `from: 'stockpile'` | at your village's plot, with a working workshop | Shared work on what other members gave and that has rested: adds `shared`. Inputs and output are the stockpile's. |
 | `equip(item)` / `unequip(slot)` | `equip` / `unequip` | not walking | Swaps into inventory. |
 | `inspect(id)` | `item.inspect` | anywhere | Public details of a unique item. |
 | `modifyItem(id, orb)` | `item.modify` | within 3 tiles of the altar | Uses one orb + silver fee on a carried or worn unique. |
@@ -261,7 +262,7 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `settlementSetRole(playerId, role)` / `settlementSetCharter({ open?, withdrawRole?, taxPct? })` | `settlement.setRole` / `settlement.setCharter` | anywhere | Leader only. |
 | `settlementVote(kind, targetId, yes?)` | `settlement.vote` | anywhere | Members. `kind`: `exile` or `leader`. |
 | `settlement()` / `settlements()` | `settlement.view` / `settlement.list` | anywhere | Your own in full; the others only by name, region, member count and level. |
-| `stockpileDeposit(items)` / `stockpileWithdraw(items)` / `stockpile()` | `stockpile.deposit` / `stockpile.withdraw` / `stockpile.view` | within 3 tiles of your plot, in its region | Members. Withdrawing also needs the charter's role. |
+| `stockpileDeposit(items)` / `stockpileWithdraw(items)` / `stockpile()` | `stockpile.deposit` / `stockpile.withdraw` / `stockpile.view` | within 3 tiles of your plot, in its region | Members. Withdrawing also needs the charter's role. A deposit's `given` is what now rests for shared work. |
 | `stockpileLog({ limit?, beforeId? })` | `stockpile.log` | anywhere | Members. The audit log, newest first. |
 | `settlementContribute(building, items?)` | `settlement.contribute` | at your plot | Members. Starts or fills a building project. |
 | `settlementBuild(building)` | `settlement.build` | at your plot | Members, trowel equipped. One timed unit of work; sets busy. |
@@ -348,7 +349,7 @@ const { entries } = await bot.stockpileLog();                // who put in what,
   - `taxPct` (0-50, default 0): this share of a member's quest silver goes into the stockpile at `quest.claim`, whose result then has `tax`.
 - **Votes:** `settlementVote('exile' | 'leader', targetId)` opens a motion or votes on the open one. Members can change their vote for 30 minutes (base). It takes effect as soon as **more than half of all members** vote yes, counted at each vote. The target counts as a member and may vote against their own exile. A deposed leader becomes a member.
 - **Expelled or exiled** players cannot rejoin an open settlement until someone invites them again.
-- **Stockpile:** it holds a limited number of items (`stockpile()` shows `used` and `capacity`; silver takes no room). It is at the plot, so depositing, withdrawing and looking need you standing there, in PvP land. Every change goes into the **audit log** with its actor (`deposit`, `withdraw`, `tax`, `contribute`, `cancel`, and without an actor `upkeep`, `produced`, `income`), which members can read from anywhere.
+- **Stockpile:** it holds a limited number of items (`stockpile()` shows `used` and `capacity`; silver takes no room). It is at the plot, so depositing, withdrawing and looking need you standing there, in PvP land. Every change goes into the **audit log** with its actor (`deposit`, `withdraw`, `tax`, `contribute`, `cancel`, `refine` and `refined` for shared work, and without an actor `upkeep`, `produced`, `income`), which members can read from anywhere.
 - **The last member out abandons the plot.** The buildings fall, and the stockpile, every stash (former members' too) and the materials of unfinished projects spill into one loot bag there that anyone may take. The plot is free again.
 - **What outsiders learn:** `settlements()` gives id, name, region, member count and level. A plot in view shows the settlement's name, and whoever was present saw the founding. Members, charter, votes, stockpile and audit log are refused to everyone else, commands and events alike. A member can of course tell.
 - **The server does not judge.** Taking everything the charter lets you take breaks no rule. It leaves a line in the log, and what follows is up to the players.
@@ -361,7 +362,9 @@ The numbers are in `catalog().buildings`, `catalog().settlement` and `catalog().
 await bot.goToStockpile();
 const { built, needs } = await bot.buildBuilding('workshop');   // puts in what you carry, then builds; else says what is missing
 await bot.stockpileDeposit(catalog.buildings.workshop.upkeep);  // upkeep is taken from the stockpile
-const r = await bot.refine('iron_bar', 10);                     // at the plot; r.shared = { units, output } in a village
+await bot.stockpileDeposit([{ item: 'iron_ore', qty: 20 }]);    // what you gathered, given to the group
+const { sharedWork } = await bot.stockpile();                   // what others gave: ready, resting, nextReadyInMs
+const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of others' ore are ready; r.shared = { units, output }
 ```
 
 | Building | What it does | Needs |
@@ -387,11 +390,19 @@ const r = await bot.refine('iron_bar', 10);                     // at the plot; 
 
   The public `level` counts buildings that stand. Income and shared work follow `activeLevel`, which counts only paid-up buildings and is shown to members alone. Income needs at least one working building.
 - **Upkeep.** Every 10 minutes (base) each building takes its `upkeep` from the stockpile; a new one is covered for its first interval. One that can't be paid **closes**: no station, effect or production. It reopens as soon as the stockpile can pay. Upkeep keeps falling due while you are offline, but not while the server is down. `settlement().buildings` shows `working` and `upkeepInMs`.
-- **Shared work: why a village pays.** While `activeLevel` is 2 or more and the workshop works, refining **at the workshop** makes **+125% output** on every unit covered by other members' work:
-  - Each raw unit you gather or skin (copper, iron and duskiron ore, pine logs, rough hides) covers one unit of that same item in **someone else's** refining. Your own work never covers you.
-  - Cover is used up, stacks to a limit per member and item, and disappears when that member leaves or is thrown out.
-  - The refiner may use materials from anywhere; only the amount gathered by others matters. `settlement().sharedWork.covered` is what is waiting for you, and the refine result's `shared` is what you got.
-  - Fractions carry over to your next batch, so batch size doesn't matter. The extra output lands in the refiner's inventory: how to share it is up to you.
+- **Shared work: why a village pays.** It pays only for materials members really gave up to the group. While `activeLevel` is 2 or more and the workshop works:
+  1. **Gather** or skin copper, iron or duskiron ore, pine logs or rough hides as a member, and keep them in your inventory.
+  2. **Give** them with `stockpileDeposit`. The result's `given` says how many of them count.
+  3. **Rest:** they lie in the stockpile for 10 minutes (base; `catalog().settlement.sharedWork.restMs`), where they can be withdrawn like anything else.
+  4. **Another member refines** them at the plot with `refineFromStockpile(recipeId, count)` (`refine` with `from: 'stockpile'`) for **+125% output**. Inputs come out of the stockpile and **everything made goes back into it**, so this needs no right to withdraw. Who gets the output is the group's decision.
+
+  - Nobody's own materials pay them. Plain `refine` uses your inventory and never gets the bonus, wherever the materials came from.
+  - Bought, handed-over, looted or stolen units don't count, nor what you gathered before joining. When units leave your inventory (bank, stash, trade, refining, a project, death), gathered ones go first and stop counting.
+  - Each gathered unit counts once. A withdrawal takes back what you gave first. Whatever leaves the stockpile stops counting, the youngest first, and putting it back doesn't restore it.
+  - When you leave or are thrown out, what you gathered and gave stops counting. The items you gave stay in the stockpile.
+  - At the plot, `stockpile().sharedWork` lists what others gave that is `ready` for you or still `resting`. From afar, `settlement().sharedWork` says only whether shared work is `active`.
+  - All inputs must be there: a duskiron bar also takes an iron bar from the stockpile. The call fails if fewer units are ready than you asked for. One batch may take a full stockpile over its limit, and then someone has to make room.
+  - Fractions carry over to your next batch, so batch size doesn't matter. The result's `shared` is what you got (already in `output.qty`).
 - **Stations at home.** `refine`, `craft` and `repair` use your settlement's building when you stand at the plot, else the town. The helpers walk to your plot when you are in its region (or to cook), and to town otherwise. Repairing outside town doesn't heal.
 - **Food.** `eat()` uses one ration from your inventory: **Well fed** for 10 minutes (base) gives +25% XP and double regeneration out of combat (`observe().self.effects.wellFedMs`). Eating again restarts the timer, and death ends it. Rations can be traded.
 - **Stashes.** `stashDeposit(items)` needs working huts and you at the plot. `stash()` lists your stashes from anywhere, and only yours: not even the leader sees inside. `stashWithdraw(items, settlementId?)` works at the plot even when the huts are closed or you have left, been expelled or exiled.

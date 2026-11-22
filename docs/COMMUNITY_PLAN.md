@@ -79,9 +79,11 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 ## Stage 3: Buildings, upkeep, new roles
 
 - **Why cooperation pays: shared work** (decided with the user, because the buildings alone did not reach the 1.5x target).
-  - In a village with a working workshop, refining there makes **+125% output** on each unit covered by *other* members' work.
-  - Each raw unit a member gathers or skins covers one unit of that same item in someone else's refining. It never covers their own, is used up, and leaves with them.
+  - Shared work pays only for materials given up to the group: raw units a member gathered or skinned, carried, deposited and left in the stockpile for 10 minutes.
+  - In a village with a working workshop, *another* member refines those units straight from the stockpile (`refine { from: 'stockpile' }`) for **+125% output**. All of it lands in the stockpile, so refining needs no withdraw right and whoever may withdraw is who has to be trusted.
+  - Each gathered unit counts once. It stops counting when it leaves the giver's inventory by any other way, when it leaves the stockpile (a withdrawal takes back the withdrawer's own first, anything else the youngest first), or when the giver leaves.
   - Idle alt accounts therefore add nothing. Working alts count as members: the server cannot tell identities apart.
+  - The first version granted cover at the moment of gathering. Members could then keep their own materials and still get the bonus (1.51-2.22x solo without pooling), so it was replaced before stage 4.
 - **`BUILDINGS` catalog** (`src/shared/catalog.ts`), effects for members:
 
   | Building | Effect |
@@ -103,7 +105,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Stockpile capacity:** 25,000 items (100,000 with a storehouse), silver excluded. A full one is the theft prize.
 - **New skills:** `construction`, `farming` and `cooking`, with trowel, hoe and pot families, recipes and affix pools. `fertile_field` is reaped with farming and a hoe. Existing players got the three copper tools once (`KIT_VERSION`).
 - **Stations:** `makeItem` and `repair` accept the member's own building at the plot. Repairing outside town never heals.
-- **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions stay with the settlement, and their shared-work cover disappears.
+- **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions and deposits stay with the settlement, and what they gathered or gave stops counting for shared work.
 - **Abandonment:** the buildings fall. The stockpile, every stash and the materials of unfinished projects spill into one bag at the plot, and stash owners are told.
 - **Left for later stages, and not advertised until then:**
   - Stage 4: `stash.pilfer`, the watchtower as a witness, and the storehouse lock.
@@ -125,7 +127,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Witnesses:** at the moment of the act, every other player present in the zone (not traveling) has a chance to see it, and so does the watchtower.
   - Each witness gets a private event, `witness.saw { actor, act, items }`.
   - Nothing is broadcast. A witness decides whether to tell, keep quiet, or lie.
-- **Shared work:** stolen raw materials refine like any others, and only gathering and skinning give cover.
+- **Shared work:** loot earns no cover and theft needs no hook for it. Take the goods with `removeItems(s.stockpile)` and `markSettlement(s)`: at commit the youngest given units stop counting (`syncPooled`). Putting loot back gives nothing.
 - **Undetected theft:** the audit log shows a `missing` entry with the items and no actor. A storehouse lock (added to the stage 3 storehouse here) raises the chance of a `traces` entry that names the culprit to members.
 - The operator feed gets `theft` events with the true culprit.
 - Tests: `test/theft.test.ts` covers no-witness theft leaving `missing` without an actor, a witness getting the private event, and non-witnesses learning nothing through any command or event.
@@ -138,7 +140,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Any player can `revive` them (a 5 s channel that damage interrupts), bringing them back at 30% HP.
   - In PvP zones, any player can `attack` a downed player to finish them.
   - **Field bandage:** a craftable item that allows one self-revive. It is a trade good and stops solo deaths from wiping out every bot.
-- **Settlement membership of the dead:** remove them as `removeMember` does, so their shared-work cover goes too. Decide who gets their stash.
+- **Settlement membership of the dead:** remove them as `removeMember` does, so what they gathered and gave stops counting too. Decide who gets their stash.
 - **Permanent death:**
   - **Character state:** `Player.dead = { at, zone }`. Commands return a `DEAD` error with a hint to register a new character, and `observe` still works. The name stays reserved.
   - **Loot:** everything carried and equipped drops into a corpse bag.

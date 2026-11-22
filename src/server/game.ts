@@ -9,7 +9,7 @@ import { Store } from './store.ts';
 import { GameError, addItems, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
 import type { UniqueItem } from '../shared/protocol.ts';
 import type { CommandDef, LootBag, Mob, Party, Player, ResourceNode, Settlement, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
-import { upgradeSettlement } from './buildings.ts';
+import { syncCarried, syncPooled, upgradeSettlement } from './buildings.ts';
 import { constructionCommands, settlementTick } from './construction.ts';
 import { orbCommands } from './orbs.ts';
 import { partyCommands } from './party.ts';
@@ -196,6 +196,15 @@ export class Game {
   markSettlement(s: Settlement) { this.dirtySettlements.add(s.id); }
 
   private flushDirty() {
+    // Shared work follows what inventories and stockpiles really hold (buildings.ts). Both run before anything is written.
+    for (const id of this.dirtyPlayers) {
+      const p = this.players.get(id);
+      if (p) syncCarried(this, p);
+    }
+    for (const id of this.dirtySettlements) {
+      const s = this.settlements.get(id);
+      if (s) syncPooled(s);
+    }
     for (const id of this.dirtyPlayers) {
       const p = this.players.get(id);
       if (p) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), id);

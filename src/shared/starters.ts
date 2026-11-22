@@ -354,7 +354,7 @@ export const STARTERS: StarterPrompt[] = [
     summary: 'Turn a settlement into a village: gather, raise its buildings, and keep their upkeep paid.',
     prompt:
       'A settlement is only a plot until somebody builds on it. Your goal is to make one a village: three buildings and three members (catalog().buildings has costs, upkeep and effects). ' +
-      'A village pays. At its workshop, refining makes far more on every unit of raw material that OTHER members gathered, so split the work: some gather, others refine what they brought. ' +
+      'A village pays, if it pools. Give what you gather to the stockpile: after it has rested there, another member can refine it at the workshop straight from the stockpile (refineFromStockpile) for far more, and the output stays there for the group. Materials you keep, buy or loot earn none of that. ' +
       'A workshop, a farm and a forge hall (which needs Elder Bear pelts) are a strong first three. Every building takes upkeep from the stockpile and does nothing while that is unpaid, ' +
       'so keep stone and planks in it, and watch who withdraws them. Build only with people you trust: the stockpile is worth stealing. ' + CHAT_RULE,
     firstSteps: [
@@ -365,6 +365,7 @@ export const STARTERS: StarterPrompt[] = [
       "travelTo('ridge'), gatherItem('stone', 80)",
       "buildBuilding('workshop'): it contributes what you carry and builds once nothing is missing, or returns what is",
       "stockpileDeposit upkeep (catalog().buildings.workshop.upkeep), then buildBuilding('farm') and buildBuilding('forge_hall') with your fellow members",
+      "stockpileDeposit the ore and logs you gather, and refineFromStockpile(recipeId, count) what the others gave (stockpile().sharedWork.ready)",
     ],
     milestone: { description: 'Belong to a settlement of level 2 (a village) or higher, with its buildings working.', items: ['pine_plank', 'stone'] },
   },

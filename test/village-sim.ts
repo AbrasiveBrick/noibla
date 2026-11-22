@@ -7,9 +7,13 @@
 //   solo         four players, each alone, using town
 //   founders     four players, each alone in a settlement they founded, with its buildings and income
 //   altFounders  the same, each with two idle accounts as members (the cheapest way to fake a village)
-//   village      four members of one settlement who pool at the stockpile and refine each other's materials
+//   village      four members of one settlement who pool at the stockpile and refine what the others gave
 //   exile        a village of three, plus the fourth player alone in the same world
-
+//   separate     four members of one village who each keep their own materials, by any of the tricks in Keep
+//   freeRider    a village in which three pool and the fourth keeps their own materials
+//
+// Income is what the first AMORTIZE_HOURS of play from nothing come to: the run's first `warmMinutes` as played
+// (materials given to the group rest before they pay), then the rate of the rest of the run.
 import {
   AFFIXES, BUILDINGS, FOOD, ITEMS, MOB_TYPES, NODE_TYPES, RECIPES, SETTLEMENT, SKILLS, TOOL_FAMILIES, UNIQUE_SEP, WEAR,
   baseOf, gearGroup, requiredToolTier, type BuildingId, type RecipeDef, type SkillId,
@@ -17,7 +21,7 @@ import {
 import { MAP_RULES, dist, placeOf, regionAt, type MapPlot } from '../src/shared/map.ts';
 import { Game } from '../src/server/game.ts';
 import { AFFIX_RANGES, MOB_LOOT, SKILL_ODDS } from '../src/server/odds.ts';
-import { capacityOf, units } from '../src/server/buildings.ts';
+import { SHARED_ITEMS, capacityOf, units } from '../src/server/buildings.ts';
 import { equippedToolTier, repairCost, skillLevel } from '../src/server/world.ts';
 import type { Player } from '../src/server/types.ts';
 
@@ -80,7 +84,16 @@ export const BUILDS = {
 } as const;
 export type BuildId = keyof typeof BUILDS;
 
-export type Side = 'solo' | 'founders' | 'altFounders' | 'village' | 'exile';
+export type Side = 'solo' | 'founders' | 'altFounders' | 'village' | 'exile' | 'separate' | 'freeRider';
+
+/**
+ * How a member who keeps their own materials tries for shared work all the same. Each still tries to refine from the
+ * stockpile whatever it will let them.
+ *   own    deposits nothing but upkeep
+ *   cycle  deposits what they gathered and takes as much back at once
+ *   swap   deposits it, and takes as much back, whoever's it was, at the next trip, which comes before it has rested
+ */
+export type Keep = 'own' | 'cycle' | 'swap';
 
 /** Where a player looks for work: anywhere, only in the frontier, or everywhere but there. */
 export type Roam = 'any' | 'frontier' | 'near';
@@ -97,7 +110,11 @@ export interface Strategy {
   roam?: Roam[];
   /** How much of the value further down the chain a player sees in a raw material (0-1). Default 0.8. */
   outlook?: number;
-  /** exile: the exiled player's own habits. The three who stay keep the village's. */
+  /** separate, freeRider: the trick of whoever keeps their own. Default: own. */
+  keep?: Keep;
+  /** village: take shared work's output out as soon as it is made, the least trust that still pays. */
+  skim?: boolean;
+  /** exile, freeRider: the fourth player's own habits. The other three keep the village's. */
   exiled?: { tripMs: number; minGain: number; outlook?: number };
 }
 
@@ -111,6 +128,8 @@ export interface SimOptions {
   seed: number;
   /** Upkeep the settlement keeps in its stockpile, in intervals. Default: enough for the run. */
   reserveIntervals?: number;
+  /** The start of the run that counts as played once, before the rate is measured. Default: none. */
+  warmMinutes?: number;
   /** Average the stockpile only from this minute on. */
   stockpileFromMinute?: number;
 }
@@ -118,8 +137,14 @@ export interface SimOptions {
 export interface SimResult {
   /** Silver-equivalent per player-hour, after upkeep, repairs, deaths and amortized founding and building. */
   perHour: number;
-  /** The same, player by player. A village's income is shared, so only `perHour` is meaningful for it. */
+  /** The same without the shared costs, player by player. A village's income is shared, so `perHour` is what counts there. */
   each: number[];
+  /** Growth of the stockpiles per hour, all settlements together. */
+  pooled: number;
+  /** Silver-equivalent per player-hour once warm, before founding and building. */
+  steady: number;
+  /** Units refined with shared work. */
+  shared: number;
   deaths: number;
   /** Time-averaged value of the settlements' stockpiles, per settlement. */
   stockpile: number;
@@ -144,8 +169,12 @@ interface Bot {
   armor: string;
   home?: MapPlot;
   settlementId?: string;
-  /** Shares a stockpile with other working players. */
+  /** Pools with other working players. */
   team?: Bot[];
+  /** A village member who keeps their own materials. */
+  keep?: Keep;
+  /** keep swap: what is theirs to take back at the next trip. */
+  lent: Record<string, number>;
   /** Their own share, taken out when the stockpile filled up. It is not pooled again. */
   share: Record<string, number>;
   worth: Record<string, number>;
@@ -212,12 +241,12 @@ export function simulate(o: SimOptions): SimResult {
       const armor = gear(p, build.armor);
       must(p.id, 'equip', { item: weapon });
       must(p.id, 'equip', { item: armor });
-      const own = o.side === 'exile' && i === 3 ? o.strategy.exiled : undefined;
-      return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, outlook: own?.outlook ?? o.strategy.outlook ?? 0.8, roam: o.strategy.roam?.[i] ?? 'any', nextTripAt: 0, deposited: false, deaths: 0, shelved: 0 };
+      const own = (o.side === 'exile' || o.side === 'freeRider') && i === 3 ? o.strategy.exiled : undefined;
+      return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, outlook: own?.outlook ?? o.strategy.outlook ?? 0.8, roam: o.strategy.roam?.[i] ?? 'any', lent: {}, nextTripAt: 0, deposited: false, deaths: 0, shelved: 0 };
     });
 
     // Settlements, founded and built with the real commands.
-    const groups: Bot[][] = o.side === 'solo' ? [] : o.side === 'village' ? [bots] : o.side === 'exile' ? [bots.slice(0, 3)] : bots.map((b) => [b]);
+    const groups: Bot[][] = o.side === 'solo' ? [] : ['village', 'separate', 'freeRider'].includes(o.side) ? [bots] : o.side === 'exile' ? [bots.slice(0, 3)] : bots.map((b) => [b]);
     const buildings = o.strategy.buildings ?? ['workshop', 'forge_hall', 'farm'];
     let setupCost = 0;
     let builderMs = 0;
@@ -251,7 +280,16 @@ export function simulate(o: SimOptions): SimResult {
       p.skills.construction = trained;
       if (p.wear) p.wear = {};
       p.busyUntil = 0;
-      for (const m of members) { m.settlementId = sid; m.home = home; if (members.length > 1) m.team = members; }
+      const team = o.side === 'separate' ? [] : o.side === 'freeRider' ? members.slice(0, 3) : members.length > 1 ? members : [];
+      for (const m of members) {
+        m.settlementId = sid;
+        m.home = home;
+        if (team.includes(m)) m.team = team;
+        else if (members.length > 1) {
+          m.keep = o.strategy.keep ?? 'own';
+          if (m.keep === 'swap') m.tripMs = Math.min(m.tripMs, SETTLEMENT.sharedWork.restMs / 2);
+        }
+      }
     });
 
     const intervals = o.reserveIntervals ?? Math.ceil(o.minutes * 60_000 / SETTLEMENT.upkeepMs);
@@ -264,12 +302,25 @@ export function simulate(o: SimOptions): SimResult {
       s.nextIncomeAt = now;
     }
 
-    const expectedOutput = (b: Bot, r: RecipeDef) => {
+    const focusedIn = (b: Bot, skill: SkillId) => (b.team ?? []).filter((x) => x.focus.includes(skill));
+    // Shared work needs someone else who can refine it. Without one, a member keeps that material and refines it alone.
+    const sharesOut = (b: Bot, r: RecipeDef) => !!b.team && r.inputs.some((i) => SHARED_ITEMS.has(i.item))
+      && (!r.requiresFocus || focusedIn(b, r.skill).some((x) => x !== b));
+    const pools = (b: Bot, item: string) => {
+      if (!b.team || !POOLED.has(item)) return false;
+      if (!SHARED_ITEMS.has(item)) return !o.strategy.skim;
+      const r = RECIPES[REFINES.find((id) => RECIPES[id].inputs.some((i) => i.item === item))!];
+      return sharesOut(b, r) || !b.focus.includes(r.skill);
+    };
+    const expectedOutput = (b: Bot, r: RecipeDef, giver?: Bot) => {
       const p = player(b);
       let n = 1 + (b.focus.includes(r.skill) ? Math.min(SKILL_ODDS.maxBonusOutput, SKILL_ODDS.bonusOutputPerLevel * Math.max(10, skillLevel(p, r.skill))) : 0);
       if (r.kind === 'refine') {
         if (build.perfect) n += AFFIX_RANGES.refine_output[2][1] / 100;
-        if (b.team) n *= 1 + SETTLEMENT.sharedWork.outputPct / 100;
+        // Pooled, every unit is refined by someone other than who gave it, unless the giver alone can refine it.
+        if (b.team && r.inputs.some((i) => SHARED_ITEMS.has(i.item)) && (!giver || sharesOut(giver, r))) {
+          n *= 1 + SETTLEMENT.sharedWork.outputPct / 100;
+        }
       }
       return n;
     };
@@ -281,7 +332,7 @@ export function simulate(o: SimOptions): SimResult {
         const r = RECIPES[id];
         if (r.requiresFocus && !someoneFocused(b, r.skill)) continue;
         const doer = (b.team ?? [b]).find((x) => x.focus.includes(r.skill)) ?? b;
-        const out = (r.kind === 'refine' ? b.worth[id] : values[id]) * expectedOutput(doer, r);
+        const out = (r.kind === 'refine' ? b.worth[id] : values[id]) * expectedOutput(doer, r, b);
         const cost = r.inputs.reduce((n, i) => n + values[i.item] * i.qty, 0);
         if (out > cost) for (const i of r.inputs) b.worth[i.item] = Math.max(b.worth[i.item], values[i.item] * (1 + (out / cost - 1) * b.outlook));
       }
@@ -297,7 +348,8 @@ export function simulate(o: SimOptions): SimResult {
           if (TOOL_FAMILIES[r.skill] && (ITEMS[baseOf(b.tools[r.skill]!)].toolTier ?? 0) < requiredToolTier(r.tier)) return false;
           // The altar is in town, away from the village's stockpile.
           if (b.team && r.station === 'altar') return false;
-          return focused || !b.team || !someoneFocused(b, r.skill);
+          // A lone specialist's own materials need an unskilled hand: theirs earn no shared work.
+          return focused || !b.team || !someoneFocused(b, r.skill) || (r.kind === 'refine' && focusedIn(b, r.skill).length === 1);
         })
         .map((r) => {
           const cost = r.inputs.reduce((n, i) => n + values[i.item] * i.qty, 0);
@@ -328,6 +380,13 @@ export function simulate(o: SimOptions): SimResult {
     let samples = 0;
     const sampleFrom = now + (o.stockpileFromMinute ?? 0) * 60_000;
     let lapsed = false;
+    let sharedUnits = 0;
+    const earned = () => {
+      const wear = bots.map((b) => Object.entries(player(b).wear ?? {}).reduce((n, [item, w]) => n + repairCost(item, w), 0));
+      return { each: bots.map((b, i) => holdings(b) - startEach[i] - wear[i]), pool: pooledWorth() - startPool };
+    };
+    const warmEnd = now + (o.warmMinutes ?? 0) * 60_000;
+    let warm: ReturnType<typeof earned> | undefined;
 
     const act = (b: Bot) => {
       const p = player(b);
@@ -355,6 +414,22 @@ export function simulate(o: SimOptions): SimResult {
       if (b.settlementId && (p.wellFedUntil ?? 0) <= now && p.inventory[FOOD.item]) { send(b.id, 'eat'); return; }
 
       const s = b.settlementId ? g.settlements.get(b.settlementId) : undefined;
+      /** A village shares out only the bars that don't fit. */
+      const makeRoom = (adding: number) => {
+        if (!s || !b.team) return;
+        const cap = capacityOf(s);
+        let over = units(s.stockpile) + adding - cap;
+        if (over <= 0) return;
+        over += Math.floor(cap / 20);
+        const surplus = REFINES.map((item) => ({ item, qty: (s.stockpile[item] ?? 0) - (keep[item] ?? 0) })).filter((x) => x.qty > 0).sort((x, y) => y.qty - x.qty);
+        for (const x of surplus) {
+          const qty = Math.min(over, x.qty);
+          if (qty <= 0) continue;
+          must(b.id, 'stockpile.withdraw', { items: [{ item: x.item, qty }] });
+          b.share[x.item] = (b.share[x.item] ?? 0) + qty;
+          over -= qty;
+        }
+      };
       if (now >= b.nextTripAt && !b.job?.engaged) {
         drop();
         const goTown = () => {
@@ -370,42 +445,58 @@ export function simulate(o: SimOptions): SimResult {
             return;
           }
           // A village pools everything that refines. A founder only tops up the upkeep reserve.
+          for (const [item, qty] of Object.entries(b.lent)) {
+            const back = Math.min(qty, s.stockpile[item] ?? 0);
+            if (back) send(b.id, 'stockpile.withdraw', { items: [{ item, qty: back }] });
+          }
+          b.lent = {};
           const items: { item: string; qty: number }[] = [];
+          const tried: { item: string; qty: number }[] = [];
           for (const [item, have] of Object.entries(p.inventory)) {
             if (b.share[item]) b.share[item] = Math.min(b.share[item], have);
-            const qty = b.team && POOLED.has(item) ? have - (b.share[item] ?? 0) : Math.min(have, Math.max(0, (keep[item] ?? 0) - (s.stockpile[item] ?? 0)));
+            const trick = !!b.keep && b.keep !== 'own' && SHARED_ITEMS.has(item);
+            const qty = trick ? have
+              : b.team && POOLED.has(item) ? (pools(b, item) ? have - (b.share[item] ?? 0) : 0)
+                : Math.min(have, Math.max(0, (keep[item] ?? 0) - (s.stockpile[item] ?? 0)));
             if (qty > 0) items.push({ item, qty });
+            if (trick && qty > 0) tried.push({ item, qty });
           }
-          if (b.team) {
-            // A village keeps the stockpile as full as it gets, and shares out only the bars that don't fit.
-            const cap = capacityOf(s);
-            let over = units(s.stockpile) + items.reduce((n, i) => n + i.qty, 0) - cap;
-            if (over > 0) {
-              over += Math.floor(cap / 20);
-              const surplus = REFINES.map((item) => ({ item, qty: (s.stockpile[item] ?? 0) - (keep[item] ?? 0) })).filter((x) => x.qty > 0).sort((x, y) => y.qty - x.qty);
-              for (const x of surplus) {
-                const qty = Math.min(over, x.qty);
-                if (qty <= 0) continue;
-                must(b.id, 'stockpile.withdraw', { items: [{ item: x.item, qty }] });
-                b.share[x.item] = (b.share[x.item] ?? 0) + qty;
-                over -= qty;
-              }
-            }
+          makeRoom(items.reduce((n, i) => n + i.qty, 0));
+          if (items.length && send(b.id, 'stockpile.deposit', { items }).ok && tried.length) {
+            if (b.keep === 'cycle') must(b.id, 'stockpile.withdraw', { items: tried });
+            else for (const i of tried) b.lent[i.item] = i.qty;
           }
-          if (items.length) send(b.id, 'stockpile.deposit', { items });
           b.deposited = true;
         }
-        const spare = (item: string) => {
-          if (!s) return 0;
-          if (b.team || item === 'grain') return Math.max(0, (s.stockpile[item] ?? 0) - (keep[item] ?? 0));
-          return 0;
+        const unreserved = (item: string) => (s ? Math.max(0, (s.stockpile[item] ?? 0) - (keep[item] ?? 0)) : 0);
+        // What may be withdrawn to work on. Raw materials stay: taken out, they would pay no shared work.
+        const spare = (item: string) => ((b.team && !SHARED_ITEMS.has(item)) || item === 'grain' ? unreserved(item) : 0);
+        /** Batches of `r` the stockpile lets this member refine with shared work, as stockpile.view would show. */
+        const sharedBatches = (r: RecipeDef) => {
+          if (!s || r.kind !== 'refine' || !(b.team || b.keep)) return 0;
+          if (!r.inputs.some((i) => SHARED_ITEMS.has(i.item))) return 0;
+          const hands = focusedIn(b, r.skill);
+          // Leave to a specialist what a specialist can take.
+          const mine = (giver: string) => giver !== b.id && (b.focus.includes(r.skill) || !hands.some((x) => x.id !== giver));
+          let n = 10;
+          for (const i of r.inputs) {
+            let have = 0;
+            if (SHARED_ITEMS.has(i.item)) {
+              for (const id in s.work) if (mine(id)) for (const lot of s.work[id].given?.[i.item] ?? []) if (lot.readyAt <= now) have += lot.qty;
+            } else have = unreserved(i.item);
+            n = Math.min(n, Math.floor(have / i.qty));
+          }
+          return n;
         };
         const homeHas = (r: RecipeDef) => !!s?.buildings.some((x) => !x.unpaid && BUILDINGS[x.id].stations?.includes(r.station));
-        const doable = recipes.get(b.id)!.filter(({ r }) => r.inputs.every((i) =>
-          (p.inventory[i.item] ?? 0) + (homeHas(r) ? spare(i.item) : 0) >= i.qty) && (r.station !== 'kitchen' || homeHas(r)));
+        const own = (r: RecipeDef) => r.inputs.every((i) => (p.inventory[i.item] ?? 0) + (homeHas(r) ? spare(i.item) : 0) >= i.qty)
+          // Unskilled hands only finish what a specialist gave.
+          && !(r.kind === 'refine' && b.team && !b.focus.includes(r.skill) && someoneFocused(b, r.skill));
+        const doable = recipes.get(b.id)!.map((x) => ({ ...x, batches: homeHas(x.r) ? sharedBatches(x.r) : 0 }))
+          .filter(({ r, batches }) => batches > 0 || (own(r) && (r.station !== 'kitchen' || homeHas(r))));
         const next = doable.find(({ r }) => homeHas(r)) ?? doable[0];
         if (next) {
-          const { r } = next;
+          const { r, batches } = next;
           const home = homeHas(r);
           if (home) {
             if (!atHome()) { send(b.id, 'move', { to: b.home!.id }); return; }
@@ -418,6 +509,19 @@ export function simulate(o: SimOptions): SimResult {
           }
           const tool = b.tools[r.skill];
           if (tool && p.equipment.tool !== tool && !send(b.id, 'equip', { item: tool }).ok) { b.nextTripAt = now + 5000; return; }
+          if (batches > 0) {
+            makeRoom(0);
+            const out = send(b.id, 'refine', { recipeId: r.id, count: batches, from: 'stockpile' });
+            if (!out.ok) { b.nextTripAt = now + 1000; return; }
+            sharedUnits += out.result.shared.units;
+            if (o.strategy.skim) {
+              const item = r.output.item;
+              // Duskiron needs iron bars in the stockpile.
+              const qty = Math.min(out.result.output.qty, unreserved(item) - (item === 'iron_bar' ? 100 : 0));
+              if (qty > 0) { must(b.id, 'stockpile.withdraw', { items: [{ item, qty }] }); b.share[item] = (b.share[item] ?? 0) + qty; }
+            }
+            return;
+          }
           const count = Math.min(10, ...r.inputs.map((i) => Math.floor(((p.inventory[i.item] ?? 0) + (home ? spare(i.item) : 0)) / i.qty)));
           const draw = r.inputs.map((i) => ({ item: i.item, qty: i.qty * count - (p.inventory[i.item] ?? 0) })).filter((i) => i.qty > 0);
           if (draw.length) must(b.id, 'stockpile.withdraw', { items: draw });
@@ -434,7 +538,7 @@ export function simulate(o: SimOptions): SimResult {
           if (s && home && r.kind === 'refine') {
             const out = r.output.item;
             const have = p.inventory[out] ?? 0;
-            const qty = b.team && POOLED.has(out) ? Math.max(0, have - (b.share[out] ?? 0)) : Math.min(have, Math.max(0, (keep[out] ?? 0) - (s.stockpile[out] ?? 0)));
+            const qty = b.team && pools(b, out) ? Math.max(0, have - (b.share[out] ?? 0)) : Math.min(have, Math.max(0, (keep[out] ?? 0) - (s.stockpile[out] ?? 0)));
             if (qty > 0) send(b.id, 'stockpile.deposit', { items: [{ item: out, qty }] });
           }
           return;
@@ -509,6 +613,7 @@ export function simulate(o: SimOptions): SimResult {
 
     let refreshAt = now;
     while (now < end) {
+      if (o.warmMinutes && !warm && now >= warmEnd) warm = earned();
       if (now >= refreshAt) {
         // Skills level during a run and open recipes.
         recipes = new Map(bots.map((b) => [b.id, recipesOf(b)] as const));
@@ -536,16 +641,25 @@ export function simulate(o: SimOptions): SimResult {
       g.tick();
     }
 
-    const hours = o.minutes / 60;
-    const wear = bots.map((b) => Object.entries(player(b).wear ?? {}).reduce((n, [item, w]) => n + repairCost(item, w), 0));
-    const each = bots.map((b, i) => (holdings(b) - startEach[i] - wear[i]) / hours);
-    const gross = (each.reduce((n, x) => n + x, 0) + (pooledWorth() - startPool) / hours) / bots.length;
+    const last = earned();
+    const warmHours = warm ? o.warmMinutes! / 60 : 0;
+    const rate = (total: number, atWarm = 0) => (total - atWarm) / (o.minutes / 60 - warmHours);
+    /** Per hour over the first AMORTIZE_HOURS: the warm-up as played, then the rate after it. */
+    const hourly = (total: number, atWarm = 0) =>
+      (warm ? (atWarm + rate(total, atWarm) * (AMORTIZE_HOURS - warmHours)) / AMORTIZE_HOURS : rate(total));
+    const each = last.each.map((x, i) => hourly(x, warm?.each[i]));
+    const pooled = hourly(last.pool, warm?.pool);
+    const gross = (each.reduce((n, x) => n + x, 0) + pooled) / bots.length;
+    const steady = (last.each.reduce((n, x, i) => n + rate(x, warm?.each[i]), 0) + rate(last.pool, warm?.pool)) / bots.length;
     // Building takes time that would otherwise have earned at this rate.
     const buildTime = (builderMs / 3_600_000) * Math.max(0, gross);
     const setup = (setupCost + buildTime) / AMORTIZE_HOURS / bots.length;
     return {
       perHour: gross - setup,
       each,
+      pooled,
+      steady,
+      shared: sharedUnits,
       deaths: bots.reduce((n, b) => n + player(b).stats.deaths, 0),
       stockpile: groups.length ? stockSum / Math.max(1, samples) / groups.length : 0,
       stockpileEnd: groups.length ? pooledWorth() / groups.length : 0,
