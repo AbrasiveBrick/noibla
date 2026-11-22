@@ -2,7 +2,7 @@
 // and feedback reports. Access is enforced here for history and in
 // Game.canSee for live events. Chat never carries system or trade-state messages.
 
-import type { ZoneId } from '../shared/catalog.ts';
+import { ZONES, type ZoneId } from '../shared/catalog.ts';
 import type { ChatMessage, ConversationSummary, DirectMessage, FeedbackCategory, ForumPost, ForumThreadSummary } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Player } from './types.ts';
@@ -53,7 +53,8 @@ function chatHistory(g: Game, p: Player, payload: Record<string, any>) {
   const limit = optInt(payload, 'limit', 1, 200, 50);
   const beforeId = optInt(payload, 'beforeId', 1, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
   if (channel.startsWith('dm:')) fail('FORBIDDEN', 'private conversations are read with dm.history, and only by their two participants');
-  const m = /^zone:(town|wilds|frontier)$/.exec(channel);
+  const m = /^zone:([a-z]+)$/.exec(channel);
+  if (m && !Object.hasOwn(ZONES, m[1])) fail('NOT_FOUND', `unknown channel "${channel}"`);
   if (!m) fail('NOT_FOUND', `unknown channel "${channel}"`);
   const zone = requireInZone(g, p);
   if (m![1] !== zone) fail('FORBIDDEN', `you can only read the channel of the region you are in (zone:${zone})`);

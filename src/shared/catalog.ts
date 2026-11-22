@@ -3,8 +3,9 @@
 
 import { STARTERS } from './starters.ts';
 
-export type ZoneId = 'town' | 'wilds' | 'frontier';
-export type Safety = 'safe' | 'safe-wild' | 'lethal';
+export type ZoneId = 'town' | 'wilds' | 'frontier' | 'hollow' | 'ridge';
+/** `contested`: settlement land. PvP is allowed and death drops everything, as in the lethal frontier. */
+export type Safety = 'safe' | 'safe-wild' | 'contested' | 'lethal';
 export type StationId = 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench' | 'altar';
 export type Slot = 'weapon' | 'armor' | 'tool';
 export const SLOTS: Slot[] = ['weapon', 'armor', 'tool'];
@@ -58,6 +59,8 @@ export const ITEMS: Record<string, ItemDef> = {
   copper_ore: { id: 'copper_ore', name: 'Copper Ore', kind: 'resource', tier: 1, description: 'Mined from copper veins in the wilds.' },
   iron_ore: { id: 'iron_ore', name: 'Iron Ore', kind: 'resource', tier: 2, description: 'Mined from iron veins in the wilds. Needs a T1+ pickaxe.' },
   pine_log: { id: 'pine_log', name: 'Pine Log', kind: 'resource', tier: 1, description: 'Cut from pine groves in the wilds.' },
+  stone: { id: 'stone', name: 'Stone', kind: 'resource', tier: 1, description: 'Quarried in the contested regions (Mossy Hollow, Stonewatch Ridge) with a pickaxe. Founds settlements.' },
+  grain: { id: 'grain', name: 'Grain', kind: 'resource', tier: 1, description: 'Reaped from fertile fields in the contested regions with an axe. Settlement food stock.' },
   rough_hide: { id: 'rough_hide', name: 'Rough Hide', kind: 'resource', tier: 1, description: 'Dropped by wolves and boars in the wilds.' },
   duskiron_ore: { id: 'duskiron_ore', name: 'Duskiron Ore', kind: 'resource', tier: 3, frontierExclusive: true, description: 'Frontier exclusive. Mined from duskiron veins. Needs a T2 pickaxe.' },
   wraith_essence: { id: 'wraith_essence', name: 'Wraith Essence', kind: 'resource', tier: 3, frontierExclusive: true, description: 'Frontier exclusive. Dropped by wraiths.' },
@@ -279,6 +282,8 @@ export const NODE_TYPES: Record<string, NodeDef> = {
   copper_vein: { id: 'copper_vein', name: 'Copper Vein', item: 'copper_ore', tier: 1, skill: 'mining', maxCharges: 10 },
   iron_vein: { id: 'iron_vein', name: 'Iron Vein', item: 'iron_ore', tier: 2, skill: 'mining', maxCharges: 10 },
   pine_grove: { id: 'pine_grove', name: 'Pine Grove', item: 'pine_log', tier: 1, skill: 'woodcutting', maxCharges: 10 },
+  stone_quarry: { id: 'stone_quarry', name: 'Stone Quarry', item: 'stone', tier: 1, skill: 'mining', maxCharges: 12 },
+  fertile_field: { id: 'fertile_field', name: 'Fertile Field', item: 'grain', tier: 1, skill: 'woodcutting', maxCharges: 12 },
   duskiron_vein: { id: 'duskiron_vein', name: 'Duskiron Vein', item: 'duskiron_ore', tier: 3, skill: 'mining', maxCharges: 6 },
 };
 
@@ -322,6 +327,8 @@ export interface ZoneDef {
   pvp: boolean;
   /** Death drops carried + equipped items into a loot bag. */
   fullLoot: boolean;
+  /** Settlement plots generated in this region (see SETTLEMENT). */
+  plots: number;
   nodes: { type: string; count: number }[];
   mobs: { type: string; count: number }[];
 }
@@ -330,21 +337,37 @@ export const ZONES: Record<ZoneId, ZoneDef> = {
   town: {
     id: 'town', name: 'Brightwater (Town)', safety: 'safe', description: 'No combat. Bank, crafting stations, quest board, trade forum.',
     adjacent: ['wilds'], stations: ['smelter', 'sawmill', 'tannery', 'forge', 'workbench', 'altar'], hasBank: true, hasForum: true, hasQuestBoard: true,
-    pvp: false, fullLoot: false, nodes: [], mobs: [],
+    pvp: false, fullLoot: false, plots: 0, nodes: [], mobs: [],
   },
   wilds: {
     id: 'wilds', name: 'Greenreach (Safe Wilderness)', safety: 'safe-wild', description: 'Basic resources and PvE. Dying here keeps your gear and inventory.',
-    adjacent: ['town', 'frontier'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
-    pvp: false, fullLoot: false,
+    adjacent: ['town', 'frontier', 'hollow', 'ridge'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
+    pvp: false, fullLoot: false, plots: 0,
     nodes: [{ type: 'copper_vein', count: 2 }, { type: 'iron_vein', count: 3 }, { type: 'pine_grove', count: 2 }],
     mobs: [{ type: 'wolf', count: 3 }, { type: 'boar', count: 3 }, { type: 'elder_bear', count: 1 }],
   },
   frontier: {
     id: 'frontier', name: 'The Ashen Frontier (Lethal)', safety: 'lethal', description: 'Open PvP. Exclusive duskiron and wraith essence. Death drops everything you carry and wear.',
-    adjacent: ['wilds'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
-    pvp: true, fullLoot: true,
+    adjacent: ['wilds', 'ridge'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
+    pvp: true, fullLoot: true, plots: 0,
     nodes: [{ type: 'duskiron_vein', count: 2 }],
     mobs: [{ type: 'wraith', count: 3 }, { type: 'ash_wyrm', count: 1 }],
+  },
+  hollow: {
+    id: 'hollow', name: 'Mossy Hollow (Contested)', safety: 'contested',
+    description: 'Settlement land north of the wilds, reached only through them. PvP is allowed and death drops everything you carry and wear. Stone, grain and settlement plots.',
+    adjacent: ['wilds'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
+    pvp: true, fullLoot: true, plots: 3,
+    nodes: [{ type: 'stone_quarry', count: 2 }, { type: 'fertile_field', count: 2 }, { type: 'pine_grove', count: 1 }],
+    mobs: [{ type: 'wolf', count: 2 }, { type: 'boar', count: 1 }],
+  },
+  ridge: {
+    id: 'ridge', name: 'Stonewatch Ridge (Contested)', safety: 'contested',
+    description: 'Settlement land south of the wilds, with a ford into the frontier. PvP is allowed and death drops everything you carry and wear. Rich stone, some iron, settlement plots.',
+    adjacent: ['wilds', 'frontier'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
+    pvp: true, fullLoot: true, plots: 2,
+    nodes: [{ type: 'stone_quarry', count: 3 }, { type: 'iron_vein', count: 1 }, { type: 'fertile_field', count: 1 }],
+    mobs: [{ type: 'boar', count: 2 }, { type: 'wolf', count: 1 }],
   },
 };
 
@@ -380,7 +403,7 @@ export const TIMING = {
   refineMs: 1200,
   craftMs: 2000,
   globalCooldownMs: 1000,
-  /** No leaving your region (town, wilds, frontier) within this long after dealing or taking damage. Walking inside it is allowed. Walking speed: catalog.map.msPerTile. */
+  /** No leaving your region within this long after dealing or taking damage. Walking inside it is allowed. Walking speed: catalog.map.msPerTile. */
   combatLockMs: 5000,
   outOfCombatMs: 4000,
   regenIntervalMs: 1000,
@@ -447,6 +470,27 @@ export const PARTY = {
   maxDamageBonus: 0.2,
   killXpShare: 0.5,
   spoilsReservedMs: 5 * 60_000,
+};
+
+/**
+ * Settlements (contested regions only). Found one at a free plot; members share a stockpile kept at the plot.
+ * Roles rank leader > steward > member. The charter decides open or closed membership, the lowest role allowed to
+ * withdraw from the stockpile, and a tax on members' quest silver paid into the stockpile.
+ */
+export const SETTLEMENT = {
+  /** Paid by the founder from their inventory. The silver is destroyed (a sink); planks and stone are used up. */
+  foundCost: [{ item: 'silver', qty: 200 }, { item: 'pine_plank', qty: 10 }, { item: 'stone', qty: 20 }] as ItemStack[],
+  maxMembers: 12,
+  inviteTtlMs: 30 * 60_000,
+  /** settlement.vote motions stay open this long. A motion passes when more than half of the eligible voters vote yes. */
+  voteTtlMs: 30 * 60_000,
+  maxTaxPct: 50,
+  /** Charter of a new settlement. */
+  defaultCharter: { open: false, withdrawRole: 'steward' as 'leader' | 'steward' | 'member', taxPct: 0 },
+  nameMin: 3,
+  nameMax: 30,
+  /** Audit entries returned per page by stockpile.log (and the tail shown by stockpile.view). */
+  logPage: 50,
 };
 
 /** Fraction of carried (not banked) silver destroyed on any death, before the rest is dropped or kept. */
@@ -542,4 +586,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, party: PARTY, starterKit: STARTER_KIT, orbs: ORBS, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, party: PARTY, settlement: SETTLEMENT, starterKit: STARTER_KIT, orbs: ORBS, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };

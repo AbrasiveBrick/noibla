@@ -7,12 +7,13 @@ import {
   effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
 import type { AffixRoll, MobView, UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
-import { MAP_RULES, dist, findPath, inBounds, nearestWalkable, pathLength, placeOf, pointAlong, regionAt, walkable, type PlaceId, type Pos } from '../shared/map.ts';
+import { MAP_RULES, dist, findPath, inBounds, nearestWalkable, pathLength, placeOf, plotOf, pointAlong, regionAt, walkable, type PlaceId, type Pos } from '../shared/map.ts';
 import type { Game } from './game.ts';
 import { MOB_LOOT, SKILL_ODDS } from './odds.ts';
 import type { CommandDef, LootBag, Mob, Player, Walk } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
 import { alliesInZone, invitesFor, partyDamageMult, partyOf, partyView } from './party.ts';
+import { settlementInvitesFor, settlementSummary, taxQuestReward } from './settlement.ts';
 
 // ---------- affixes ----------
 
@@ -227,6 +228,10 @@ function zoneView(g: Game, p: Player): ZoneView {
     id: z.id, name: z.name, safety: z.safety, adjacent: z.adjacent, hasBank: z.hasBank, hasForum: z.hasForum, hasQuestBoard: z.hasQuestBoard, pvp: z.pvp,
     viewRadius: R,
     places: near(g.map.places.map((s) => ({ id: s.id, ...loc(s, MAP_RULES.range.place) }))),
+    plots: near(g.map.plots.map((pl) => {
+      const s = [...g.settlements.values()].find((x) => x.plotId === pl.id);
+      return { id: pl.id, region: pl.region, ...loc(pl, MAP_RULES.range.plot), settlement: s ? { id: s.id, name: s.name } : null };
+    })),
     nodes: near([...g.nodes.values()].map((n) => {
       const def = NODE_TYPES[n.type];
       return { id: n.id, type: n.type, item: def.item, tier: def.tier, region: n.zone, ...loc(n, I), charges: n.charges, maxCharges: def.maxCharges, nextChargeInMs: n.charges < def.maxCharges ? Math.max(0, n.nextChargeAt - now) : 0 };
@@ -278,6 +283,8 @@ export function observe(g: Game, p: Player): Observation {
     openTrades,
     party: partyOf(g, p) ? partyView(g, partyOf(g, p)!) : null,
     partyInvites: invitesFor(g, p),
+    settlement: settlementSummary(g, p),
+    settlementInvites: settlementInvitesFor(g, p),
   };
 }
 
@@ -292,6 +299,8 @@ function resolveTarget(g: Game, p: Player, to: string): { dest: Pos; range: numb
   }
   const place = placeOf(g.map, to);
   if (place) return { dest: place, range: 1.5 };
+  const plot = plotOf(g.map, to);
+  if (plot) return { dest: plot, range: 1.5 };
   const I = MAP_RULES.range.interact;
   const node = g.nodes.get(to);
   if (node) return { dest: node, range: I };
@@ -302,7 +311,7 @@ function resolveTarget(g: Game, p: Player, to: string): { dest: Pos; range: numb
   const other = g.players.get(to) ?? g.playerByName(to);
   if (other && other.id !== p.id) return { dest: posOf(g, other), range: I };
   return fail('BAD_REQUEST', `unknown move target "${to}"`, undefined,
-    `use a region (${Object.keys(ZONES).join(', ')}), a place (${g.map.places.map((s) => s.id).join(', ')}), a node/mob/loot bag/player id from observe(), or { x, y }`);
+    `use a region (${Object.keys(ZONES).join(', ')}), a place (${g.map.places.map((s) => s.id).join(', ')}), a settlement plot (${g.map.plots.map((pl) => pl.id).join(', ')}), a node/mob/loot bag/player id from observe(), or { x, y }`);
 }
 
 function move(g: Game, p: Player, payload: Record<string, any>) {
@@ -973,10 +982,12 @@ function questClaim(g: Game, p: Player, payload: Record<string, any>) {
   q!.status = 'claimed';
   addItems(p.inventory, def!.reward);
   g.store.ledger('created.quests', silverIn(def!.reward));
-  g.emit('quest', { kind: 'operator' }, { playerId: p.id, name: p.name, questId, status: 'claimed', reward: def!.reward }, { zone: 'town', actor: p });
-  g.setLastAction(p, 'quest', `claimed ${def!.name} (${describe(def!.reward)})`);
+  // Settlement charter tax: a share of the quest silver goes straight into the stockpile.
+  const tax = taxQuestReward(g, p, silverIn(def!.reward));
+  g.emit('quest', { kind: 'operator' }, { playerId: p.id, name: p.name, questId, status: 'claimed', reward: def!.reward, ...(tax ? { tax } : {}) }, { zone: 'town', actor: p });
+  g.setLastAction(p, 'quest', `claimed ${def!.name} (${describe(def!.reward)})${tax ? `, paid ${tax} silver settlement tax` : ''}`);
   g.markPlayer(p);
-  return { reward: def!.reward };
+  return tax ? { reward: def!.reward, tax } : { reward: def!.reward };
 }
 
 // ---------- town services: shop & repair (silver sinks) ----------

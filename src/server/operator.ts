@@ -14,7 +14,7 @@ import { toStacks } from './util.ts';
 
 /** Commands and failures counted for the per-bot failure rate. */
 const RATE_WINDOW_MS = 10 * 60_000;
-const LEDGER_KINDS = { created: ['mobs', 'quests'], destroyed: ['death', 'repair', 'shop', 'tradeFee', 'orbFee'] } as const;
+const LEDGER_KINDS = { created: ['mobs', 'quests'], destroyed: ['death', 'repair', 'shop', 'tradeFee', 'orbFee', 'settlement'] } as const;
 
 const silverOf = (stacks: { item: string; qty: number }[] | undefined) => (stacks ?? []).reduce((n, s) => n + (s.item === 'silver' ? s.qty : 0), 0);
 
@@ -43,13 +43,15 @@ export function backfillEconomyLedger(store: Store) {
 }
 
 function economy(g: Game, circulation: { carried: number; banked: number }) {
+  let stockpiled = 0;
+  for (const s of g.settlements.values()) stockpiled += s.stockpile.silver ?? 0;
   const rows = new Map(g.store.all<{ kind: string; qty: number }>('SELECT kind, qty FROM economy_ledger').map((r) => [r.kind, r.qty]));
   const side = (k: 'created' | 'destroyed') => Object.fromEntries(LEDGER_KINDS[k].map((n) => [n, rows.get(`${k}.${n}`) ?? 0]));
   return {
     since: Number(g.store.getMeta('economy_since') ?? 0),
     created: side('created') as Record<(typeof LEDGER_KINDS)['created'][number], number>,
     destroyed: side('destroyed') as Record<(typeof LEDGER_KINDS)['destroyed'][number], number>,
-    circulation: { ...circulation, total: circulation.carried + circulation.banked },
+    circulation: { ...circulation, stockpiled, total: circulation.carried + circulation.banked + stockpiled },
     /** Orb and shard flows (counts of items, not silver). */
     orbs: {
       created: { mobs: rows.get('orbs.created.mobs') ?? 0, crafted: rows.get('orbs.created.crafted') ?? 0, shop: rows.get('orbs.created.shop') ?? 0 },
@@ -164,6 +166,7 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
         return { id: m.id, type: m.type, name: MOB_TYPES[m.type]?.name ?? m.type, x: Math.round((alive ? m.x : m.home.x) * 10) / 10, y: Math.round((alive ? m.y : m.home.y) * 10) / 10, alive, hp: m.hp, maxHp: MOB_TYPES[m.type]?.hp ?? 0, targetId: alive ? m.targetId : null };
       }),
       nodes: [...g.nodes.values()].map((n) => ({ id: n.id, type: n.type, item: NODE_TYPES[n.type]?.item ?? n.type, x: n.x, y: n.y, charges: n.charges, maxCharges: NODE_TYPES[n.type]?.maxCharges ?? 0 })),
+      plots: g.map.plots.map((pl) => ({ ...pl, settlement: [...g.settlements.values()].find((x) => x.plotId === pl.id)?.name ?? null })),
       bags: [...g.bags.values()].map((b) => ({ id: b.id, x: b.x ?? 0, y: b.y ?? 0, ownerName: b.ownerName, items: toStacks(b.items) })),
     },
     items: Object.fromEntries(Object.values(ITEMS).map((i) => [i.id, i.name])),

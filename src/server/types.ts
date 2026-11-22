@@ -39,6 +39,52 @@ export interface Player {
   focusDroppedAt?: number;
   /** Party the player belongs to (see Party). */
   partyId?: string;
+  /** Settlement the player belongs to (see Settlement). */
+  settlementId?: string;
+}
+
+export type SettlementRole = 'leader' | 'steward' | 'member';
+
+export interface SettlementCharter {
+  /** Open: anyone not barred may join. Closed: joining needs a live invitation. */
+  open: boolean;
+  /** Lowest role allowed to withdraw from the stockpile. */
+  withdrawRole: SettlementRole;
+  /** Percent of members' quest silver paid into the stockpile. */
+  taxPct: number;
+}
+
+/** A settlement.vote motion: exile a member, or make a member the leader. */
+export interface SettlementMotion {
+  id: string;
+  kind: 'exile' | 'leader';
+  targetId: string;
+  openedBy: string;
+  openedAt: number;
+  expiresAt: number;
+  /** Voter id -> yes (true) or no (false). */
+  votes: Record<string, boolean>;
+}
+
+export interface Settlement {
+  id: string;
+  name: string;
+  zone: ZoneId;
+  plotId: string;
+  founderId: string;
+  foundedAt: number;
+  /** Member id -> role and join time. Exactly one leader. */
+  members: Record<string, { role: SettlementRole; joinedAt: number }>;
+  charter: SettlementCharter;
+  /** Shared items, kept at the plot. Members only (see stockpile.*); every change is written to stockpile_log. */
+  stockpile: Bag;
+  /** Pending invitations: invited player id -> expiry time. */
+  invites: Record<string, number>;
+  /** Expelled or exiled players: barred from joining an open settlement until invited again. */
+  barred: Record<string, number>;
+  motions: SettlementMotion[];
+  /** 1 = camp. Stage 3 buildings raise it. */
+  level: number;
 }
 
 export interface Party {
@@ -135,6 +181,8 @@ export type Visibility =
   | { kind: 'player'; playerId: string }
   | { kind: 'dm'; a: string; b: string }
   | { kind: 'party'; partyId: string }
+  /** Members of a settlement only (stockpile activity, membership, votes). */
+  | { kind: 'settlement'; id: string }
   | { kind: 'operator' };
 
 export type Subscriber =

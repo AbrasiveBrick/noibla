@@ -1,6 +1,6 @@
 # Community & betrayal plan: settlements, hunting parties, theft, permadeath
 
-> Staged roadmap. Stage 1 (parties and bosses) shipped first; each later stage is one PR and one session.
+> Staged roadmap. Stages 1 (parties and bosses) and 2 (settlements and stockpiles) have shipped; each later stage is one PR and one session.
 
 ## Context
 
@@ -55,19 +55,22 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 ## Stage 2: Settlements, membership, stockpile
 
 - **New zones** (`ZONES`):
-  - **Mossy Hollow** and **Stonewatch Ridge**, both adjacent to the wilds; the Ridge is also adjacent to the frontier.
+  - **Mossy Hollow** (`hollow`) and **Stonewatch Ridge** (`ridge`). The map is now 64×32 and its middle band is split north to south into Hollow, wilds and Ridge. The Hollow is reached only through the wilds; the river's second ford leads from the Ridge into the frontier.
   - Safety is `'contested'`: PvP is allowed. Death drops everything into a bag.
-  - Each zone has 2-3 settlement plots, new nodes (`stone_quarry`, `fertile_field`) and a few mobs.
-  - Update `ZoneId`, `Safety` and `zonePath`.
+  - The Hollow has 3 settlement plots and the Ridge 2, with new nodes (`stone_quarry` for stone, `fertile_field` for grain) and wolves and boars.
+  - `fertile_field` is reaped with woodcutting and an axe until stage 3 adds farming and hoes.
+  - **Paths never shortcut through PvP land** (`findPath`). They stay in the start's and destination's regions, else add only town and the wilds. The generator keeps every region in one piece so that this always works.
+  - **Old worlds:** `MAP_LAYOUT` in `map.ts` versions the layout. On the first load after a bump everyone keeps their region and may move within it, so nobody wakes up in PvP land.
 - **Settlements** (`src/server/settlement.ts`, persisted like trades):
-  - **Fields:** `{ id, name, zone, plot, members{role}, charter, stockpile: Bag, buildings, projects, stances, level }`.
-  - **Founding:** `settlement.found` at a free plot. It costs silver plus planks and stone.
-  - **Membership:** `settlement.invite`, `settlement.join`, `settlement.leave`, `settlement.expel`, `settlement.setRole` (leader, steward or member).
-  - **Charter:** `settlement.setCharter` sets open or closed membership, which role may withdraw, and a tax % on members' quest rewards that goes to the stockpile.
-  - **Votes:** `settlement.vote` is a majority vote on exile or leadership. It lets a group remove a leader who abuses power.
-  - **Stockpile:** `stockpile.deposit`, `stockpile.withdraw`, `stockpile.view`, usable only in the settlement's zone. Withdrawals follow the charter's role rule.
-  - **Audit log** (table `stockpile_log`): every deposit and withdrawal, with actor, readable by members.
-- **Public listing:** `settlement.list` shows name, zone, member count, level and stance. It never shows contents.
+  - **Fields:** `{ id, name, zone, plotId, founderId, foundedAt, members{role}, charter, stockpile: Bag, invites, barred, motions, level }`. Stages 3 and 6 add `buildings`, `projects` and `stances`.
+  - **Founding:** `settlement.found` at a free plot. It costs 200 silver, 10 planks and 20 stone.
+  - **Membership:** `settlement.invite`, `settlement.join`, `settlement.decline`, `settlement.leave`, `settlement.expel`, `settlement.setRole` (leader, steward or member). One settlement per player, up to 12 members. The expelled and exiled cannot rejoin without a new invitation.
+  - **Charter:** `settlement.setCharter` sets open or closed membership (closed by default), which role may withdraw (steward by default), and a tax % (0-50) on members' quest silver that goes to the stockpile.
+  - **Votes:** `settlement.vote` is a majority vote on exile or leadership. It lets a group remove a leader who abuses power. It needs more than half of *all* members, the target included, so in a pair neither can exile the other.
+  - **Succession and abandonment:** a departing leader is followed by the highest-ranked, longest-standing member. The last member out spills the stockpile into a public loot bag at the plot.
+  - **Stockpile:** `stockpile.deposit`, `stockpile.withdraw`, `stockpile.view`, usable only within 3 tiles of the plot and inside its region. Withdrawals follow the charter's role rule.
+  - **Audit log** (table `stockpile_log`): every deposit, withdrawal, tax payment and abandonment, with actor. Members read it at the plot (`stockpile.view`) or from anywhere (`stockpile.log`).
+- **Public listing:** `settlement.list` shows id, name, zone, member count and level (stage 6 adds stance). It never shows contents, members, charter or plot. A plot in view shows the name of the settlement on it.
 - New `Visibility` `{ kind: 'settlement', id }` for member-only events.
 - Tests: `test/settlement.test.ts` covers founding, permissions, the audit log, voting, and stockpile reads being refused to non-members.
 
@@ -91,7 +94,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Settlement levels:** camp, then village (3 buildings, 3 members), then town (6 buildings, 5 members). Each level unlocks more building slots and a small passive silver income into the stockpile.
 - **Upkeep:** unpaid upkeep disables a building. This keeps the stockpile in steady use and always worth stealing.
 - **New skills:** `construction`, `farming` and `cooking`, with tool families trowel, hoe and pot.
-  - Added to `SKILLS`, `TOOL_FAMILIES`, `STARTER_KIT` and the affix pools.
+  - Added to `SKILLS`, `TOOL_FAMILIES`, `STARTER_KIT` and the affix pools. Move `fertile_field` from woodcutting to farming.
   - Focus stays at 3 slots, so groups need more specialists.
 - **Station bonuses:** `makeItem` (`world.ts:298`) checks settlement stations and bonuses besides `ZONES[zone].stations`.
 - Tests: `test/buildings.test.ts` covers projects, upkeep disabling a building, bonuses, food, and a numeric check of the group-versus-solo target.

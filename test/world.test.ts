@@ -25,7 +25,7 @@ test('catalog: frontier exclusives only originate in the frontier and feed highe
 test('catalog: starter gear (weapon, armor, tools) is obtainable from safe zones only', () => {
   const safeRaw = new Set<string>(['silver']);
   for (const z of Object.values(ZONES)) {
-    if (z.safety === 'lethal') continue;
+    if (z.pvp) continue;
     for (const n of z.nodes) safeRaw.add(NODE_TYPES[n.type].item);
     for (const m of z.mobs) for (const d of MOB_TYPES[m.type].drops) safeRaw.add(d.item);
   }

@@ -2,19 +2,33 @@
 // Shared by the server (authoritative movement, ranges, spawns) and the SDK (path previews,
 // nearest-thing lookups). Bots read the generated map with `catalog()` as `catalog.map`.
 //
-// Layout rules (every seed): three regions as vertical bands, west → east:
-//   town (safe) | wilds (PvE) | frontier (lethal PvP).
-// The town is walled with one gate; a river separates the wilds from the frontier and is crossed
-// at two fords. Lakes and rocks are scattered in the wilds and frontier. Every open tile is reachable.
+// Layout rules (every seed): three vertical bands, west → east:
+//   town (safe) | middle band | frontier (lethal PvP).
+// The middle band is split north → south into three regions:
+//   Mossy Hollow (contested) / wilds (PvE) / Stonewatch Ridge (contested).
+// The town is walled with one gate, which opens onto the wilds. A river separates the middle band from
+// the frontier and is crossed at two fords: one from the wilds, one from the Ridge. So the Hollow is
+// reached only through the wilds, and the Ridge borders both the wilds and the frontier.
+// Settlement plots lie in the two contested regions. Lakes and rocks are scattered outside town.
+// Every open tile is reachable.
 
 import type { StationId, ZoneId } from './catalog.ts';
 
 export interface Pos { x: number; y: number }
 
+/**
+ * Bump when the generator's layout changes. A world saved on another layout is moved over on load:
+ * everyone keeps their region, and only the position inside it may change (see Game.load).
+ */
+export const MAP_LAYOUT = '2';
+
 /** Things you use by standing near them in town. Crafting stations plus the bank, quest board and shop. */
 export type PlaceId = StationId | 'bank' | 'quest_board' | 'shop';
 
-export interface MapRegion { id: ZoneId; x0: number; x1: number }
+/** A rectangle of tiles: (x, y) belongs to the region with x0 <= x <= x1 and y0 <= y <= y1. */
+export interface MapRegion { id: ZoneId; x0: number; x1: number; y0: number; y1: number }
+/** A settlement plot: found a settlement while standing within MAP_RULES.range.plot of a free one. */
+export interface MapPlot { id: string; region: ZoneId; x: number; y: number }
 export interface MapPlace { id: PlaceId; x: number; y: number }
 export interface MapNode { id: string; type: string; region: ZoneId; x: number; y: number }
 export interface MapMobSpawn { id: string; type: string; region: ZoneId; x: number; y: number }
@@ -25,7 +39,7 @@ export interface WorldMap {
   height: number;
   /** Rows (y = 0 is the top), one char per tile. See MAP_RULES.legend. Only '.', '+' and '=' are walkable. */
   tiles: string[];
-  /** Vertical bands covering the full height: a tile (x, y) belongs to the region with x0 <= x <= x1. */
+  /** Rectangles tiling the map: a tile (x, y) belongs to the region with x0 <= x <= x1 and y0 <= y <= y1. */
   regions: MapRegion[];
   /** Where `move { to: '<region>' }` / travelTo(region) walks. The town anchor is the plaza, next to every place. */
   anchors: Record<ZoneId, Pos>;
@@ -36,12 +50,14 @@ export interface WorldMap {
   nodes: MapNode[];
   /** Mob home tiles. Mobs chase their attacker inside their region and return home when they lose it. */
   mobSpawns: MapMobSpawn[];
+  /** Settlement plots (in the contested regions). Ids are stable for a seed. */
+  plots: MapPlot[];
 }
 
 /** Fixed map rules (same for every seed). Distances are in tiles (Euclidean). */
 export const MAP_RULES = {
   width: 64,
-  height: 24,
+  height: 32,
   /** Walking time per tile at world speed 1 (diagonal steps cost √2 tiles). */
   msPerTile: 250,
   /** Mobs chasing a target move this fast (a bit faster than players: you cannot outrun one inside its region). */
@@ -53,6 +69,8 @@ export const MAP_RULES = {
     interact: 1.5,
     /** Use a place (bank, crafting station, quest board, shop). */
     place: 3,
+    /** Found a settlement at a plot, or use its stockpile. */
+    plot: 3,
   },
   legend: { '.': 'ground', '+': 'town gate', '=': 'ford', '#': 'wall or rock (blocked)', '~': 'water (blocked)' },
 } as const;
@@ -70,10 +88,13 @@ export function walkable(m: WorldMap, x: number, y: number): boolean {
 }
 
 export function regionAt(m: WorldMap, p: Pos): ZoneId {
-  const x = Math.round(p.x);
-  for (const r of m.regions) if (x >= r.x0 && x <= r.x1) return r.id;
-  return x < 0 ? m.regions[0].id : m.regions[m.regions.length - 1].id;
+  const x = Math.min(m.width - 1, Math.max(0, Math.round(p.x)));
+  const y = Math.min(m.height - 1, Math.max(0, Math.round(p.y)));
+  for (const r of m.regions) if (x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) return r.id;
+  return m.regions[0].id;
 }
+
+export function plotOf(m: WorldMap, id: string): MapPlot | undefined { return m.plots.find((p) => p.id === id); }
 
 export function placeOf(m: WorldMap, id: string): MapPlace | undefined { return m.places.find((s) => s.id === id); }
 
@@ -98,19 +119,29 @@ export function nearestWalkable(m: WorldMap, p: Pos): Pos {
   return best ?? { x: sx, y: sy };
 }
 
+/** Regions a path may pass through on the way to somewhere else. The others are entered only on purpose. */
+const TRANSIT: ZoneId[] = ['town', 'wilds'];
+
 /**
- * Shortest 8-directional path (no cutting corners past blocked tiles) from `from` to the closest
- * tile that is within `range` of `target`. Returns the tiles to step through, starting with `from`,
- * or null when unreachable. `range` 0 means "onto the target tile".
+ * 8-directional path (no cutting corners past blocked tiles) from `from` to the closest tile within `range` of
+ * `target`. Returns the tiles to step through, starting with `from`, or null when unreachable. `range` 0 means
+ * "onto the target tile". PvP regions are never shortcuts: the path is the shortest one inside the start's and the
+ * target's own regions, else the shortest one that also uses town and the wilds.
  */
 export function findPath(m: WorldMap, from: Pos, target: Pos, range = 0): Pos[] | null {
   const start = nearestWalkable(m, from);
+  const ends = [regionAt(m, start), regionAt(m, target)];
+  return shortestPath(m, start, target, range, ends) ?? shortestPath(m, start, target, range, [...ends, ...TRANSIT]) ?? shortestPath(m, start, target, range);
+}
+
+/** `within`: the regions the path may use (default: all). */
+function shortestPath(m: WorldMap, start: Pos, target: Pos, range: number, within?: ZoneId[]): Pos[] | null {
   const W = m.width;
   const idx = (x: number, y: number) => y * W + x;
   const goal = (x: number, y: number) => dist({ x, y }, target) <= range + 1e-9;
   const cost = new Float64Array(W * m.height).fill(Infinity);
   const prev = new Int32Array(W * m.height).fill(-1);
-  // Dijkstra with a binary heap; the grid is small (64×24).
+  // Dijkstra with a binary heap; the grid is small (64×32).
   const heap: [number, number][] = [];
   const push = (c: number, i: number) => {
     heap.push([c, i]);
@@ -149,6 +180,7 @@ export function findPath(m: WorldMap, from: Pos, target: Pos, range = 0): Pos[] 
     for (const [dx, dy, step] of DIRS) {
       const nx = x + dx, ny = y + dy;
       if (!walkable(m, nx, ny)) continue;
+      if (within && !within.includes(regionAt(m, { x: nx, y: ny }))) continue;
       if (dx && dy && (!walkable(m, x + dx, y) || !walkable(m, x, y + dy))) continue;
       const nc = c + step;
       const ni = idx(nx, ny);
@@ -192,7 +224,7 @@ function rng(seed: number): () => number {
   };
 }
 
-export interface SpawnSpec { region: ZoneId; nodes: { type: string; count: number }[]; mobs: { type: string; count: number }[] }
+export interface SpawnSpec { region: ZoneId; nodes: { type: string; count: number }[]; mobs: { type: string; count: number }[]; plots?: number }
 
 const PLACE_IDS: PlaceId[] = ['bank', 'quest_board', 'shop', 'smelter', 'sawmill', 'tannery', 'forge', 'workbench', 'altar'];
 /** Offsets around the plaza, all within MAP_RULES.range.place. */
@@ -211,6 +243,8 @@ export function generateMap(seed: number, spawns: SpawnSpec[]): WorldMap {
   throw new Error(`could not generate a map for seed ${seed}`);
 }
 
+function centerOf(r: MapRegion): Pos { return { x: Math.round((r.x0 + r.x1) / 2), y: Math.round((r.y0 + r.y1) / 2) }; }
+
 function tryGenerate(seed: number, rngSeed: number, spawns: SpawnSpec[], obstacles: boolean): WorldMap | null {
   const r = rng(rngSeed);
   const int = (lo: number, hi: number) => lo + Math.floor(r() * (hi - lo + 1));
@@ -220,22 +254,26 @@ function tryGenerate(seed: number, rngSeed: number, spawns: SpawnSpec[], obstacl
 
   const townW = int(13, 16);
   const frontierW = int(17, 21);
+  const hollowH = int(7, 8), ridgeH = int(7, 8);
+  const midX0 = townW, midX1 = W - frontierW - 1;
   const regions: MapRegion[] = [
-    { id: 'town', x0: 0, x1: townW - 1 },
-    { id: 'wilds', x0: townW, x1: W - frontierW - 1 },
-    { id: 'frontier', x0: W - frontierW, x1: W - 1 },
+    { id: 'town', x0: 0, x1: townW - 1, y0: 0, y1: H - 1 },
+    { id: 'wilds', x0: midX0, x1: midX1, y0: hollowH, y1: H - ridgeH - 1 },
+    { id: 'hollow', x0: midX0, x1: midX1, y0: 0, y1: hollowH - 1 },
+    { id: 'ridge', x0: midX0, x1: midX1, y0: H - ridgeH, y1: H - 1 },
+    { id: 'frontier', x0: W - frontierW, x1: W - 1, y0: 0, y1: H - 1 },
   ];
-  const wilds = regions[1], frontier = regions[2];
+  const [, wilds, hollow, ridge, frontier] = regions;
 
-  // Town palisade on its east edge, one gate (3 tiles).
+  // Town palisade on its east edge, one gate (3 tiles) opening onto the wilds.
   const wallX = townW - 1;
-  const gateY = int(6, H - 9);
+  const gateY = int(wilds.y0 + 2, wilds.y1 - 4);
   for (let y = 0; y < H; y++) set(wallX, y, y >= gateY && y < gateY + 3 ? '+' : '#');
   const plaza = { x: Math.floor(townW / 2) - 1, y: Math.min(H - 5, Math.max(4, gateY + 1 + int(-3, 3))) };
 
-  // River on the wilds/frontier border, crossed at two fords (2 tiles each).
+  // River on the frontier's west edge, crossed at two fords (2 tiles each): one from the wilds, one from the Ridge.
   const riverX = frontier.x0;
-  const fordA = int(2, 8), fordB = int(H - 9, H - 4);
+  const fordA = int(wilds.y0 + 1, wilds.y0 + 5), fordB = int(ridge.y0 + 1, H - 4);
   for (let y = 0; y < H; y++) for (const x of [riverX, riverX + 1]) set(x, y, (y >= fordA && y < fordA + 2) || (y >= fordB && y < fordB + 2) ? '=' : '~');
 
   // A few houses in town, away from the plaza and the gate.
@@ -259,45 +297,49 @@ function tryGenerate(seed: number, rngSeed: number, spawns: SpawnSpec[], obstacl
   };
   if (obstacles) {
     scatter(1, wallX - 2, int(2, 4), ['#'], 3, 3);
-    const wildsAnchorHint = { x: Math.round((wilds.x0 + wilds.x1) / 2), y: Math.round(H / 2) };
-    keepClear.push({ p: wildsAnchorHint, r: 3 }, { p: { x: riverX - 1, y: fordA }, r: 2.5 }, { p: { x: riverX - 1, y: fordB }, r: 2.5 }, { p: { x: riverX + 2, y: fordA }, r: 2.5 }, { p: { x: riverX + 2, y: fordB }, r: 2.5 }, { p: { x: wilds.x0, y: gateY + 1 }, r: 3 });
-    scatter(wilds.x0 + 2, riverX - 3, int(3, 5), ['~', '#'], 5, 4);
+    keepClear.push(...[wilds, hollow, ridge].map((rg) => ({ p: centerOf(rg), r: 3 })), { p: { x: riverX - 1, y: fordA }, r: 2.5 }, { p: { x: riverX - 1, y: fordB }, r: 2.5 }, { p: { x: riverX + 2, y: fordA }, r: 2.5 }, { p: { x: riverX + 2, y: fordB }, r: 2.5 }, { p: { x: wilds.x0, y: gateY + 1 }, r: 3 });
+    scatter(wilds.x0 + 2, riverX - 3, int(5, 7), ['~', '#'], 5, 4);
     scatter(riverX + 3, W - 2, int(2, 4), ['#'], 4, 4);
   }
 
   const tiles = grid.map((row) => row.join(''));
   const m: WorldMap = {
     seed, width: W, height: H, tiles, regions,
-    anchors: { town: plaza, wilds: plaza, frontier: plaza },
-    spawn: plaza, places: [], nodes: [], mobSpawns: [],
+    anchors: { town: plaza, wilds: plaza, frontier: plaza, hollow: plaza, ridge: plaza },
+    spawn: plaza, places: [], nodes: [], mobSpawns: [], plots: [],
   };
   if (!walkable(m, plaza.x, plaza.y)) return null;
 
-  // Connectivity: every open tile must be reachable from the plaza.
-  const seen = new Uint8Array(W * H);
-  const queue: Pos[] = [plaza];
-  seen[plaza.y * W + plaza.x] = 1;
-  let reached = 1;
-  while (queue.length) {
-    const p = queue.pop()!;
-    for (const [dx, dy] of DIRS) {
-      const nx = p.x + dx, ny = p.y + dy;
-      if (!walkable(m, nx, ny) || seen[ny * W + nx]) continue;
-      if (dx && dy && (!walkable(m, p.x + dx, p.y) || !walkable(m, p.x, p.y + dy))) continue;
-      seen[ny * W + nx] = 1;
-      reached++;
-      queue.push({ x: nx, y: ny });
+  // Connectivity: each region is in one piece, so no walk inside a region needs a detour through another one.
+  // The gate, the fords and the open borders around the wilds then join every region to the plaza.
+  for (const rg of regions) {
+    const inside = (x: number, y: number) => x >= rg.x0 && x <= rg.x1 && y >= rg.y0 && y <= rg.y1 && walkable(m, x, y);
+    const open: Pos[] = [];
+    for (let y = rg.y0; y <= rg.y1; y++) for (let x = rg.x0; x <= rg.x1; x++) if (inside(x, y)) open.push({ x, y });
+    if (!open.length) return null;
+    const seen = new Set<number>([open[0].y * W + open[0].x]);
+    const queue: Pos[] = [open[0]];
+    while (queue.length) {
+      const p = queue.pop()!;
+      for (const [dx, dy] of DIRS) {
+        const nx = p.x + dx, ny = p.y + dy;
+        if (!inside(nx, ny) || seen.has(ny * W + nx)) continue;
+        if (dx && dy && (!inside(p.x + dx, p.y) || !inside(p.x, p.y + dy))) continue;
+        seen.add(ny * W + nx);
+        queue.push({ x: nx, y: ny });
+      }
     }
+    if (seen.size !== open.length) return null;
   }
-  let open = 0;
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (walkable(m, x, y)) open++;
-  if (reached !== open) return null;
 
   m.anchors = {
     town: plaza,
-    wilds: nearestWalkable(m, { x: Math.round((wilds.x0 + wilds.x1) / 2), y: Math.round(H / 2) }),
+    wilds: nearestWalkable(m, centerOf(wilds)),
+    hollow: nearestWalkable(m, centerOf(hollow)),
+    ridge: nearestWalkable(m, centerOf(ridge)),
     frontier: nearestWalkable(m, { x: Math.round((riverX + 2 + frontier.x1) / 2), y: Math.round(H / 2) }),
   };
+  for (const rg of regions) if (regionAt(m, m.anchors[rg.id]) !== rg.id) return null;
 
   // Places around the plaza, shuffled, all within use range of the plaza tile.
   const ring = PLACE_RING.filter(([dx, dy]) => walkable(m, plaza.x + dx, plaza.y + dy));
@@ -309,10 +351,11 @@ function tryGenerate(seed: number, rngSeed: number, spawns: SpawnSpec[], obstacl
   const taken: Pos[] = [...Object.values(m.anchors), { x: wallX, y: gateY + 1 }];
   const pick = (region: MapRegion, minSpacing: number): Pos | null => {
     const lo = region.id === 'frontier' ? riverX + 3 : region.x0 + 3;
-    const hi = region.id === 'wilds' ? riverX - 2 : region.x1 - 1;
+    const hi = region.x1 - 1;
+    const ylo = Math.max(1, region.y0 + 1), yhi = Math.min(H - 2, region.y1 - 1);
     for (let tries = 0; tries < 400; tries++) {
       const spacing = tries < 200 ? minSpacing : minSpacing - 1;
-      const p = { x: int(lo, hi), y: int(1, H - 2) };
+      const p = { x: int(lo, hi), y: int(ylo, yhi) };
       if (!walkable(m, p.x, p.y)) continue;
       if (taken.some((t) => dist(t, p) < spacing)) continue;
       taken.push(p);
@@ -320,6 +363,15 @@ function tryGenerate(seed: number, rngSeed: number, spawns: SpawnSpec[], obstacl
     }
     return null;
   };
+  // Plots first, so settlements get room before nodes and mobs fill the region.
+  for (const spec of spawns) {
+    const region = regions.find((x) => x.id === spec.region)!;
+    for (let i = 1; i <= (spec.plots ?? 0); i++) {
+      const p = pick(region, 6);
+      if (!p) return null;
+      m.plots.push({ id: `plot_${spec.region}_${i}`, region: spec.region, ...p });
+    }
+  }
   for (const spec of spawns) {
     const region = regions.find((x) => x.id === spec.region)!;
     for (const n of spec.nodes) for (let i = 1; i <= n.count; i++) {

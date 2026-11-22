@@ -7,18 +7,18 @@
 <style>
   :root {
     --bg: #f4f5f7; --panel: #ffffff; --ink: #1d2330; --muted: #5d6677; --line: #e1e4ea; --soft: #f0f2f5;
-    --accent: #2f6fde; --good: #1f8a4c; --bad: #c43d3d; --warn: #b7791f; --lethal: #c43d3d; --wild: #3d8b5a; --town: #2f6fde;
+    --accent: #2f6fde; --good: #1f8a4c; --bad: #c43d3d; --warn: #b7791f; --lethal: #c43d3d; --hollow: #7a5bb5; --ridge: #a5672b; --wild: #3d8b5a; --town: #2f6fde;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #12151b; --panel: #1a1e26; --ink: #e5e8ee; --muted: #949cab; --line: #2a303b; --soft: #222833;
-      --accent: #6b9cff; --good: #4cc27f; --bad: #ff7272; --warn: #e3b25a; --lethal: #ff7272; --wild: #6fcf97; --town: #6b9cff;
+      --accent: #6b9cff; --good: #4cc27f; --bad: #ff7272; --warn: #e3b25a; --lethal: #ff7272; --hollow: #b093e8; --ridge: #d9995c; --wild: #6fcf97; --town: #6b9cff;
     }
   }
   :root[data-theme="dark"] {
     --bg: #12151b; --panel: #1a1e26; --ink: #e5e8ee; --muted: #949cab; --line: #2a303b; --soft: #222833;
-    --accent: #6b9cff; --good: #4cc27f; --bad: #ff7272; --warn: #e3b25a; --lethal: #ff7272; --wild: #6fcf97; --town: #6b9cff;
+    --accent: #6b9cff; --good: #4cc27f; --bad: #ff7272; --warn: #e3b25a; --lethal: #ff7272; --hollow: #b093e8; --ridge: #d9995c; --wild: #6fcf97; --town: #6b9cff;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -43,7 +43,7 @@
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
   .dot.on { background: var(--good); }
   .zone { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; border: 1px solid currentColor; white-space: nowrap; }
-  .zone.town { color: var(--town); } .zone.wilds { color: var(--wild); } .zone.frontier { color: var(--lethal); } .zone.transit { color: var(--muted); }
+  .zone.town { color: var(--town); } .zone.wilds { color: var(--wild); } .zone.frontier { color: var(--lethal); } .zone.hollow { color: var(--hollow); } .zone.ridge { color: var(--ridge); } .zone.transit { color: var(--muted); }
   .hp { width: 90px; height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; margin-top: 4px; }
   .hp > i { display: block; height: 100%; background: var(--good); }
   .hp.low > i { background: var(--bad); }
@@ -111,7 +111,7 @@
   .presence .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-left: 118px; font-family: var(--mono); }
   .key { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
   .key i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-  .p-town { fill: var(--town); background: var(--town); } .p-wilds { fill: var(--wild); background: var(--wild); } .p-frontier { fill: var(--lethal); background: var(--lethal); }
+  .p-town { fill: var(--town); background: var(--town); } .p-wilds { fill: var(--wild); background: var(--wild); } .p-frontier { fill: var(--lethal); background: var(--lethal); } .p-hollow { fill: var(--hollow); background: var(--hollow); } .p-ridge { fill: var(--ridge); background: var(--ridge); }
   .p-travel { fill: var(--warn); background: var(--warn); } .p-off { fill: var(--line); background: var(--line); }
   .mapwrap { padding: 10px 14px; }
   #mapCanvas { display: block; border-radius: 4px; max-width: 100%; }
@@ -142,8 +142,8 @@
     <section class="span2">
       <h2>World map <span class="count muted" id="mapMeta"></span></h2>
       <div class="body mapwrap"><canvas id="mapCanvas" aria-label="Live world map: regions, players, mobs, resource nodes, places and loot bags"></canvas></div>
-      <div class="maplegend"><span class="key"><i class="p-town"></i>town (safe)</span><span class="key"><i class="p-wilds"></i>wilds (PvE)</span><span class="key"><i class="p-frontier"></i>frontier (lethal PvP)</span>
-        <span class="key">● bot</span><span class="key" style="color:var(--bad)">● mob</span><span class="key">◆ resource node</span><span class="key">▢ place (B bank, Q quests, $ shop, Sm/Sw/Ta/Fo/Wb stations)</span><span class="key" style="color:#9b6b2f">■ loot bag</span>
+      <div class="maplegend"><span class="key"><i class="p-town"></i>town (safe)</span><span class="key"><i class="p-wilds"></i>wilds (PvE)</span><span class="key"><i class="p-frontier"></i>frontier (lethal PvP)</span><span class="key"><i class="p-hollow"></i>hollow (contested PvP)</span><span class="key"><i class="p-ridge"></i>ridge (contested PvP)</span>
+        <span class="key">● bot</span><span class="key" style="color:var(--bad)">● mob</span><span class="key">◆ resource node</span><span class="key">▢ place (B bank, Q quests, $ shop, Sm/Sw/Ta/Fo/Wb stations)</span><span class="key">⌂ settlement plot (filled when founded)</span><span class="key" style="color:#9b6b2f">■ loot bag</span>
         <span class="muted mono" id="mapTip">hover the map</span></div>
     </section>
     <section>
@@ -175,6 +175,7 @@
           <label class="chk"><input type="checkbox" value="bank"> Bank &amp; quests</label>
           <label class="chk"><input type="checkbox" value="dm"> Private messages</label>
           <label class="chk"><input type="checkbox" value="party"> Parties</label>
+          <label class="chk"><input type="checkbox" value="settlement"> Settlements</label>
           <label class="chk"><input type="checkbox" value="system"> Presence</label>
           <button type="button" id="fTypeAll" class="link">All events</button>
         </div>
@@ -235,6 +236,8 @@
     'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'dm',
     'command.failed': 'debug', feedback: 'debug',
     party: 'party', 'party.joined': 'party', 'party.left': 'party', 'party.message': 'party',
+    'settlement.founded': 'settlement', 'settlement.disbanded': 'settlement', 'settlement.invited': 'settlement', 'settlement.joined': 'settlement', 'settlement.left': 'settlement',
+    'settlement.role': 'settlement', 'settlement.charter': 'settlement', 'settlement.vote': 'settlement', 'stockpile.changed': 'settlement',
   };
   // High-volume activity that is rolled up per bot by default.
   const ROUTINE = new Set(['combat.hit', 'combat.buff', 'combat.kill', 'gather', 'travel.depart', 'travel.arrive', 'bank', 'player.online', 'player.offline']);
@@ -290,10 +293,12 @@
 
   function start() { $('login').hidden = true; $('app').hidden = false; poll(); }
 
+  const settlementName = (id) => esc(events.find((e) => e.type === 'settlement.founded' && e.data.settlementId === id)?.data.name || id);
+
   function involved(ev) {
     const d = ev.data || {};
     return [ev.actorId, d.playerId, d.attackerId, d.targetId, d.victimId, d.killerId, d.looterId, d.ownerId,
-      d.toId, d.message && d.message.authorId, d.thread && d.thread.authorId, d.post && d.post.authorId,
+      d.toId, d.founderId, d.fromId, d.byId, d.voterId, d.motion && d.motion.targetId, d.message && d.message.authorId, d.thread && d.thread.authorId, d.post && d.post.authorId,
       ...(d.parties || []).map((p) => p.id)].filter(Boolean);
   }
 
@@ -338,6 +343,19 @@
       case 'party.joined': return `<b>${esc(d.name)}</b> joined a party`;
       case 'party.left': return `<b>${esc(d.name)}</b> ${d.kicked ? 'was kicked from' : 'left'} a party`;
       case 'party.message': return `<b>${esc(d.message.authorName)}</b> <span class="muted">[party]</span> <span class="quote">“${esc(d.message.text)}”</span>`;
+      case 'settlement.founded': return `<b>${esc(d.founderName)}</b> founded <b>${esc(d.name)}</b> in ${zoneTag(d.zone)} at ${esc(d.plotId)}`;
+      case 'settlement.disbanded': return `Settlement <b>${esc(d.name)}</b> was abandoned${d.bagId ? ': its stockpile spilled into a loot bag' : ''}`;
+      case 'settlement.invited': return d.declined
+        ? `<b>${esc(d.playerName)}</b> declined an invitation to ${settlementName(d.settlementId)}`
+        : `<b>${esc(d.fromName)}</b> invited <b>${esc(d.playerName)}</b> to ${esc(d.name)}`;
+      case 'settlement.joined': return `<b>${esc(d.name)}</b> joined ${settlementName(d.settlementId)}${d.invited ? '' : ' (open membership)'}`;
+      case 'settlement.left': return d.reason === 'leave'
+        ? `<b>${esc(d.name)}</b> left ${settlementName(d.settlementId)}`
+        : `<b>${esc(d.name)}</b> was ${d.reason === 'exile' ? 'exiled by vote' : `expelled by <b>${esc(d.byName)}</b>`} from ${settlementName(d.settlementId)}`;
+      case 'settlement.role': return `<b>${esc(d.name)}</b> is now ${esc(d.role)} of ${settlementName(d.settlementId)} <span class="muted">(${esc(d.reason)})</span>`;
+      case 'settlement.charter': return `<b>${esc(d.byName)}</b> set the charter of ${settlementName(d.settlementId)}: ${d.charter.open ? 'open' : 'closed'}, ${esc(d.charter.withdrawRole)}+ may withdraw, tax ${Number(d.charter.taxPct)}%`;
+      case 'settlement.vote': return `<b>${esc(d.voterName)}</b> voted ${d.yes ? 'for' : 'against'} ${d.motion.kind === 'exile' ? 'exiling' : 'making leader'} <b>${esc(d.motion.targetName)}</b> in ${settlementName(d.settlementId)} (${d.motion.yes}/${d.motion.needed})${d.passed ? ' · <b>passed</b>' : ''}`;
+      case 'stockpile.changed': return `<b>${esc(d.entry.actorName || 'nobody')}</b> stockpile ${esc(d.entry.action)} ${stacks(d.entry.items)} <span class="muted">(${settlementName(d.settlementId)})</span>`;
       case 'feedback': return `<b>${esc(d.name)}</b> sent feedback (${esc(d.category)}): ${esc(d.summary)}`;
       default: return `${a} ${esc(ev.type)}`;
     }
@@ -462,7 +480,7 @@
   /** One strip per bot over the run, from snapshots: zone color when online, travel and offline in their own colors. */
   // ---------- world map (canvas) ----------
   const PLACE_LABEL = { bank: 'B', quest_board: 'Q', shop: '$', smelter: 'Sm', sawmill: 'Sw', tannery: 'Ta', forge: 'Fo', workbench: 'Wb', altar: 'Al' };
-  const NODE_COLOR = { copper_ore: '#c8743a', iron_ore: '#8a929e', pine_log: '#3f8f4f', duskiron_ore: '#8e5bd6' };
+  const NODE_COLOR = { copper_ore: '#c8743a', iron_ore: '#8a929e', pine_log: '#3f8f4f', duskiron_ore: '#8e5bd6', stone: '#b5a58a', grain: '#d9b93b' };
   let mapHits = [];
   function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
   function renderMap(s) {
@@ -474,8 +492,8 @@
     if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
     const g = cv.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const col = { town: cssVar('--town'), wilds: cssVar('--wild'), frontier: cssVar('--lethal'), ink: cssVar('--ink'), panel: cssVar('--panel'), muted: cssVar('--muted'), soft: cssVar('--soft'), warn: cssVar('--warn'), bad: cssVar('--bad'), good: cssVar('--good') };
-    const regionOf = (x) => (m.regions.find((r) => x >= r.x0 && x <= r.x1) || m.regions[0]).id;
+    const col = { town: cssVar('--town'), wilds: cssVar('--wild'), frontier: cssVar('--lethal'), hollow: cssVar('--hollow'), ridge: cssVar('--ridge'), ink: cssVar('--ink'), panel: cssVar('--panel'), muted: cssVar('--muted'), soft: cssVar('--soft'), warn: cssVar('--warn'), bad: cssVar('--bad'), good: cssVar('--good') };
+    const regionOf = (x, y) => (m.regions.find((r) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) || m.regions[0]).id;
     const cx = (x) => (x + 0.5) * cell, cy = (y) => (y + 0.5) * cell;
     g.fillStyle = col.panel; g.fillRect(0, 0, W, H);
     for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width; x++) {
@@ -484,13 +502,13 @@
       else if (ch === '~') g.fillStyle = '#3b7dd8';
       else if (ch === '=') g.fillStyle = '#b08a52';
       else if (ch === '+') g.fillStyle = col.warn;
-      else { g.fillStyle = col[regionOf(x)]; g.globalAlpha = 0.12; }
+      else { g.fillStyle = col[regionOf(x, y)]; g.globalAlpha = 0.12; }
       g.fillRect(x * cell, y * cell, cell, cell);
       g.globalAlpha = 1;
     }
-    for (const r of m.regions.slice(1)) { g.strokeStyle = col[r.id]; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(r.x0 * cell, 0); g.lineTo(r.x0 * cell, H); g.stroke(); g.setLineDash([]); }
+    for (const r of m.regions.slice(1)) { g.strokeStyle = col[r.id]; g.setLineDash([4, 4]); g.lineWidth = 1; g.strokeRect(r.x0 * cell, r.y0 * cell, (r.x1 - r.x0 + 1) * cell, (r.y1 - r.y0 + 1) * cell); g.setLineDash([]); }
     g.font = `600 ${Math.max(10, cell)}px system-ui, sans-serif`; g.textBaseline = 'top';
-    for (const r of m.regions) { g.fillStyle = col[r.id]; g.globalAlpha = 0.8; g.fillText(r.id, r.x0 * cell + 4, 3); g.globalAlpha = 1; }
+    for (const r of m.regions) { g.fillStyle = col[r.id]; g.globalAlpha = 0.8; g.fillText(r.id, r.x0 * cell + 4, r.y0 * cell + 3); g.globalAlpha = 1; }
     mapHits = [];
     const hit = (x, y, text) => mapHits.push({ x, y, text });
     // places
@@ -500,6 +518,12 @@
       g.fillRect(p.x * cell + 1, p.y * cell + 1, cell - 2, cell - 2); g.strokeRect(p.x * cell + 1, p.y * cell + 1, cell - 2, cell - 2);
       g.fillStyle = col.town; g.fillText(PLACE_LABEL[p.id] || p.id[0], cx(p.x), cy(p.y));
       hit(p.x, p.y, p.id);
+    }
+    // settlement plots
+    for (const pl of s.entities.plots) {
+      g.fillStyle = pl.settlement ? col[pl.region] : col.panel; g.strokeStyle = col[pl.region]; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(pl.x * cell, (pl.y + 1) * cell); g.lineTo(pl.x * cell, (pl.y + 0.4) * cell); g.lineTo(cx(pl.x), pl.y * cell); g.lineTo((pl.x + 1) * cell, (pl.y + 0.4) * cell); g.lineTo((pl.x + 1) * cell, (pl.y + 1) * cell); g.closePath(); g.fill(); g.stroke();
+      hit(pl.x, pl.y, `${pl.id}${pl.settlement ? ` · ${pl.settlement}` : ' · free plot'}`);
     }
     // nodes
     for (const n of s.entities.nodes) {
@@ -568,7 +592,7 @@
       const rects = segs.map((g) => `<rect class="${g.c}" x="${x(g.start).toFixed(1)}" y="0" width="${Math.max(0.5, x(g.end) - x(g.start)).toFixed(1)}" height="10"><title>${esc(g.label)} ${t(g.start)}–${t(g.end)}</title></rect>`).join('');
       return `<div class="lane"><span>${esc(b.name)}</span><svg viewBox="0 0 ${W} 10" preserveAspectRatio="none">${rects}</svg></div>`;
     }).join('');
-    const keys = [['p-town', 'town'], ['p-wilds', 'wilds'], ['p-frontier', 'frontier'], ['p-travel', 'traveling'], ['p-off', 'offline']].map(([c, l]) => `<span class="key"><i class="${c}"></i>${l}</span>`).join('');
+    const keys = [['p-town', 'town'], ['p-wilds', 'wilds'], ['p-frontier', 'frontier'], ['p-hollow', 'hollow'], ['p-ridge', 'ridge'], ['p-travel', 'traveling'], ['p-off', 'offline']].map(([c, l]) => `<span class="key"><i class="${c}"></i>${l}</span>`).join('');
     const day = (ts) => new Date(ts).toLocaleString([], { hour12: false, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     $('presence').innerHTML = `<h3>Presence timeline ${keys}</h3>${lanes}<div class="axis"><span>${day(t0)}</span><span>${day(t1)}</span></div>`;
   }
@@ -600,18 +624,18 @@
   function renderEconomy(s) {
     const e = s.economy, c = e.circulation;
     const created = e.created.mobs + e.created.quests;
-    const destroyed = e.destroyed.death + e.destroyed.repair + e.destroyed.shop + e.destroyed.tradeFee + (e.destroyed.orbFee || 0);
+    const destroyed = e.destroyed.death + e.destroyed.repair + e.destroyed.shop + e.destroyed.tradeFee + (e.destroyed.orbFee || 0) + e.destroyed.settlement;
     $('ecoSince').textContent = e.since ? `ledger since ${new Date(e.since).toLocaleString([], { hour12: false })}` : '';
     $('ecoKpis').innerHTML = [
-      ['Silver in circulation', fmt(c.total), ''], ['Carried', fmt(c.carried), ''], ['Banked', fmt(c.banked), ''],
+      ['Silver in circulation', fmt(c.total), ''], ['Carried', fmt(c.carried), ''], ['Banked', fmt(c.banked), ''], ['In stockpiles', fmt(c.stockpiled), ''],
       ['Created', fmt(created), ''], ['Destroyed', fmt(destroyed), ''], ['Net', `${created - destroyed >= 0 ? '+' : '−'}${fmt(Math.abs(created - destroyed))}`, created >= destroyed ? 'good' : 'bad'],
     ].map(([l, v, cls]) => `<div class="kpi"><div class="v ${cls}">${v}</div><div class="l">${l}</div></div>`).join('');
     const bots = [...s.bots].sort((a, b) => (b.silver.carried + b.silver.banked) - (a.silver.carried + a.silver.banked));
     $('ecoBots').innerHTML = bots.map((b) => `<tr><td><b>${esc(b.name)}</b></td><td class="num">${fmt(b.silver.carried)}</td><td class="num">${fmt(b.silver.banked)}</td><td class="num"><b>${fmt(b.silver.carried + b.silver.banked)}</b></td></tr>`).join('')
-      + `<tr><td class="muted">Total</td><td class="num">${fmt(c.carried)}</td><td class="num">${fmt(c.banked)}</td><td class="num"><b>${fmt(c.total)}</b></td></tr>`;
+      + `<tr><td class="muted">Total</td><td class="num">${fmt(c.carried)}</td><td class="num">${fmt(c.banked)}</td><td class="num"><b>${fmt(c.carried + c.banked)}</b></td></tr>`;
     const row = (label, v, sign) => `<tr><td>${label}</td><td class="num">${v ? sign : ""}${fmt(v)}</td></tr>`;
     $('ecoFlows').innerHTML = `<tr><td colspan="2" class="muted">Created</td></tr>${row('Mob loot', e.created.mobs, '+')}${row('Quest rewards', e.created.quests, '+')}
-      <tr><td colspan="2" class="muted">Destroyed</td></tr>${row('Death (carried silver lost)', e.destroyed.death, '−')}${row('Repairs', e.destroyed.repair, '−')}${row('Shop', e.destroyed.shop, '−')}${row('Trade fees', e.destroyed.tradeFee, '−')}${row('Orb fees (altar)', e.destroyed.orbFee || 0, '−')}
+      <tr><td colspan="2" class="muted">Destroyed</td></tr>${row('Death (carried silver lost)', e.destroyed.death, '−')}${row('Repairs', e.destroyed.repair, '−')}${row('Shop', e.destroyed.shop, '−')}${row('Trade fees', e.destroyed.tradeFee, '−')}${row('Orb fees (altar)', e.destroyed.orbFee || 0, '−')}${row('Settlement founding', e.destroyed.settlement, '−')}
       <tr><td colspan="2" class="muted">Orbs (items) · created</td></tr>${row('Mob drops', e.orbs.created.mobs, '+')}${row('Enchanted', e.orbs.created.crafted, '+')}${row('Shop', e.orbs.created.shop, '+')}
       <tr><td colspan="2" class="muted">Orbs used</td></tr>${Object.entries(e.orbs.used).map(([k, v]) => row(esc(k), v, '−')).join('') || '<tr><td class="muted" colspan="2">none yet</td></tr>'}
       <tr><td colspan="2" class="muted">Orb shards</td></tr>${row('Salvaged', e.orbs.shards.salvage, '+')}${row('Found by tools', e.orbs.shards.found, '+')}`;

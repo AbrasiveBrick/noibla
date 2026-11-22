@@ -3,14 +3,15 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { MOB_TYPES, NODE_TYPES, STARTER_KIT, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } from '../shared/catalog.ts';
-import { generateMap, nearestWalkable, regionAt, type WorldMap } from '../shared/map.ts';
+import { MAP_LAYOUT, generateMap, nearestWalkable, regionAt, type WorldMap } from '../shared/map.ts';
 import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/protocol.ts';
 import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
 import type { UniqueItem } from '../shared/protocol.ts';
-import type { CommandDef, LootBag, Mob, Party, Player, ResourceNode, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
+import type { CommandDef, LootBag, Mob, Party, Player, ResourceNode, Settlement, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
 import { orbCommands } from './orbs.ts';
 import { partyCommands } from './party.ts';
+import { settlementCommands } from './settlement.ts';
 import { bindUniques, worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
 import { tradeCommands, tradeTick } from './trade.ts';
@@ -61,6 +62,7 @@ export class Game {
   readonly uniques = new Map<string, UniqueItem>();
   readonly trades = new Map<string, Trade>();
   readonly parties = new Map<string, Party>();
+  readonly settlements = new Map<string, Settlement>();
   readonly commands: Record<string, CommandDef>;
 
   private nameIndex = new Map<string, string>();
@@ -70,6 +72,7 @@ export class Game {
   private dirtyUniques = new Set<string>();
   private dirtyTrades = new Set<string>();
   private dirtyParties = new Set<string>();
+  private dirtySettlements = new Set<string>();
   private outbox: { ev: GameEvent; vis: Visibility }[] = [];
   private subscribers = new Set<Subscriber>();
   private eventSeq: number;
@@ -91,7 +94,7 @@ export class Game {
     this.tickMs = opts.tickMs ?? 25;
     this.lastSnapshotAt = this.store.get<{ ts: number | null }>('SELECT MAX(ts) AS ts FROM snapshots')?.ts ?? -Infinity;
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
-    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands };
+    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands, ...settlementCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     // Procedural map: generated when the world is created; the seed is stored so restarts rebuild the same map.
     let mapSeed = Number(this.store.getMeta('map_seed') ?? NaN);
@@ -99,7 +102,7 @@ export class Game {
       mapSeed = (opts.mapSeed ?? randomBytes(4).readUInt32BE(0)) >>> 0;
       this.store.setMeta('map_seed', String(mapSeed));
     }
-    this.map = generateMap(mapSeed, Object.values(ZONES).map((z) => ({ region: z.id, nodes: z.nodes, mobs: z.mobs })));
+    this.map = generateMap(mapSeed, Object.values(ZONES).map((z) => ({ region: z.id, nodes: z.nodes, mobs: z.mobs, plots: z.plots })));
     this.load();
     bindUniques(this.uniques);
     backfillEconomyLedger(this.store);
@@ -114,8 +117,10 @@ export class Game {
   // ---------- loading & persistence ----------
 
   private load() {
+    const relayout = this.store.getMeta('map_layout') !== MAP_LAYOUT;
     for (const row of this.store.all<{ id: string; name: string; token_hash: string; data: string }>('SELECT id, name, token_hash, data FROM players')) {
-      const p = this.migratePlayer(JSON.parse(row.data));
+      const p = this.migratePlayer(JSON.parse(row.data), relayout);
+      if (relayout) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id);
       // Players from before the tool slot get the starter tool kit once.
       if (!p.toolKit) { for (const k of STARTER_KIT) p.inventory[k.item] = (p.inventory[k.item] ?? 0) + k.qty; p.toolKit = true; this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id); }
       this.players.set(p.id, p);
@@ -129,6 +134,11 @@ export class Game {
     for (const row of this.store.all<{ data: string }>('SELECT data FROM loot_bags')) {
       const b = JSON.parse(row.data) as LootBag;
       if (b.x === undefined || b.y === undefined) { b.x = this.map.anchors[b.zone].x; b.y = this.map.anchors[b.zone].y; }
+      if (relayout) {
+        const pos = this.placeInRegion({ x: b.x, y: b.y }, b.zone);
+        b.x = pos.x; b.y = pos.y;
+        this.store.run('UPDATE loot_bags SET data = ? WHERE id = ?', JSON.stringify(b), b.id);
+      }
       this.bags.set(b.id, b);
     }
     for (const row of this.store.all<{ data: string }>('SELECT data FROM trades')) {
@@ -139,13 +149,30 @@ export class Game {
       const pt = JSON.parse(row.data) as Party;
       this.parties.set(pt.id, pt);
     }
+    for (const row of this.store.all<{ data: string }>('SELECT data FROM settlements')) {
+      const s = JSON.parse(row.data) as Settlement;
+      this.settlements.set(s.id, s);
+    }
+    if (relayout) this.store.setMeta('map_layout', MAP_LAYOUT);
   }
 
-  /** Saves from before the map existed have a zone (or a zone-to-zone trip) but no position. */
-  private migratePlayer(p: Player & { travel: any }): Player {
+  /** A position saved on another map layout: the nearest open tile if that is still in `zone`, else that region's anchor. */
+  private placeInRegion(pos: { x: number; y: number }, zone: ZoneId): { x: number; y: number } {
+    const q = nearestWalkable(this.map, pos);
+    return regionAt(this.map, q) === zone ? q : { ...this.map.anchors[zone] };
+  }
+
+  /**
+   * Saves from before the map existed have a zone (or a zone-to-zone trip) but no position. Saves from an older map
+   * layout have positions that may now lie in another region: those players stop walking and keep their saved region,
+   * so nobody logs back in from the safe wilds into PvP land.
+   */
+  private migratePlayer(p: Player & { travel: any }, relayout: boolean): Player {
     if (p.travel && !Array.isArray(p.travel.path)) { p.zone = p.travel.to; p.travel = null; }
     const zone: ZoneId = p.zone && ZONES[p.zone] ? p.zone : 'town';
+    if (relayout) p.travel = null;
     if (!p.pos) p.pos = { ...this.map.anchors[zone] };
+    else if (relayout) p.pos = this.placeInRegion(p.pos, zone);
     else if (!p.travel) p.pos = nearestWalkable(this.map, p.pos);
     p.zone = regionAt(this.map, p.pos);
     return p;
@@ -165,6 +192,7 @@ export class Game {
   markUnique(u: UniqueItem) { this.dirtyUniques.add(u.id); }
   markTrade(t: Trade) { this.dirtyTrades.add(t.id); }
   markParty(pt: Party) { this.dirtyParties.add(pt.id); }
+  markSettlement(s: Settlement) { this.dirtySettlements.add(s.id); }
 
   private flushDirty() {
     for (const id of this.dirtyPlayers) {
@@ -190,6 +218,11 @@ export class Game {
       if (pt) this.store.run('INSERT INTO parties(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data', id, JSON.stringify(pt));
       else this.store.run('DELETE FROM parties WHERE id = ?', id);
     }
+    for (const id of this.dirtySettlements) {
+      const s = this.settlements.get(id);
+      if (s) this.store.run('INSERT INTO settlements(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data', id, JSON.stringify(s));
+      else this.store.run('DELETE FROM settlements WHERE id = ?', id);
+    }
     if (this.eventSeq !== this.flushedEventSeq) {
       this.store.setMeta('event_seq', String(this.eventSeq));
       this.flushedEventSeq = this.eventSeq;
@@ -197,7 +230,7 @@ export class Game {
     this.clearDirty();
   }
 
-  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyUniques.clear(); this.dirtyTrades.clear(); this.dirtyParties.clear(); }
+  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyUniques.clear(); this.dirtyTrades.clear(); this.dirtyParties.clear(); this.dirtySettlements.clear(); }
 
   /** After a rollback, restore every touched entity from the database. */
   private reloadDirty() {
@@ -220,6 +253,10 @@ export class Game {
     for (const id of this.dirtyParties) {
       const row = this.store.get<{ data: string }>('SELECT data FROM parties WHERE id = ?', id);
       if (row) this.parties.set(id, JSON.parse(row.data)); else this.parties.delete(id);
+    }
+    for (const id of this.dirtySettlements) {
+      const row = this.store.get<{ data: string }>('SELECT data FROM settlements WHERE id = ?', id);
+      if (row) this.settlements.set(id, JSON.parse(row.data)); else this.settlements.delete(id);
     }
     this.clearDirty();
   }
@@ -274,6 +311,7 @@ export class Game {
       case 'player': return vis.playerId === p.id;
       case 'dm': return vis.a === p.id || vis.b === p.id;
       case 'party': return p.partyId === vis.partyId;
+      case 'settlement': return !!p.settlementId && p.settlementId === vis.id;
       case 'operator': return false;
     }
   }
@@ -516,5 +554,5 @@ export class Game {
 }
 
 function operatorCanSee(vis: Visibility): boolean {
-  return vis.kind === 'zone' || vis.kind === 'forum' || vis.kind === 'party' || vis.kind === 'operator';
+  return vis.kind === 'zone' || vis.kind === 'forum' || vis.kind === 'party' || vis.kind === 'settlement' || vis.kind === 'operator';
 }
