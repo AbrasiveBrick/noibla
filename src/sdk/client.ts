@@ -55,6 +55,14 @@ export type FightOutcome = { result: 'killed' | 'target_gone' | 'died' | 'fled';
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+/** A timeout argument as a bare number or `{ timeoutMs }`; anything else is an error (NaN would make the wait fail at once). */
+function timeoutArg(fn: string, v: unknown, def: number): number {
+  const t = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as { timeoutMs?: unknown }).timeoutMs : v;
+  if (t === undefined) return def;
+  if (typeof t !== 'number' || !Number.isFinite(t) || t < 0) throw new TypeError(`${fn}: timeout must be milliseconds as a number or { timeoutMs: number }, got ${JSON.stringify(v)}`);
+  return t;
+}
+
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
 
 type Handler = (ev: GameEvent) => void;
@@ -349,8 +357,9 @@ export class GameClient {
   }
 
   /** Resolves with the first event matching `pred` (requires connect()). */
-  waitForEvent(pred: (ev: GameEvent) => boolean, timeoutMs = 30_000): Promise<GameEvent> {
+  waitForEvent(pred: (ev: GameEvent) => boolean, timeout: number | { timeoutMs?: number } = 30_000): Promise<GameEvent> {
     return new Promise((resolve, reject) => {
+      const timeoutMs = timeoutArg('waitForEvent', timeout, 30_000);
       const off = this.on('*', (ev) => { if (pred(ev)) { clearTimeout(timer); off(); resolve(ev); } });
       const timer = setTimeout(() => { off(); reject(new Error('timed out waiting for event')); }, timeoutMs);
     });
@@ -402,7 +411,8 @@ export class GameClient {
   }
 
   /** Waits until the current walk ends (arrived, or stopped at a region edge while combat locked). */
-  async waitArrival(timeoutMs = 120_000): Promise<Observation> {
+  async waitArrival(timeout: number | { timeoutMs?: number } = 120_000): Promise<Observation> {
+    const timeoutMs = timeoutArg('waitArrival', timeout, 120_000);
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const o = await this.observe();
@@ -511,28 +521,39 @@ export class GameClient {
     return regions.size ? `they are in ${[...regions].join(', ')}: travelTo('${[...regions][0]}') first` : 'none exist on this map';
   }
 
-  /** Gathers `qty` more of `item` from nodes in your region, walking to the nearest node with charges. Equips a matching tool first. */
+  /**
+   * Gathers `qty` more of `item` from nodes in your region, walking to the nearest node with charges. Equips a matching tool first.
+   * `timeoutMs` (default 120 s) is the time allowed without progress: it restarts each time units arrive.
+   * Gives up with an error that says so when the nodes are depleted (other players are mining them).
+   */
   async gatherItem(item: string, qty: number, o: { timeoutMs?: number } = {}): Promise<number> {
-    const deadline = Date.now() + (o.timeoutMs ?? 120_000);
+    const limit = timeoutArg('gatherItem', o, 120_000);
+    let deadline = Date.now() + limit;
     let got = 0;
+    let depletedWait: number | null = null; // ms until the next charge, while the nodes were seen empty
     while (got < qty) {
-      if (Date.now() > deadline) throw new Error(`gatherItem(${item}) timed out after ${got}/${qty}`);
+      if (Date.now() > deadline) {
+        if (depletedWait !== null) throw new Error(`gatherItem(${item}): got ${got}/${qty}; the ${item} nodes are depleted (other players are mining them), next charge in ~${Math.ceil(depletedWait / 1000)}s. Wait and retry, or gather elsewhere. No progress for ${Math.round(limit / 1000)}s: raise timeoutMs to wait longer.`);
+        throw new Error(`gatherItem(${item}) timed out after ${got}/${qty}: no progress for ${Math.round(limit / 1000)}s (raise timeoutMs to allow longer)`);
+      }
       const obs = await this.waitReady();
       const here = obs.zone.nodes.find((n) => n.item === item && n.inRange && n.charges > 0);
       if (!here) {
         const node = await this.nearestNode(item, { obs });
         if (!node) throw new Error(`no ${item} nodes in ${obs.self.zone}; ${await this.whereIs('node', item)}`);
         if (node.charges === 0) {
+          depletedWait = node.nextChargeInMs;
           const inRange = obs.zone.nodes.find((n) => n.id === node.id)?.inRange;
           if (inRange) { await sleep(Math.min(node.nextChargeInMs || 100, 2000) + 2); continue; }
         }
         await this.goTo(node.id, { timeoutMs: Math.max(1000, deadline - Date.now()) });
         continue;
       }
+      depletedWait = null;
       const nd = NODE_TYPES[here.type];
       if (nd) await this.equipToolFor(nd.skill, nd.tier);
       const resp = await this.request('gather', { nodeId: here.id });
-      if (resp.ok) got += resp.result.qty;
+      if (resp.ok) { got += resp.result.qty; if (resp.result.qty > 0) deadline = Date.now() + limit; }
       else if (resp.error.code !== 'OUT_OF_RANGE' && !TRANSIENT_ERRORS.has(resp.error.code)) throw new CommandError(resp.error, 'gather', resp.commandId);
     }
     return got;
@@ -619,7 +640,8 @@ export class GameClient {
   craftItem(recipeId: string, count = 1) { return this.make(recipeId, count, 'craft'); }
 
   /** Waits (out of combat) until HP reaches `pct` of max: a fraction (0.9) or a percent (90). */
-  async restUntil(pct = 0.9, timeoutMs = 60_000): Promise<Observation> {
+  async restUntil(pct = 0.9, timeout: number | { timeoutMs?: number } = 60_000): Promise<Observation> {
+    const timeoutMs = timeoutArg('restUntil', timeout, 60_000);
     // Accept percent too (restUntil(80)): a fraction > 1 could never be reached.
     const frac = pct > 1 ? pct / 100 : pct;
     if (!(frac > 0 && frac <= 1)) throw new RangeError(`restUntil(${pct}): pass a fraction like 0.9 or a percent like 90`);
@@ -836,7 +858,8 @@ export class GameClient {
     return this.waitForReceipt(tradeId, o.timeoutMs);
   }
 
-  async waitForReceipt(tradeId: string, timeoutMs = 600_000): Promise<TradeReceipt> {
+  async waitForReceipt(tradeId: string, timeout: number | { timeoutMs?: number } = 600_000): Promise<TradeReceipt> {
+    const timeoutMs = timeoutArg('waitForReceipt', timeout, 600_000);
     return this.waitFor(async () => (await this.getTrade(tradeId)).receipt, { timeoutMs, intervalMs: 100, what: `receipt for ${tradeId}` });
   }
 }

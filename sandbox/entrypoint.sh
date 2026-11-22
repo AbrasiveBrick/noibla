@@ -18,8 +18,13 @@ trap '[ -n "$child" ] && kill "$child" 2>/dev/null; exit 0' TERM INT
 bg_wait() { "$@" & child=$!; wait "$child"; }
 # --thinking-display summarized: without it the transcript gets thinking blocks with no text. It changes only what
 # the API returns. --help does not list the flag: check it still works when bumping the CLI pinned in the Containerfile.
+# Every turn must end the process, or the loop below never sends the next nudge. In 2.1.330 `claude -p` stays alive after
+# its result while a background task or a scheduled wakeup is pending (ScheduleWakeup, Monitor, run_in_background Bash).
+# So those are switched off: the env vars drop run_in_background and cron/wakeups; --disallowedTools also drops the
+# tools themselves. Foreground Bash, incl. long game scripts, is unaffected. Re-check with sandbox/README.md when bumping the CLI.
+export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 CLAUDE_CODE_DISABLE_CRON=1
 claude_run() {
-  bg_wait claude "$@" --model "${MODEL:-sonnet}" --thinking-display summarized --dangerously-skip-permissions --output-format stream-json --verbose
+  bg_wait claude "$@" --model "${MODEL:-sonnet}" --thinking-display summarized --disallowedTools ScheduleWakeup Monitor CronCreate --dangerously-skip-permissions --output-format stream-json --verbose
 }
 
 case "${RUNNER:-claude}" in
