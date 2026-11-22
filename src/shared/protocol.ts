@@ -82,7 +82,7 @@ export interface FocusView { skills: string[]; slots: number; unfocusedLevelCap:
 /** Equipped item state. Unique items add their item level, rarity, corruption and readable affix lines. */
 export interface GearWearView { item: string; wear: number; broken: boolean; repairCost: number; ilvl?: number; rarity?: Rarity; corrupted?: boolean; affixes?: string[] }
 
-/** Where something is relative to you. `inRange`: close enough to gather / attack / loot / use it right now. */
+/** Where something is relative to you. `inRange`: close enough to gather / attack / loot / use it right now (mobs, nodes, loot bags and plots: from inside their region only). */
 export interface Located { x: number; y: number; distance: number; inRange: boolean }
 export interface PlaceView extends Located { id: PlaceId }
 export interface NodeView extends Located { id: string; type: string; item: string; tier: number; region: ZoneId; charges: number; maxCharges: number; nextChargeInMs: number }

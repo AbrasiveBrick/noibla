@@ -128,17 +128,22 @@ const TRANSIT: ZoneId[] = ['town', 'wilds'];
  * "onto the target tile". PvP regions are never shortcuts: the path is the shortest one inside the start's and the
  * target's own regions, else the shortest one that also uses town and the wilds.
  */
-export function findPath(m: WorldMap, from: Pos, target: Pos, range = 0): Pos[] | null {
+/**
+ * `region`: end the walk inside this region too, for targets that can only be used from their own region (mobs, nodes,
+ * loot bags, corpses). Without a tile in reach there, the walk ends in reach anywhere.
+ */
+export function findPath(m: WorldMap, from: Pos, target: Pos, range = 0, region?: ZoneId): Pos[] | null {
   const start = nearestWalkable(m, from);
   const ends = [regionAt(m, start), regionAt(m, target)];
-  return shortestPath(m, start, target, range, ends) ?? shortestPath(m, start, target, range, [...ends, ...TRANSIT]) ?? shortestPath(m, start, target, range);
+  const find = (r?: ZoneId) => shortestPath(m, start, target, range, ends, r) ?? shortestPath(m, start, target, range, [...ends, ...TRANSIT], r) ?? shortestPath(m, start, target, range, undefined, r);
+  return (region ? find(region) : null) ?? find();
 }
 
-/** `within`: the regions the path may use (default: all). */
-function shortestPath(m: WorldMap, start: Pos, target: Pos, range: number, within?: ZoneId[]): Pos[] | null {
+/** `within`: the regions the path may use (default: all). `region`: the region the path must end in (default: any). */
+function shortestPath(m: WorldMap, start: Pos, target: Pos, range: number, within?: ZoneId[], region?: ZoneId): Pos[] | null {
   const W = m.width;
   const idx = (x: number, y: number) => y * W + x;
-  const goal = (x: number, y: number) => dist({ x, y }, target) <= range + 1e-9;
+  const goal = (x: number, y: number) => dist({ x, y }, target) <= range + 1e-9 && (!region || regionAt(m, { x, y }) === region);
   const cost = new Float64Array(W * m.height).fill(Infinity);
   const prev = new Int32Array(W * m.height).fill(-1);
   // Dijkstra with a binary heap; the grid is small (64×32).
