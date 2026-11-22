@@ -696,23 +696,20 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
 
   if (mob) {
     const mdef = MOB_TYPES[mob.type];
-    let damage = Math.max(1, Math.round(raw));
-    let note: string | undefined;
-    if (mdef.boss) {
-      const cap = Math.floor(mdef.hp * mdef.boss.maxSharePerPlayer);
-      const dealt = mob.damageBy?.[p.id] ?? 0;
-      damage = Math.min(damage, cap - dealt);
-      if (dealt + damage >= cap) note = `you reached the ${cap} damage one player can deal to the ${mdef.name} per fight: more hits from you do nothing. Others must finish it, or get away before it enrages.`;
-      mob.damageBy = { ...mob.damageBy, [p.id]: dealt + damage };
-    }
+    const damage = Math.max(1, Math.round(raw));
     mob.hp = Math.max(0, mob.hp - damage);
     mob.aggro[p.id] = (mob.aggro[p.id] ?? 0) + damage;
     if (!mob.targetId) { mob.targetId = p.id; mob.nextAttackAt = now + g.ms(mdef.attackMs); }
-    if (mdef.boss && mob.engagedAt === undefined) { mob.engagedAt = now; mob.nextAoeAt = now + g.ms(mdef.boss.aoeEveryMs); }
+    if (mdef.boss) {
+      if (mob.engagedAt === undefined) { mob.engagedAt = now; mob.nextAoeAt = now + g.ms(mdef.boss.aoeEveryMs); }
+      mob.contributors = mob.contributors ?? [];
+      if (!mob.contributors.includes(p.id)) mob.contributors.push(p.id);
+    }
     const xp = gainXp(p, skill, combatXp(damage));
     g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: mob.id, targetName: mdef.name, ability, damage, targetHp: mob.hp }, { zone, actor: p });
     let loot: ItemStack[] = [];
     let killed = false;
+    let note: string | undefined;
     let spoilsBagId: string | undefined;
     if (mob.hp <= 0) {
       killed = true;
@@ -738,7 +735,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
       }
       g.store.ledger('created.mobs', silverIn(loot));
       for (const s of loot) if (itemDef(s.item)?.kind === 'orb') g.store.ledger('orbs.created.mobs', s.qty);
-      const contributors = Object.keys(mob.damageBy ?? {});
+      const contributors = mob.contributors ?? [];
       mob.deadUntil = now + g.ms(mdef.respawnMs);
       resetMob(mob);
       p.stats.kills++;
@@ -766,11 +763,11 @@ function resetMob(m: Mob) {
   m.targetId = null;
   delete m.engagedAt;
   delete m.nextAoeAt;
-  delete m.damageBy;
+  delete m.contributors;
 }
 
 function dropSpoils(g: Game, mob: Mob, loot: ItemStack[], now: number): LootBag {
-  const eligible = Object.keys(mob.damageBy ?? {}).filter((id) => g.players.has(id));
+  const eligible = (mob.contributors ?? []).filter((id) => g.players.has(id));
   const bag: LootBag = {
     id: newId('bag'), zone: mob.zone, x: round1(mob.x), y: round1(mob.y), ownerId: mob.id, ownerName: MOB_TYPES[mob.type].name, items: toBag(loot), createdAt: now,
     expiresAt: now + g.ms(TIMING.lootBagTtlMs), eligible, opensToAllAt: now + g.ms(PARTY.spoilsReservedMs),

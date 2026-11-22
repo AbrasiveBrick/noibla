@@ -292,27 +292,27 @@ export type DropFrequency = 'always' | 'often' | 'sometimes' | 'rarely' | 'very 
 /** `skin`: only drops when the killer has a skinning knife equipped (tier >= requiredToolTier(mob tier)). */
 export interface DropInfo { item: string; frequency: DropFrequency; skin?: boolean }
 /**
- * Bosses need a group: one player can deal at most `maxSharePerPlayer` of a boss's HP in a fight, whatever their gear.
- * (Stats alone can't do this: a maxed player out-damages and outlasts a starter trio.)
+ * Bosses need a group, except for a really maxed-out player (top gear with good affixes and a high weapon skill), who may
+ * solo one. That bar rests on these stats alone: rerun test/bosses.test.ts after changing them or adding player power.
  * Besides its normal attack on its target, a boss sweeps every player who damaged it
  * and stands within `aoeRadius` tiles for `aoeDamage` every `aoeEveryMs`. `enrageAfterMs` after the fight starts, all
  * its damage is multiplied by `enrageMult`. Its loot drops into a spoils bag (see PARTY) instead of the killer's inventory.
  */
-export interface BossDef { aoeDamage: number; aoeEveryMs: number; aoeRadius: number; enrageAfterMs: number; enrageMult: number; maxSharePerPlayer: number }
+export interface BossDef { aoeDamage: number; aoeEveryMs: number; aoeRadius: number; enrageAfterMs: number; enrageMult: number }
 export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; respawnMs: number; silver: 'some' | 'more' | 'plenty' | 'a hoard'; drops: DropInfo[]; boss?: BossDef }
 export const MOB_TYPES: Record<string, MobDef> = {
   wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, respawnMs: 6000, silver: 'some', drops: [{ item: 'rough_hide', frequency: 'always', skin: true }, { item: 'orb_shard', frequency: 'sometimes' }, { item: 'orb_transmute', frequency: 'rarely' }, { item: 'orb_alteration', frequency: 'rarely' }] },
   boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, respawnMs: 6000, silver: 'more', drops: [{ item: 'rough_hide', frequency: 'always', skin: true }, { item: 'orb_shard', frequency: 'sometimes' }, { item: 'orb_augment', frequency: 'rarely' }, { item: 'orb_scour', frequency: 'very rarely' }, { item: 'orb_annul', frequency: 'very rarely' }] },
   wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, respawnMs: 8000, silver: 'plenty', drops: [{ item: 'wraith_essence', frequency: 'always' }, { item: 'orb_shard', frequency: 'often' }, { item: 'orb_regal', frequency: 'rarely' }, { item: 'orb_chaos', frequency: 'rarely' }, { item: 'orb_vaal', frequency: 'rarely' }] },
   elder_bear: {
-    id: 'elder_bear', name: 'Elder Bear', tier: 2, hp: 800, damage: 14, attackMs: 2000, respawnMs: 10 * 60_000, silver: 'a hoard',
+    id: 'elder_bear', name: 'Elder Bear', tier: 2, hp: 825, damage: 35, attackMs: 2500, respawnMs: 10 * 60_000, silver: 'a hoard',
     drops: [{ item: 'bear_pelt', frequency: 'always' }, { item: 'rough_hide', frequency: 'always' }, { item: 'orb_shard', frequency: 'always' }],
-    boss: { aoeDamage: 8, aoeEveryMs: 5000, aoeRadius: 3, enrageAfterMs: 25_000, enrageMult: 3, maxSharePerPlayer: 0.75 },
+    boss: { aoeDamage: 4, aoeEveryMs: 13_000, aoeRadius: 3, enrageAfterMs: 12_000, enrageMult: 3 },
   },
   ash_wyrm: {
     id: 'ash_wyrm', name: 'Ash Wyrm', tier: 3, hp: 1500, damage: 25, attackMs: 2000, respawnMs: 20 * 60_000, silver: 'a hoard',
     drops: [{ item: 'wyrm_scale', frequency: 'always' }, { item: 'wraith_essence', frequency: 'always' }, { item: 'orb_shard', frequency: 'always' }, { item: 'orb_regal', frequency: 'sometimes' }, { item: 'orb_chaos', frequency: 'sometimes' }],
-    boss: { aoeDamage: 15, aoeEveryMs: 5000, aoeRadius: 3, enrageAfterMs: 30_000, enrageMult: 3, maxSharePerPlayer: 0.75 },
+    boss: { aoeDamage: 15, aoeEveryMs: 5000, aoeRadius: 3, enrageAfterMs: 30_000, enrageMult: 3 },
   },
 };
 

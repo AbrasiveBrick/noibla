@@ -42,17 +42,17 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Kill XP and quest credit are shared among members in the zone.
   - New `Visibility` kind `{ kind: 'party', id }`.
 - **Bosses** (`MOB_TYPES`, new flag `boss`):
-  - **Elder Bear** (800 HP) in the wilds, so groups learn bosses without PvP risk, and **Ash Wyrm** (1500 HP) in the frontier.
+  - **Elder Bear** (825 HP) in the wilds, so groups learn bosses without PvP risk, and **Ash Wyrm** (1500 HP) in the frontier.
   - An area attack hits every attacker every few seconds.
-  - Damage triples after an **enrage timer** (bear 25 s, wyrm 30 s), which ends slow or undergeared fights.
+  - Damage triples after an **enrage timer** (bear 12 s, wyrm 30 s), which ends slow or undergeared fights.
   - Respawn takes 10-20 min.
   - Mob attacks currently hit only `targetId` (`world.ts:825`); extend `worldTick` for the area attack.
 - **Rare drops**: `bear_pelt` (tier-2 `bearhide_jerkin`) and `wyrm_scale` (tier-3 `wyrmscale_mail`); stage 3 buildings use them too.
 - **Spoils bag**: boss loot drops into a bag only the players who dealt damage (party or not) can open, for 5 minutes. After that anyone can.
   - **Any eligible member can take everything.** This is the first betrayal hook.
   - Extend `LootBag` (`types.ts:57`) with `eligible?: string[]` and `opensToAllAt`.
-- **Why bosses need a group:** one player can deal at most 75% of a boss's HP. Stats alone could not do it, because a maxed player out-damages and outlasts a starter trio. Later stages that add player power (food, buildings) can't break this, but they can make enrage irrelevant: rerun `test/bosses.test.ts` and retune the timers.
-- Tests: `test/party.test.ts` covers parties, spoils eligibility and shared XP. `test/bosses.test.ts` simulates whole fights: no solo build wins, small groups do, enrage fires in slow fights.
+- **Who can solo a boss:** only a really maxed-out player (top gear with good affixes and a high weapon skill). The user decided this is fine, so there is no damage cap, and boss stats alone keep everyone else out. The cost is group size: the bear takes three in iron or four in copper. Stages that add player power (food, buildings) move this line: rerun `test/bosses.test.ts` and retune.
+- Tests: `test/party.test.ts` covers parties, spoils eligibility and shared XP. `test/bosses.test.ts` simulates whole fights: only maxed builds win alone, small groups win, enrage fires in slow fights.
 
 ## Stage 2: Settlements, membership, stockpile
 

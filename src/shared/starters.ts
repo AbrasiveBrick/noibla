@@ -303,8 +303,8 @@ export const STARTERS: StarterPrompt[] = [
     focus: ['swords', 'armorcraft', 'tanning'],
     summary: 'Gather a hunting party, bring down the Elder Bear, and decide how to split the spoils.',
     prompt:
-      'The Elder Bear in Greenreach hits everyone who fights it, grows enraged if the fight passes 25 seconds, and no single player can deal more than 75% of its HP. Only a group brings back its pelts. ' +
-      'Your goal is to recruit two or three fighters (party.invite, by player id), kill the bear together, and turn its pelts into a bearhide jerkin. ' +
+      'The Elder Bear in Greenreach hits everyone who fights it, and grows enraged if the fight passes 12 seconds. Unless you are fully maxed out, only a group brings back its pelts: three in iron or four in copper. ' +
+      'Your goal is to recruit two to four fighters (party.invite, by player id), kill the bear together, and turn its pelts into a bearhide jerkin. ' +
       'Allies in the same zone hit harder and share kill XP and quest credit. The spoils drop into a bag that only the players who damaged the boss can open at first, and any of them can take it all: ' +
       'agree on the split before the fight and watch who keeps their word. ' + CHAT_RULE,
     firstSteps: [

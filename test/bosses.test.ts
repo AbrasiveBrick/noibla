@@ -6,7 +6,8 @@ import { AFFIXES, MOB_TYPES, UNIQUE_SEP, itemDef, type AbilityId } from '../src/
 import { Game } from '../src/server/game.ts';
 import { AFFIX_RANGES } from '../src/server/odds.ts';
 
-interface Build { weapon?: string; armor?: string; level: number; perfectAffixes?: boolean }
+/** `good`: all four combat affixes at the middle of tier 2. `perfect`: all four at the top of tier 3. */
+interface Build { weapon?: string; armor?: string; level: number; affixes?: 'good' | 'perfect' }
 const BUILDS = {
   fresh: { level: 0 },
   t1: { weapon: 'copper_sword', armor: 'leather_jerkin', level: 3 },
@@ -15,14 +16,19 @@ const BUILDS = {
   t3: { weapon: 'duskiron_sword', armor: 'wraithhide_armor', level: 0 },
   t3Skilled: { weapon: 'duskiron_sword', armor: 'wraithhide_armor', level: 10 },
   t3Veteran: { weapon: 'duskiron_sword', armor: 'wraithhide_armor', level: 30 },
-  // The strongest player the rules allow: best gear, every combat affix at its maximum, capped damage skill.
-  maxed: { weapon: 'duskiron_sword', armor: 'wyrmscale_mail', level: 30, perfectAffixes: true },
+  t1Veteran: { weapon: 'copper_sword', armor: 'leather_jerkin', level: 30 },
+  t3GoodAffixes: { weapon: 'duskiron_sword', armor: 'wraithhide_armor', level: 15, affixes: 'good' },
+  bestGearVeteran: { weapon: 'duskiron_sword', armor: 'wyrmscale_mail', level: 30 },
+  // Really maxed out: best gear, good affixes, capped damage skill. These may solo a boss.
+  nearlyPerfect: { weapon: 'duskiron_sword', armor: 'wyrmscale_mail', level: 30, affixes: 'good' },
+  maxed: { weapon: 'duskiron_sword', armor: 'wyrmscale_mail', level: 30, affixes: 'perfect' },
 } satisfies Record<string, Build>;
 type BuildId = keyof typeof BUILDS;
+const MAXED: BuildId[] = ['nearlyPerfect', 'maxed'];
 
-/** `never`: attack only. `always`: every buff as soon as it is ready. `timed`: Evade just before a hit, Brace otherwise. */
-type Defense = 'never' | 'always' | 'timed';
-const DEFENSES: Defense[] = ['never', 'always', 'timed'];
+/** `never`: attack only. `always`: every buff as soon as it is ready. `timed`: Evade just before a hit, Brace otherwise. `sdk`: what fight() does, a buff below half HP. */
+type Defense = 'never' | 'always' | 'timed' | 'sdk';
+const DEFENSES: Defense[] = ['never', 'always', 'timed', 'sdk'];
 const BOSSES = ['elder_bear', 'ash_wyrm'];
 
 function setup(type: string, team: BuildId[]) {
@@ -45,9 +51,12 @@ function setup(type: string, team: BuildId[]) {
     for (const base of [b.weapon, b.armor]) {
       if (!base) continue;
       let item = base;
-      if (b.perfectAffixes) {
+      if (b.affixes) {
         item = `${base}${UNIQUE_SEP}${i}`;
-        const affixes = Object.values(AFFIXES).filter((a) => a.group === 'combat').map((a) => ({ id: a.id, tier: 3, value: AFFIX_RANGES[a.id][2][1] }));
+        const affixes = Object.values(AFFIXES).filter((a) => a.group === 'combat').map((a) => {
+          const [, [lo, hi], [, top]] = AFFIX_RANGES[a.id];
+          return b.affixes === 'perfect' ? { id: a.id, tier: 3, value: top } : { id: a.id, tier: 2, value: Math.floor((lo + hi) / 2) };
+        });
         g.uniques.set(item, { id: item, base, ilvl: 60, rarity: 'rare', affixes, mods: 4, corrupted: false, craftedBy: 'test', craftedAt: now });
       }
       p.inventory[item] = 1;
@@ -60,7 +69,8 @@ function setup(type: string, team: BuildId[]) {
   return { g, boss, ids, send, must, placeAtBoss, now: () => now, step: () => { now += 25; g.tick(); } };
 }
 
-function fight(type: string, team: BuildId[], defense: Defense = 'timed') {
+/** `lagMs`: how late each player acts once ready. */
+function fight(type: string, team: BuildId[], defense: Defense = 'timed', lagMs = 0) {
   const s = setup(type, team);
   try {
     const def = MOB_TYPES[type].boss!;
@@ -72,11 +82,12 @@ function fight(type: string, team: BuildId[], defense: Defense = 'timed') {
       for (const id of alive) {
         const p = s.g.players.get(id)!;
         if (p.zone !== s.boss.zone) { alive.delete(id); continue; }
-        if (p.busyUntil > s.now()) continue;
+        if (p.busyUntil + lagMs > s.now()) continue;
         const armor = p.equipment.armor ? itemDef(p.equipment.armor)?.abilities ?? [] : [];
         const ready = (a: AbilityId) => armor.includes(a) && (p.cooldowns[a] ?? 0) <= s.now();
         let buff: AbilityId | undefined;
         if (s.boss.engagedAt !== undefined && defense === 'always') buff = (['brace', 'evade'] as const).find(ready);
+        if (defense === 'sdk' && p.hp < s.g.maxHp(p) / 2) buff = (['evade', 'brace'] as const).find(ready);
         if (s.boss.engagedAt !== undefined && defense === 'timed') {
           if (ready('evade') && s.boss.targetId === id && s.boss.nextAttackAt - s.now() < 2500) buff = 'evade';
           else if (ready('brace') && p.braceUntil <= s.now()) buff = 'brace';
@@ -91,61 +102,42 @@ function fight(type: string, team: BuildId[], defense: Defense = 'timed') {
   } finally { s.g.close(); }
 }
 
-test('no lone player can kill a boss, whatever their gear, skill or use of defenses', () => {
+test('players who are not maxed out cannot solo a boss, however they play', () => {
   for (const type of BOSSES) {
-    for (const build of Object.keys(BUILDS) as BuildId[]) {
-      for (const defense of DEFENSES) assert.equal(fight(type, [build], defense).won, false, `${build} (${defense}) soloed the ${type}`);
+    for (const build of (Object.keys(BUILDS) as BuildId[]).filter((b) => !MAXED.includes(b))) {
+      for (const defense of DEFENSES) {
+        for (const lag of [0, 100]) assert.equal(fight(type, [build], defense, lag).won, false, `${build} (${defense}, ${lag} ms lag) soloed the ${type}`);
+      }
     }
+  }
+});
+
+test('a really maxed-out player can solo both bosses', () => {
+  for (const type of BOSSES) {
+    for (const build of MAXED) assert.equal(fight(type, [build], 'timed').won, true, `${build} should solo the ${type}`);
+    assert.equal(fight(type, ['maxed'], 'sdk').won, true, `maxed should solo the ${type} with plain fight()`);
   }
 });
 
 test('small geared groups still kill both bosses', () => {
   const groups: [string, BuildId[]][] = [
-    ['elder_bear', ['t2', 't2']],
-    ['elder_bear', ['t1', 't1', 't1']],
+    ['elder_bear', ['t2', 't2', 't2']],
+    ['elder_bear', ['t1', 't1', 't1', 't1']],
+    ['elder_bear', ['t3', 't3']],
     ['elder_bear', ['maxed', 't1']],
-    ['ash_wyrm', ['t3Skilled', 't3Skilled']],
     ['ash_wyrm', ['t3', 't3', 't3']],
     ['ash_wyrm', ['t2', 't2', 't2', 't2']],
     ['ash_wyrm', ['maxed', 't1']],
   ];
-  for (const [type, team] of groups) assert.equal(fight(type, team).won, true, `${team} should beat the ${type}`);
+  for (const [type, team] of groups) {
+    for (const defense of ['timed', 'sdk'] as const) assert.equal(fight(type, team, defense).won, true, `${team} (${defense}) should beat the ${type}`);
+  }
+  assert.equal(fight('ash_wyrm', ['t3Skilled', 't3Skilled']).won, true, 'a skilled duo that times its defenses beats the wyrm');
 });
 
 test('enrage comes into play in slow fights and not in quick ones', () => {
-  assert.deepEqual(fight('elder_bear', ['t2', 't2']), { won: true, enraged: true }, 'a bare duo finishes the bear enraged');
-  assert.deepEqual(fight('elder_bear', ['t2', 't2', 't2']), { won: true, enraged: false }, 'a trio beats the timer');
+  assert.deepEqual(fight('elder_bear', ['t2', 't2', 't2']), { won: true, enraged: true }, 'a bare trio finishes the bear enraged');
+  assert.deepEqual(fight('elder_bear', ['t3Veteran', 't3Veteran', 't3Veteran']), { won: true, enraged: false }, 'a veteran trio beats the timer');
   assert.deepEqual(fight('ash_wyrm', ['t3', 't3']), { won: false, enraged: true }, 'an untrained duo runs out of time');
   assert.deepEqual(fight('ash_wyrm', ['t3', 't3', 't3']), { won: true, enraged: false }, 'a trio beats the timer');
-});
-
-test('the per-player damage cap survives dying and coming back, and clears when the fight resets', () => {
-  const s = setup('elder_bear', ['maxed', 't1']);
-  try {
-    const [star, mate] = s.ids;
-    const def = MOB_TYPES.elder_bear;
-    const cap = Math.floor(def.hp * def.boss!.maxSharePerPlayer);
-    const hit = (id: string) => { s.g.players.get(id)!.busyUntil = 0; return s.must(id, 'attack', { targetId: s.boss.id }); };
-    hit(mate);
-    const afterMate = s.boss.hp;
-    let last: any;
-    for (let i = 0; i < 100 && afterMate - s.boss.hp < cap; i++) last = hit(star);
-    assert.equal(afterMate - s.boss.hp, cap);
-    assert.match(last.note, /one player can deal/);
-
-    // Dying drops the star's aggro, but the ally keeps the fight going.
-    delete s.boss.aggro[star];
-    s.placeAtBoss(star);
-    const again = hit(star);
-    assert.equal(again.damage, 0);
-    assert.equal(again.xp, 0, 'hits past the cap train nothing');
-    assert.equal(s.boss.hp, afterMate - cap);
-
-    // Nobody left in the region: the boss heals, and the next fight starts with a clean count.
-    for (const id of s.ids) Object.assign(s.g.players.get(id)!, { zone: 'town', pos: { ...s.g.map.spawn } });
-    s.step();
-    assert.equal(s.boss.hp, def.hp);
-    s.placeAtBoss(star);
-    assert.ok(hit(star).damage > 0);
-  } finally { s.g.close(); }
 });
