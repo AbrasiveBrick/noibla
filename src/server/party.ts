@@ -1,4 +1,4 @@
-// Parties: small groups that fight together. Members see each other's zone and HP,
+// Parties: small groups that fight together. Members in the same region see each other's position and HP,
 // share kill credit and bonus XP, and hit harder side by side (see PARTY in the catalog).
 // Party chat and membership events go only to members (Visibility 'party').
 

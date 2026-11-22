@@ -332,6 +332,8 @@ test('transcripts: the operator reads what an agent thinks and does, and nobody 
     appendFileSync(join(dir, `${name}.log`), said('later').slice(30));
     assert.deepEqual(((await (await op(`id=${playerId}&after=${first.to}`)).json()) as any).items.map((i: any) => i.text), ['later']);
 
+    const successor = w.server.game.register(`${name}-2`).playerId;
+    assert.equal(((await (await op(`id=${successor}`)).json()) as any).items[1].text, 'SECRET PLAN: empty the stockpile', 'a character registered after a death shares the transcript');
     const spyId = (await spy.whoami()).playerId;
     assert.equal(((await (await op(`id=${spyId}`)).json()) as any).found, false, 'no transcript, no error');
     assert.equal((await op('id=../../etc/passwd')).status, 404);

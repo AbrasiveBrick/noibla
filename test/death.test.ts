@@ -654,6 +654,8 @@ test('bounties: escrow, then the finisher, or the downer of who bled out, and th
   assert.equal(f.p(v.kim).bank.silver, 180, 'the finisher, every bounty');
   assert.equal(f.p(v.kay).bank.silver, undefined, 'not who downed them');
   assert.ok(f.heard.get(v.kim)!.some((e) => e.type === 'bounty.paid' && e.data.amount === 180));
+  const killerIds = f.heard.get(v.kim)!.map((e) => e.id);
+  assert.equal(new Set(killerIds).size, killerIds.length, 'the payment has an id the killer hears only once');
   assert.ok(!f.heard.get(v.kay)!.some((e) => e.type === 'bounty.paid'));
   assert.deepEqual(f.heard.get(v.poster), [], 'the poster waits');
   assert.equal(f.ok(v.lead, 'bounty.list').bounties.length, 2, 'the list waits');
@@ -748,6 +750,19 @@ test('hood: a hooded victim is a figure until death takes the hood off', scenari
   assert.ok(!before.includes(v.vic) && !before.includes(NAMES.vic));
   finish(f, v);
   assert.equal(f.heard.get(v.wit)!.find((e) => e.type === 'player.death')!.data.victimId, v.vic);
+}));
+
+test('hood: spoils don\'t list who fought in the order they joined', scenario((f, v) => {
+  const bear = [...f.g.mobs.values()].find((m) => m.type === 'elder_bear')!;
+  for (const id of [v.kim, v.wit, v.kay]) f.put(id, bear.home);
+  f.listen(v.kay);
+  for (const id of [v.kim, v.wit, v.kay]) f.ok(id, 'attack', { targetId: bear.id });
+  // Kimball, first in, pulls a hood up for the kill.
+  wear(f, v.kim);
+  bear.hp = 1;
+  f.ok(v.kim, 'attack', { targetId: bear.id });
+  const { eligible } = f.heard.get(v.kay)!.find((e) => e.type === 'loot.dropped')!.data;
+  assert.deepEqual(eligible, [NAMES.kay, NAMES.wit, HOOD.name], 'sorted, or the figure is whoever was first');
 }));
 
 test('operator: the true killer and the true face, in the feed, the store and the state', scenario((f, v) => {
@@ -1190,7 +1205,8 @@ function masquerade(v: Village, actor: string, other: string) {
     s.work = {
       [v.kim]: { gathered: {}, given: { copper_ore: [{ qty: 40, readyAt: 1000 }] }, carry: {} },
       [v.kay]: { gathered: {}, given: { copper_ore: [{ qty: 10, readyAt: 1001 }] }, carry: {} },
-      [v.lead]: { gathered: {}, given: { copper_ore: [{ qty: 40, readyAt: 1002 }] }, carry: {} },
+      // Who reads the stockpile at the plot, and so sees everyone's units but their own.
+      [v.mate]: { gathered: {}, given: { copper_ore: [{ qty: 40, readyAt: 1002 }] }, carry: {} },
     };
     for (const [id, as] of [[actor, FIGURE], [other, OTHER_FIGURE]] as const) {
       const p = f.p(id);

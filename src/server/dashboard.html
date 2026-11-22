@@ -189,7 +189,7 @@
       <h2>World map <span class="count muted" id="mapMeta"></span></h2>
       <div class="body mapwrap"><canvas id="mapCanvas" aria-label="Live world map: regions, players, mobs, resource nodes, places and loot bags"></canvas></div>
       <div class="maplegend"><span class="key"><i class="p-town"></i>town (safe)</span><span class="key"><i class="p-wilds"></i>wilds (PvE)</span><span class="key"><i class="p-frontier"></i>frontier (lethal PvP)</span><span class="key"><i class="p-hollow"></i>hollow (contested PvP)</span><span class="key"><i class="p-ridge"></i>ridge (contested PvP)</span>
-        <span class="key">● bot</span><span class="key" style="color:var(--bad)">● mob</span><span class="key">◆ resource node</span><span class="key">▢ place (B bank, Q quests, $ shop, Sm/Sw/Ta/Fo/Wb stations)</span><span class="key">⌂ settlement plot (filled when founded)</span><span class="key" style="color:#9b6b2f">■ loot bag</span>
+        <span class="key">● bot (red fill: downed)</span><span class="key" style="color:var(--bad)">✕ dead bot</span><span class="key" style="color:var(--bad)">● mob</span><span class="key">◆ resource node</span><span class="key">▢ place (B bank, Q quests, $ shop, Sm/Sw/Ta/Fo/Wb stations)</span><span class="key">⌂ settlement plot (filled when founded)</span><span class="key" style="color:#9b6b2f">■ loot bag</span>
         <span class="muted mono" id="mapTip">hover the map</span></div>
     </section>
     <section>
@@ -382,7 +382,7 @@
       case 'death.report': return `<b>${esc(d.reporter.name)}</b> reported <b>${esc(d.victim.name)}</b>'s death${d.first ? ' (first)' : ''}${d.accuse ? `, accusing <b>${esc(d.accuse.name)}</b>` : ''} <span class="quote">“${esc(d.text)}”</span>${killerOf(d.corpseId)}`;
       case 'estate': return `<b>${esc(d.victim.name)}</b>'s death became known${d.reported ? ' by report' : ', unreported'}: the estate (${stacks(d.items)}) ${d.to ? `went to <b>${esc(d.to.name)}</b>` : 'was destroyed'}`;
       case 'will': return d.heir ? `<b>${esc(d.name)}</b> named <b>${esc(d.heir.name)}</b> heir` : `<b>${esc(d.name)}</b> cleared their will`;
-      case 'bounty': return d.stage === 'closed' ? `${Number(d.bounties) || 'No'} bounties closed on <b>${esc(d.target.name)}</b>` : `<b>${esc(d.name)}</b> put ${fmt(d.amount)} silver on <b>${esc(d.target.name)}</b>'s head`;
+      case 'bounty': return d.stage === 'closed' ? `${Number(d.bounties) || 'No'} ${Number(d.bounties) === 1 ? 'bounty' : 'bounties'} closed on <b>${esc(d.target.name)}</b>` : `<b>${esc(d.name)}</b> put ${fmt(d.amount)} silver on <b>${esc(d.target.name)}</b>'s head`;
       case 'hood': return `<b>${esc(d.name)}</b> pulled up a hood`;
       case 'player.respawn': return `<b>${esc(d.name)}</b> respawned in town`;
       case 'loot.dropped': return d.spoils
