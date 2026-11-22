@@ -127,8 +127,8 @@ export interface Mob {
   /** Bosses: when the current fight started (enrage clock) and when the next area attack lands. */
   engagedAt?: number;
   nextAoeAt?: number;
-  /** Bosses: damage each player dealt this fight (dying does not clear it). Decides the per-player cap and who may open the spoils. */
-  damageBy?: Record<string, number>;
+  /** Bosses: every player who damaged it this fight (dying does not remove you). Decides who may open the spoils. */
+  contributors?: string[];
 }
 
 export interface ResourceNode {
