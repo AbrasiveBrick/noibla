@@ -100,7 +100,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - The public `level` counts standing buildings, so outsiders cannot watch upkeep through it.
   - The members-only `activeLevel` counts paid-up buildings and decides income and shared work.
 - **Upkeep:** taken from the stockpile every 10 minutes per building. An unpaid building does nothing and reopens when it can be paid. Server downtime is neither billed nor paid.
-- **Stockpile capacity:** 25,000 items (100,000 with a storehouse), silver excluded. A full one is the theft prize: 2-4 member-hours of a village's work.
+- **Stockpile capacity:** 25,000 items (100,000 with a storehouse), silver excluded. A full one is the theft prize.
 - **New skills:** `construction`, `farming` and `cooking`, with trowel, hoe and pot families, recipes and affix pools. `fertile_field` is reaped with farming and a hoe. Existing players got the three copper tools once (`KIT_VERSION`).
 - **Stations:** `makeItem` and `repair` accept the member's own building at the plot. Repairing outside town never heals.
 - **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions stay with the settlement, and their shared-work cover disappears.
@@ -109,6 +109,11 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Stage 4: `stash.pilfer`, the watchtower as a witness, and the storehouse lock.
   - Stage 5: the infirmary (needs `wyrm_scale`, a ninth building and town slot), and watchtower movements in `corpse.examine`. The watchtower logs walking only, so a death leaves an arrival with no departure.
   - Stage 6: allies using stations and not setting off the palisade (`buildingStation` and `noteCrossing` in `buildings.ts`), and the palisade's raid defense.
+- **Measured** (`test/village-sim.ts`, 27 cases: items valued at cost, at quest pay and at half shop prices; newcomer, veteran and perfectly geared players; 3 maps; searched strategies on every side):
+  - A village earns **1.66-3.94x** the best solo play per member-hour (median 2.25x). The solo side may found alone, recruit idle accounts and solo every boss respawn.
+  - An exiled member loses **32-73%** (median 57%).
+  - A full stockpile is worth **2.1-3.6 member-hours** at cost and at quest pay. At half shop prices it is 1.0-3.1: crafted gear dominates that valuation, so veteran and maxed villages fall short of 2.
+  - Without shared work only 4 of the 27 cases reach 1.5x.
 - Tests: `test/buildings.test.ts` covers projects, upkeep, bonuses, shared work, food, stashes, secrecy, old saves and the boss bar with the new buffs. `test/economy.test.ts` checks the targets by playing the real rules (`test/village-sim.ts`).
 
 ## Stage 4: Theft and witnesses

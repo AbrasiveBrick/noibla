@@ -607,6 +607,11 @@ test('palisade and watchtower: who crosses into the region, while they work', ()
     stock({ pine_log: 10, pine_plank: 5, stone: 10 });
     const stranger = f.g.register('Stranger').playerId;
     const alerts: string[] = [];
+    // The intruder, and an outsider standing in the region, hear nothing of either building.
+    const bystander = f.g.register('Bystander').playerId;
+    f.put(bystander, plot);
+    const overheard: string[] = [];
+    for (const id of [stranger, bystander]) f.g.subscribe({ kind: 'player', playerId: id, send: (e) => { if (/^(settlement|stockpile)\./.test(e.type)) overheard.push(e.type); } });
     f.g.subscribe({ kind: 'player', playerId: A, send: (e) => { if (e.type === 'settlement.alert') alerts.push(e.data.playerId); } });
 
     const edge = (() => {
@@ -641,6 +646,7 @@ test('palisade and watchtower: who crosses into the region, while they work', ()
     const after = f.ok(A, 'watchtower.log');
     assert.equal(after.recording, false);
     assert.equal(after.entries.length, 3);
+    assert.deepEqual(overheard, []);
   } finally { f.g.close(); }
 });
 

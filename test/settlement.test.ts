@@ -384,7 +384,7 @@ test('secrecy: outsiders, invitees and ex-members learn nothing through any comm
       assert.doesNotMatch(text, new RegExp(`(?<![0-9a-f])${SECRET_QTY}(?![0-9a-f])`), `${what} leaks the amount`);
       for (const secret of [SECRET_ID, motion.id, '"taxPct":37', '"yourRole"', '"role":"steward"']) assert.ok(!text.includes(secret), `${what} leaks ${secret}`);
     };
-    const refused = ['settlement.invite', 'settlement.leave', 'settlement.expel', 'settlement.setRole', 'settlement.setCharter', 'settlement.vote', 'stockpile.deposit', 'stockpile.withdraw', 'stockpile.view', 'stockpile.log'];
+    const refused = ['settlement.invite', 'settlement.leave', 'settlement.expel', 'settlement.setRole', 'settlement.setCharter', 'settlement.vote', 'stockpile.deposit', 'stockpile.withdraw', 'stockpile.view', 'stockpile.log', 'settlement.contribute', 'settlement.build', 'settlement.cancelProject', 'stash.deposit', 'watchtower.log'];
     const payload = {
       settlementId: id, id, playerId: L, targetId: T, to: T, with: L, name: 'Mirror', plotId: plot.id, bagId: id, tradeId: id, partyId: id,
       // Never a secret itself, so that any secret in a response is a leak and not an echo of the question.
