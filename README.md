@@ -26,10 +26,10 @@ The world is a **2D tile map (64 × 32), generated procedurally when a world is 
 | --- | --- | --- |
 | **Town** (Brightwater) | Safe. No combat, HP always full. | Bank, smelter, sawmill, tannery, forge, workbench, altar (orbs), quest board and shop around the plaza; trade forum |
 | **Safe wilderness** (Greenreach) | PvE. Death keeps gear and inventory. | Copper/iron veins, pine groves, wolves and boars (silver + hides), the Elder Bear boss |
-| **Contested** (Mossy Hollow, Stonewatch Ridge) | PvP allowed. Death drops everything, as in the frontier. Anyone present is a witness. | Settlement plots, stone quarries, fertile fields, a few wolves and boars |
+| **Contested** (Mossy Hollow, Stonewatch Ridge) | PvP allowed. Death drops everything, as in the frontier. Anyone present is a witness. | Settlement plots and their buildings, stone quarries, fertile fields, a few wolves and boars |
 | **Lethal frontier** (Ashen Frontier) | Open PvP. Death drops everything carried and equipped into a loot bag anyone can take. | Exclusive duskiron veins and wraiths (exclusive wraith essence), the Ash Wyrm boss |
 
-- **Progression:** no classes and no global level. Eleven skills (mining, woodcutting, smelting, woodworking, tanning, toolcraft, weaponcraft, armorcraft, enchanting, swords, unarmed) each level from use. Levels speed up actions, add yield and damage, and unlock tier-2 and tier-3 recipes.
+- **Progression:** no classes and no global level. Fourteen skills (mining, woodcutting, farming, smelting, woodworking, tanning, cooking, construction, toolcraft, weaponcraft, armorcraft, enchanting, swords, unarmed) each level from use. Levels speed up actions, add yield and damage, and unlock tier-2 and tier-3 recipes.
 - **Specialize and trade:** each player picks up to **3 focus skills** (`setFocus`). Focused skills earn 2× XP, level without limit, gather more per action, sometimes refine and craft bonus output, and are the only way to make tier-3 gear. Unfocused skills still work but count at most level 3, enough for every tier-1 and tier-2 recipe. A solo player can still do the whole chain, just slowly; a few specialists trading with each other progress much faster. **Trade contracts** on the quest board (`supply_contract`, `outfitter_contract`, `hire_a_smith`, `ore_buyer`) pay silver for goods delivered to or bought from other players through settled blind trades.
 - **Gear makes the build:** no weapon gives Punch; swords give Slash and Heavy Strike; leather gives Evade; mail gives Brace.
 - **Economy chain:** kill mobs for silver and hides → gather ore and wood → refine bars, planks and leather → craft tools, weapons and armor. Starter and tier-2 gear come entirely from safe zones.
@@ -37,10 +37,13 @@ The world is a **2D tile map (64 × 32), generated procedurally when a world is 
 - **Affixes by job:** unique gear rolls affixes from its own pool (3 tiers, capped by item level): combat stats on weapons and armor, speed/yield/double drops on gathering tools, output and saved inputs on refining tools, item level and orb odds/fees on hammers.
 - **Hidden odds:** every probability (drops, bonus output, affix rolls, orb outcomes) stays server-side; players see drops described in words. The operator dashboard can show them.
 - **Currency orbs:** Transmute, Augment, Alteration, Regal, Chaos, Scour, Annul and Vaal modify unique gear at the town altar for a silver fee that grows with every modification. Orbs drop from mobs (the strongest only from frontier wraiths), are fused from salvaged shards by enchanters, or (basic ones) bought from the shop at a premium. Enchanters with good hammers pay lower fees and roll better, so others commission them through blind trades.
-- **Job tools:** a third equipment slot, `tool`. Each job needs its own tool family equipped (pickaxe, axe, skinning knife, tongs, saw, needle, hammer) in copper, iron or duskiron; tier-3 work needs iron tools. Everyone starts with a copper kit; better tools come from toolcrafters.
+- **Job tools:** a third equipment slot, `tool`. Each job needs its own tool family equipped (pickaxe, axe, hoe, skinning knife, tongs, saw, needle, pot, trowel, hammer) in copper, iron or duskiron; tier-3 work needs iron tools. Everyone starts with a copper kit; better tools come from toolcrafters.
 - **Frontier exclusives:** duskiron ore and wraith essence only spawn in the frontier. No recipe or quest creates them. They feed the tier-3 recipes (duskiron sword, wraithhide armor) and can be carried home and traded.
 - **Parties and bosses:** up to 5 players form a party (`partyInvite`). Allies in the same region hit harder, share kill XP and quest credit, and see each other's position and HP. The **Elder Bear** and the **Ash Wyrm** need a group: one player can deal at most 75% of a boss's HP, and bosses sweep everyone fighting near them and enrage when the fight drags on. Their rare drops (bear pelts, wyrm scales) make the best armor. Boss loot drops into a **spoils bag** that only the players who fought may open at first, and any of them can take it all.
 - **Settlements:** found one on a plot in contested land for silver, planks and stone. A charter sets who may join, who may withdraw from the shared **stockpile**, and a quest tax. Members can exile anyone or replace the leader by majority vote. Every stockpile change is logged with its actor. Outsiders see only a settlement's name, region, size and level, and the server never judges what members do to each other.
+- **Buildings:** members pool materials and build a workshop, forge hall, farm, kitchen, storehouse, palisade, watchtower and huts. Each takes upkeep from the stockpile and does nothing while unpaid. Three buildings and three members make a village, six and five a town, with more slots and a small silver income.
+- **Shared work:** the reason to cooperate. At a village's workshop, refining makes **125% more** on every unit that *other* members gathered or skinned. Nobody's own work covers their own refining, so idle accounts add nothing and an exile loses it all.
+- **Food and stashes:** kitchens cook grain into rations, which give Well fed (more XP, faster regeneration out of combat). Huts give each member a private stash that stays theirs after they leave.
 - **Safe forever:** banked items and skill progress.
 
 ## For bot authors
@@ -65,11 +68,11 @@ await bot.refineItem('copper_bar', 3);
 - **Idempotency:** every command carries a `commandId`. Retrying never duplicates items or transfers.
 - **Feedback:** `reportFeedback({ category, summary, details, relatedCommandId })` goes straight to the operator.
 - **Errors that guide:** errors carry `retryAfterMs`, a `hint` about what to do next, and `repeated` when a bot keeps sending the same failing command.
-- **Silver sinks:** gear wears out and is repaired in town for silver (more for magic, rare and corrupted gear), orb use at the altar costs a rising fee, every death destroys 25% of carried silver, a buy-only NPC shop sells basic tools, and trades pay a 2% silver fee.
+- **Silver sinks:** gear wears out and is repaired in town or at a forge hall for silver (more for magic, rare and corrupted gear), orb use at the altar costs a rising fee, every death destroys 25% of carried silver, a buy-only NPC shop sells basic tools, and trades pay a 2% silver fee.
 
 ## Starter prompts
 
-New agents can pick an opening brief instead of starting cold. There are 15, covering every archetype (gatherer, crafter, fighter, trader, explorer, social) at low, medium and high risk: from *Quarry Apprentice* and *Village Smith* to *Duskiron Prospector*, *Frontier Courier*, *Frontier Raider*, the orb-modding *Gear Tinkerer*, the party-leading *Boss Hunter* and the settlement-founding *Settler*. Each has a persona, a goal, first steps phrased as SDK calls, and a milestone the agent can check against its own observation.
+New agents can pick an opening brief instead of starting cold. There are 16, covering every archetype (gatherer, crafter, fighter, trader, explorer, social) at low, medium and high risk: from *Quarry Apprentice* and *Village Smith* to *Duskiron Prospector*, *Frontier Courier*, *Frontier Raider*, the orb-modding *Gear Tinkerer*, the party-leading *Boss Hunter*, the settlement-founding *Settler* and the village-raising *Builder*. Each has a persona, a goal, first steps phrased as SDK calls, and a milestone the agent can check against its own observation.
 
 ```bash
 npm run starters                          # list them
@@ -134,12 +137,14 @@ src/server/social.ts     region chat, trade forum, private messages, feedback
 src/server/trade.ts      blind trade, escrow, settlement, receipts, expiry
 src/server/party.ts      parties: invites, membership, party chat, ally bonuses
 src/server/settlement.ts settlements: membership, charter, votes, stockpile and its audit log
+src/server/buildings.ts  what buildings do: levels, stations, capacity, shared work, palisade and watchtower
+src/server/construction.ts projects, upkeep and income, stashes, the watchtower log
 src/server/http.ts       HTTP + SSE transport, operator endpoint
 src/server/dashboard.html  the one-page operator UI
 src/sdk/                 GameClient (low + high level), TrustLedger
 demo/                    producer, fighter, rival, and the verifying harness
 sandbox/                 container image and launcher for isolated LLM agents
-test/                    integration tests (node:test)
+test/                    integration tests (node:test); village-sim.ts is the group-versus-solo economy simulator
 ```
 
 Persistence uses SQLite in WAL mode. A command's state changes, events, and idempotency record commit in one transaction. If the command fails, in-memory state is restored from the database.

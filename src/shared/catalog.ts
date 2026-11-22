@@ -538,8 +538,11 @@ export const SETTLEMENT = {
     { level: 2, name: 'village', buildings: 3, members: 3, slots: 6, income: 25 },
     { level: 3, name: 'town', buildings: 6, members: 5, slots: 8, income: 60 },
   ],
-  /** Items (silver excluded) the stockpile holds. A storehouse holds more. */
-  stockpileCapacity: 50_000,
+  /**
+   * Items (silver excluded) the stockpile holds; a storehouse holds more. Full of a village's bars and planks it is
+   * worth a few member-hours of work, which is what makes it worth trusting people with, or stealing.
+   */
+  stockpileCapacity: 25_000,
   /**
    * Shared work, the point of a village. While `activeLevel` >= `minLevel` and the workshop works, refining there makes
    * `outputPct`% more output on every unit covered by OTHER members' work: each raw unit a member gathers or skins
@@ -602,7 +605,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
     description: 'The only place to cook grain into rations. Eating one makes you Well fed (see catalog.food).',
   },
   storehouse: {
-    id: 'storehouse', name: 'Storehouse', tier: 1, minLevel: 0, work: 16, stockpileCapacity: 200_000,
+    id: 'storehouse', name: 'Storehouse', tier: 1, minLevel: 0, work: 16, stockpileCapacity: 100_000,
     cost: items({ pine_plank: 80, stone: 80, iron_bar: 5 }), upkeep: items({ pine_plank: 5, stone: 10 }),
     description: 'A much larger stockpile.',
   },

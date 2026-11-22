@@ -715,6 +715,95 @@ test('a failed write leaves projects, stashes and the stockpile as they were', (
   } finally { f.g.close(); }
 });
 
+// ---------- bosses ----------
+
+/**
+ * One whole boss fight on the real rules. `stand`: attack to the end, with every buff timed as well as a player can.
+ * `kite`: also run to the far side of the region below half HP, to rest where regeneration (which food doubles) works.
+ */
+function bossFight(type: string, build: { sword: string; armor: string; level: number }, size: number, fed: boolean, tactic: 'stand' | 'kite') {
+  const f = fake();
+  try {
+    const boss = [...f.g.mobs.values()].find((m) => m.type === type)!;
+    const { map } = f.g;
+    let far: Pos = boss.home;
+    for (let y = 0; y < map.height; y += 2) for (let x = 0; x < map.width; x += 2) {
+      if (walkable(map, x, y) && regionAt(map, { x, y }) === boss.zone && dist({ x, y }, boss.home) > dist(far, boss.home)) far = { x, y };
+    }
+    const ids = Array.from({ length: size }, (_, i) => f.g.register(`Hunter${i}`).playerId);
+    for (const id of ids) {
+      const p = f.p(id);
+      f.give(id, { [build.sword]: 1, [build.armor]: 1 });
+      f.ok(id, 'equip', { item: build.sword });
+      f.ok(id, 'equip', { item: build.armor });
+      p.focus = ['swords'];
+      p.skills.swords = 10 * build.level * build.level;
+      f.put(id, boss);
+      p.hp = f.g.maxHp(p);
+      p.busyUntil = 0;
+      p.wellFedUntil = fed ? f.now() + FOOD.wellFedMs : 0;
+    }
+    let n = 0;
+    const send = (id: string, command: string, payload: object) => f.g.execute(id, { commandId: `fight${++n}`, type: command, payload }) as any;
+    const start = f.now();
+    while (f.now() - start < 240_000) {
+      let standing = 0;
+      for (const id of ids) {
+        const p = f.p(id);
+        if (p.zone !== boss.zone || p.stats.deaths) continue;
+        standing++;
+        if (p.busyUntil > f.now()) continue;
+        const hp = p.hp / f.g.maxHp(p);
+        if (tactic === 'kite' && boss.engagedAt !== undefined && hp < 0.5) {
+          if (!p.travel) send(id, 'move', dist(p.pos, far) > 2 ? { x: far.x, y: far.y } : { x: boss.home.x, y: boss.home.y });
+          continue;
+        }
+        if (p.travel) continue;
+        if (dist(p.pos, boss) > 1.5) { send(id, 'move', { to: boss.id }); continue; }
+        const can = itemDef(p.equipment.armor ?? '')?.abilities ?? [];
+        const ready = (a: 'evade' | 'brace') => can.includes(a) && (p.cooldowns[a] ?? 0) <= f.now();
+        let buff: string | undefined;
+        if (boss.engagedAt !== undefined) {
+          if (ready('evade') && boss.targetId === id && boss.nextAttackAt - f.now() < 2500) buff = 'evade';
+          else if (ready('brace') && p.braceUntil <= f.now()) buff = 'brace';
+        }
+        const r = buff ? send(id, 'ability.use', { ability: buff }) : send(id, 'attack', { targetId: boss.id });
+        if (r.ok && r.result.killed) return true;
+      }
+      if (!standing) return false;
+      f.pass(50);
+    }
+    return false;
+  } finally { f.g.close(); }
+}
+
+test('bosses: food and buildings never let an ordinary player kill one alone', () => {
+  // Ordinary: no affixes. The forge hall's item level only brings affix tiers two crafting levels earlier, so the buff
+  // that could matter in a fight is Well fed.
+  const ordinary = [
+    { sword: 'copper_sword', armor: 'leather_jerkin', level: 3 },
+    { sword: 'iron_sword', armor: 'iron_mail', level: 0 },
+    { sword: 'iron_sword', armor: 'bearhide_jerkin', level: 10 },
+    { sword: 'duskiron_sword', armor: 'wraithhide_armor', level: 0 },
+    { sword: 'duskiron_sword', armor: 'wraithhide_armor', level: 10 },
+  ];
+  for (const type of ['elder_bear', 'ash_wyrm']) {
+    for (const build of ordinary) {
+      for (const tactic of ['stand', 'kite'] as const) {
+        assert.equal(bossFight(type, build, 1, true, tactic), false, `${build.sword}/${build.armor} level ${build.level} (${tactic}) soloed the ${type} Well fed`);
+      }
+    }
+  }
+});
+
+test('bosses: Well fed changes no fight that enrage decides', () => {
+  const iron = { sword: 'iron_sword', armor: 'iron_mail', level: 0 };
+  const duskiron = { sword: 'duskiron_sword', armor: 'wraithhide_armor', level: 0 };
+  for (const [type, build, size] of [['elder_bear', iron, 2], ['elder_bear', iron, 3], ['ash_wyrm', duskiron, 2], ['ash_wyrm', duskiron, 3]] as const) {
+    assert.equal(bossFight(type, build, size, true, 'stand'), bossFight(type, build, size, false, 'stand'), `${size} against the ${type}`);
+  }
+});
+
 // ---------- over HTTP ----------
 
 const code = async (p: Promise<unknown>) => { try { await p; } catch (e) { return (e as CommandError).code; } assert.fail('expected the command to fail'); };

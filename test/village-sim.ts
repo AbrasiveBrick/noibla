@@ -17,6 +17,7 @@ import {
 import { MAP_RULES, dist, placeOf, regionAt, type MapPlot } from '../src/shared/map.ts';
 import { Game } from '../src/server/game.ts';
 import { AFFIX_RANGES, MOB_LOOT, SKILL_ODDS } from '../src/server/odds.ts';
+import { capacityOf, units } from '../src/server/buildings.ts';
 import { equippedToolTier, repairCost, skillLevel } from '../src/server/world.ts';
 import type { Player } from '../src/server/types.ts';
 
@@ -89,6 +90,8 @@ export interface Strategy {
   /** Skip recipes that earn less than this many silver per second of work. */
   minGain: number;
   buildings?: BuildingId[];
+  /** exile: the exiled player's own habits. The three who stay keep the village's. */
+  exiled?: { tripMs: number; minGain: number };
 }
 
 export interface SimOptions {
@@ -101,6 +104,8 @@ export interface SimOptions {
   seed: number;
   /** Upkeep the settlement keeps in its stockpile, in intervals. Default: enough for the run. */
   reserveIntervals?: number;
+  /** Average the stockpile only from this minute on. */
+  stockpileFromMinute?: number;
 }
 
 export interface SimResult {
@@ -111,6 +116,8 @@ export interface SimResult {
   deaths: number;
   /** Time-averaged value of the settlements' stockpiles, per settlement. */
   stockpile: number;
+  /** The same at the end of the run. */
+  stockpileEnd: number;
   /** Buildings that were unpaid at any moment. */
   lapsed: boolean;
 }
@@ -132,12 +139,18 @@ interface Bot {
   settlementId?: string;
   /** Shares a stockpile with other working players. */
   team?: Bot[];
+  /** Their own share, taken out when the stockpile filled up. It is not pooled again. */
+  share: Record<string, number>;
   worth: Record<string, number>;
+  tripMs: number;
+  minGain: number;
   nextTripAt: number;
   deposited: boolean;
   job?: { id: string; mob: boolean; engaged?: boolean };
   deaths: number;
   bagId?: string;
+  /** Value of the crafted gear shelved at the station it was made at. */
+  shelved: number;
 }
 
 export function simulate(o: SimOptions): SimResult {
@@ -190,7 +203,8 @@ export function simulate(o: SimOptions): SimResult {
       const armor = gear(p, build.armor);
       must(p.id, 'equip', { item: weapon });
       must(p.id, 'equip', { item: armor });
-      return { id: p.id, focus, tools, weapon, armor, worth: {}, nextTripAt: 0, deposited: false, deaths: 0 };
+      const own = o.side === 'exile' && i === 3 ? o.strategy.exiled : undefined;
+      return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, nextTripAt: 0, deposited: false, deaths: 0, shelved: 0 };
     });
 
     // Settlements, founded and built with the real commands.
@@ -282,7 +296,7 @@ export function simulate(o: SimOptions): SimResult {
           const secs = (r.kind === 'refine' ? 1.2 : 2) * (b.focus.includes(r.skill) ? 0.5 : 0.85);
           return { r, rate: r.output.item === FOOD.item ? 1e6 : gain / secs };
         })
-        .filter((x) => x.rate > o.strategy.minGain)
+        .filter((x) => x.rate > b.minGain)
         .sort((a, z) => z.rate - a.rate);
     };
     let recipes = new Map(bots.map((b) => [b.id, recipesOf(b)] as const));
@@ -291,18 +305,19 @@ export function simulate(o: SimOptions): SimResult {
       const p = player(b);
       const worn: Record<string, number> = {};
       for (const item of Object.values(p.equipment)) if (item) worn[item] = 1;
-      return bagWorth(p.inventory) + bagWorth(worn);
+      return b.shelved + bagWorth(p.inventory) + bagWorth(worn);
     };
     const pooledWorth = () => [...g.settlements.values()].reduce((n, s) => n + bagWorth(s.stockpile), 0);
     const startEach = bots.map(holdings);
     const startPool = pooledWorth();
 
-    const start = now;
     const end = now + o.minutes * 60_000;
-    bots.forEach((b, i) => { b.nextTripAt = now + (i + 1) * Math.min(12_000, o.strategy.tripMs / 5); });
+    bots.forEach((b, i) => { b.nextTripAt = now + (i + 1) * Math.min(12_000, b.tripMs / 5); });
     const claimed = new Set<string>();
     let stockTime = 0;
     let stockSum = 0;
+    let samples = 0;
+    const sampleFrom = now + (o.stockpileFromMinute ?? 0) * 60_000;
     let lapsed = false;
 
     const act = (b: Bot) => {
@@ -348,8 +363,25 @@ export function simulate(o: SimOptions): SimResult {
           // A village pools everything that refines. A founder only tops up the upkeep reserve.
           const items: { item: string; qty: number }[] = [];
           for (const [item, have] of Object.entries(p.inventory)) {
-            const qty = b.team && POOLED.has(item) ? have : Math.min(have, Math.max(0, (keep[item] ?? 0) - (s.stockpile[item] ?? 0)));
+            if (b.share[item]) b.share[item] = Math.min(b.share[item], have);
+            const qty = b.team && POOLED.has(item) ? have - (b.share[item] ?? 0) : Math.min(have, Math.max(0, (keep[item] ?? 0) - (s.stockpile[item] ?? 0)));
             if (qty > 0) items.push({ item, qty });
+          }
+          if (b.team) {
+            // A village keeps the stockpile as full as it gets, and shares out only the bars that don't fit.
+            const cap = capacityOf(s);
+            let over = units(s.stockpile) + items.reduce((n, i) => n + i.qty, 0) - cap;
+            if (over > 0) {
+              over += Math.floor(cap / 20);
+              const surplus = REFINES.map((item) => ({ item, qty: (s.stockpile[item] ?? 0) - (keep[item] ?? 0) })).filter((x) => x.qty > 0).sort((x, y) => y.qty - x.qty);
+              for (const x of surplus) {
+                const qty = Math.min(over, x.qty);
+                if (qty <= 0) continue;
+                must(b.id, 'stockpile.withdraw', { items: [{ item: x.item, qty }] });
+                b.share[x.item] = (b.share[x.item] ?? 0) + qty;
+                over -= qty;
+              }
+            }
           }
           if (items.length) send(b.id, 'stockpile.deposit', { items });
           b.deposited = true;
@@ -382,10 +414,18 @@ export function simulate(o: SimOptions): SimResult {
           if (draw.length) must(b.id, 'stockpile.withdraw', { items: draw });
           const made = send(b.id, r.kind, { recipeId: r.id, count });
           if (!made.ok) { b.nextTripAt = now + 1000; return; }
+          // Crafted gear is priced and put aside: thousands of uniques in an inventory would make a long run crawl.
+          for (const u of made.result.items ?? []) {
+            b.shelved += values[u.base] ?? 0;
+            delete p.inventory[u.id];
+            g.uniques.delete(u.id);
+            g.markUnique(u);
+          }
+          if (made.result.items) g.markPlayer(p);
           if (s && home && r.kind === 'refine') {
             const out = r.output.item;
             const have = p.inventory[out] ?? 0;
-            const qty = b.team && POOLED.has(out) ? have : Math.min(have, Math.max(0, (keep[out] ?? 0) - (s.stockpile[out] ?? 0)));
+            const qty = b.team && POOLED.has(out) ? Math.max(0, have - (b.share[out] ?? 0)) : Math.min(have, Math.max(0, (keep[out] ?? 0) - (s.stockpile[out] ?? 0)));
             if (qty > 0) send(b.id, 'stockpile.deposit', { items: [{ item: out, qty }] });
           }
           return;
@@ -397,7 +437,7 @@ export function simulate(o: SimOptions): SimResult {
           } else if (!goTown()) return;
           send(b.id, 'repair');
         }
-        b.nextTripAt = now + o.strategy.tripMs;
+        b.nextTripAt = now + b.tripMs;
         b.deposited = false;
         return;
       }
@@ -475,9 +515,12 @@ export function simulate(o: SimOptions): SimResult {
         for (const s of g.settlements.values()) {
           if (s.buildings.some((b) => b.unpaid)) lapsed = true;
           // Sampled each second: pricing every step would cost more than playing it.
-          if (now >= stockTime) stockSum += bagWorth(s.stockpile);
+          if (now >= stockTime && now >= sampleFrom) stockSum += bagWorth(s.stockpile);
         }
-        if (now >= stockTime) stockTime = now + 1000;
+        if (now >= stockTime) {
+          if (now >= sampleFrom) samples++;
+          stockTime = now + 1000;
+        }
       }
       now = next;
       g.tick();
@@ -494,7 +537,8 @@ export function simulate(o: SimOptions): SimResult {
       perHour: gross - setup,
       each,
       deaths: bots.reduce((n, b) => n + player(b).stats.deaths, 0),
-      stockpile: groups.length ? stockSum / Math.max(1, Math.ceil((now - start) / 1000)) / groups.length : 0,
+      stockpile: groups.length ? stockSum / Math.max(1, samples) / groups.length : 0,
+      stockpileEnd: groups.length ? pooledWorth() / groups.length : 0,
       lapsed,
     };
   } finally {
