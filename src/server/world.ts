@@ -209,6 +209,14 @@ export function requireInRange(g: Game, p: Player, target: Pos, id: string, what
   }
 }
 
+/**
+ * Mobs, resource nodes and loot bags are used from inside their own region only. Across a border a mob would never hit
+ * back, and a node or bag in contested land could be emptied from the safety of the next region.
+ */
+function sameRegion(zone: ZoneId, there: ZoneId, what: string, verb: string, id: string) {
+  if (there !== zone) fail('WRONG_ZONE', `${what} is in ${there} and you are in ${zone}; you can only ${verb} it from inside its region`, undefined, `move { to: '${id}' } (goTo('${id}')) walks into ${there} and stops within reach`);
+}
+
 // ---------- other players ----------
 
 export function inView(g: Game, p: Player, o: Player): boolean {
@@ -267,7 +275,8 @@ function zoneView(g: Game, p: Player): ZoneView {
   const me = posOf(g, p);
   const R = MAP_RULES.viewRadius;
   const near = <T extends { distance: number }>(list: T[]) => list.filter((e) => e.distance <= R).sort((a, b) => a.distance - b.distance);
-  const loc = (q: Pos, range: number) => { const d = dist(me, q); return { x: round1(q.x), y: round1(q.y), distance: round1(d), inRange: d <= range + 1e-9 }; };
+  // `region`: what is used from its own region only (sameRegion) is in range only from there.
+  const loc = (q: Pos, range: number, region?: ZoneId) => { const d = dist(me, q); return { x: round1(q.x), y: round1(q.y), distance: round1(d), inRange: d <= range + 1e-9 && (!region || region === zone) }; };
   const I = MAP_RULES.range.interact;
   const base = {
     id: z.id, name: z.name, safety: z.safety, adjacent: z.adjacent, hasBank: z.hasBank, hasForum: z.hasForum, hasQuestBoard: z.hasQuestBoard, pvp: z.pvp,
@@ -279,16 +288,16 @@ function zoneView(g: Game, p: Player): ZoneView {
     places: near(g.map.places.map((s) => ({ id: s.id, ...loc(s, MAP_RULES.range.place) }))),
     plots: near(g.map.plots.map((pl) => {
       const s = [...g.settlements.values()].find((x) => x.plotId === pl.id);
-      return { id: pl.id, region: pl.region, ...loc(pl, MAP_RULES.range.plot), settlement: s ? { id: s.id, name: s.name } : null };
+      return { id: pl.id, region: pl.region, ...loc(pl, MAP_RULES.range.plot, pl.region), settlement: s ? { id: s.id, name: s.name } : null };
     })),
     nodes: near([...g.nodes.values()].map((n) => {
       const def = NODE_TYPES[n.type];
-      return { id: n.id, type: n.type, item: def.item, tier: def.tier, region: n.zone, ...loc(n, I), charges: n.charges, maxCharges: def.maxCharges, nextChargeInMs: n.charges < def.maxCharges ? Math.max(0, n.nextChargeAt - now) : 0 };
+      return { id: n.id, type: n.type, item: def.item, tier: def.tier, region: n.zone, ...loc(n, I, n.zone), charges: n.charges, maxCharges: def.maxCharges, nextChargeInMs: n.charges < def.maxCharges ? Math.max(0, n.nextChargeAt - now) : 0 };
     })),
     mobs: near([...g.mobs.values()].map((m) => {
       const def = MOB_TYPES[m.type];
       const alive = m.deadUntil <= now && m.hp > 0;
-      const view: MobView = { id: m.id, type: m.type, name: def.name, region: m.zone, ...loc(alive ? m : m.home, I), hp: alive ? m.hp : 0, maxHp: def.hp, alive, respawnInMs: alive ? 0 : Math.max(0, m.deadUntil - now), targetId: alive ? targetSeen(g, p, m) : null };
+      const view: MobView = { id: m.id, type: m.type, name: def.name, region: m.zone, ...loc(alive ? m : m.home, I, m.zone), hp: alive ? m.hp : 0, maxHp: def.hp, alive, respawnInMs: alive ? 0 : Math.max(0, m.deadUntil - now), targetId: alive ? targetSeen(g, p, m) : null };
       if (def.boss) { view.boss = true; view.enrageInMs = alive && m.engagedAt !== undefined ? Math.max(0, m.engagedAt + g.ms(def.boss.enrageAfterMs) - now) : null; }
       return view;
     })),
@@ -302,7 +311,7 @@ function zoneView(g: Game, p: Player): ZoneView {
       id: c.id, region: c.zone, victimId: c.victim.id, victimName: c.victim.name, ...loc(c, I), reported: c.reports.length > 0,
     }))),
     lootBags: near([...g.bags.values()].map((b) => ({
-      id: b.id, region: b.zone, ...loc({ x: b.x!, y: b.y! }, I), ownerId: b.ownerId, ownerName: b.ownerName, items: toStacks(b.items), expiresInMs: Math.max(0, b.expiresAt - now), youMayLoot: mayLoot(g, b, p.id),
+      id: b.id, region: b.zone, ...loc({ x: b.x!, y: b.y! }, I, b.zone), ownerId: b.ownerId, ownerName: b.ownerName, items: toStacks(b.items), expiresInMs: Math.max(0, b.expiresAt - now), youMayLoot: mayLoot(g, b, p.id),
       ...(b.eligible ? { spoils: true, opensToAllInMs: Math.max(0, (b.opensToAllAt ?? 0) - now) } : {}),
     }))),
   };
@@ -361,7 +370,8 @@ export function observe(g: Game, p: Player): Observation {
 // ---------- movement ----------
 
 /** Resolves `move { to }`: a region id, a place id, or the id of a node, mob, loot bag, corpse or player (or a player's name). */
-function resolveTarget(g: Game, p: Player, to: string): { dest: Pos; range: number } {
+/** `region`: the walk ends in the target's region, where it can be used (see sameRegion). */
+function resolveTarget(g: Game, p: Player, to: string): { dest: Pos; range: number; region?: ZoneId } {
   if ((ZONES as Record<string, unknown>)[to]) {
     const zone = to as ZoneId;
     if (p.zone === zone && !p.travel) fail('BAD_REQUEST', `already in ${zone}`, undefined, `to walk inside ${zone}, move to { x, y } or to a target id (node, mob, place, player)`);
@@ -373,13 +383,13 @@ function resolveTarget(g: Game, p: Player, to: string): { dest: Pos; range: numb
   if (plot) return { dest: plot, range: 1.5 };
   const I = MAP_RULES.range.interact;
   const node = g.nodes.get(to);
-  if (node) return { dest: node, range: I };
+  if (node) return { dest: node, range: I, region: node.zone };
   const mob = g.mobs.get(to);
-  if (mob) return { dest: mobAlive(g, mob) ? mob : mob.home, range: I };
+  if (mob) return { dest: mobAlive(g, mob) ? mob : mob.home, range: I, region: mob.zone };
   const bag = g.bags.get(to);
-  if (bag) return { dest: { x: bag.x!, y: bag.y! }, range: I };
+  if (bag) return { dest: { x: bag.x!, y: bag.y! }, range: I, region: bag.zone };
   const corpse = g.corpses.get(to);
-  if (corpse && corpseShown(g, corpse)) return { dest: corpse, range: I };
+  if (corpse && corpseShown(g, corpse)) return { dest: corpse, range: I, region: corpse.zone };
   const other = findPlayer(g, p, to, true);
   if (other) return { dest: posOf(g, other), range: I };
   return notInSight(g, 'BAD_REQUEST', to, `unknown move target "${to}"`,
@@ -389,10 +399,11 @@ function resolveTarget(g: Game, p: Player, to: string): { dest: Pos; range: numb
 function move(g: Game, p: Player, payload: Record<string, any>) {
   let dest: Pos;
   let range = 0;
+  let region: ZoneId | undefined;
   let target: string | undefined;
   if (payload.to !== undefined) {
     target = reqStr(payload, 'to', 80);
-    ({ dest, range } = resolveTarget(g, p, target));
+    ({ dest, range, region } = resolveTarget(g, p, target));
   } else {
     if (!Number.isInteger(payload.x) || !Number.isInteger(payload.y)) fail('BAD_REQUEST', 'move needs { to: <region | place | id> } or integer { x, y }');
     dest = { x: payload.x, y: payload.y };
@@ -405,7 +416,7 @@ function move(g: Game, p: Player, payload: Record<string, any>) {
   requireReady(g, p);
   const now = g.now();
   const here = posOf(g, p);
-  const path = findPath(g.map, here, dest, range);
+  const path = findPath(g.map, here, dest, range, region);
   if (!path) return fail('BAD_REQUEST', `no path to ${target ?? at(dest.x, dest.y)}`);
   const full = dist(here, path[0]) > 1e-6 ? [{ ...here }, ...path] : path;
   const length = pathLength(full);
@@ -484,6 +495,7 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   if (!node) fail('INVALID_TARGET', `no resource node ${nodeId}`);
   const def = NODE_TYPES[node!.type];
   const slow = requireTool(g, p, def.skill, def.tier, `${def.name} (tier ${def.tier})`);
+  sameRegion(zone, node!.zone, `${def.name} ${nodeId}`, 'gather from', nodeId);
   requireInRange(g, p, node!, nodeId, 'resource node');
   requireReady(g, p);
   const now = g.now();
@@ -803,7 +815,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
   if (mob) {
     if (!mobAlive(g, mob)) fail('TARGET_DEAD', `${targetId} is dead`);
     // A mob only fights players in its own region (see worldTick), so only attack it from there: across a border it would never hit back.
-    if (mob.zone !== zone) fail('WRONG_ZONE', `${MOB_TYPES[mob.type].name} ${mob.id} is in ${mob.zone} and you are in ${zone}; you can only attack a mob from inside its region`, undefined, `travelTo('${mob.zone}') (move { to: '${mob.zone}' }) first`);
+    sameRegion(zone, mob.zone, `${MOB_TYPES[mob.type].name} ${mob.id}`, 'attack', mob.id);
     requireInRange(g, p, mob, mob.id, MOB_TYPES[mob.type].name);
   } else {
     if (targetId === p.id || targetId === p.hood?.as) fail('INVALID_TARGET', 'cannot attack yourself');
@@ -990,6 +1002,7 @@ function loot(g: Game, p: Player, payload: Record<string, any>) {
     fail('FORBIDDEN', `these are ${bag!.ownerName} spoils: only the players who damaged it can loot them for another ${Math.ceil(wait / 1000)}s`, wait,
       `eligible: ${(bag!.eligibleNames ?? bag!.eligible!.map((id) => g.players.get(id)?.name ?? id)).join(', ')}. Wait retryAfterMs, or ask one of them to share.`);
   }
+  sameRegion(zone, bag!.zone, `loot bag ${bagId}`, 'loot', bagId);
   requireInRange(g, p, { x: bag!.x!, y: bag!.y! }, bagId, 'loot bag');
   const asked = payload.items === undefined ? toStacks(bag!.items) : stacks(payload.items, 'items', false);
   const want = removeItems(bag!.items, asked);
