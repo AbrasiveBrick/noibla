@@ -16,8 +16,10 @@ pause=${LOOP_PAUSE_SECONDS:-5}
 child=
 trap '[ -n "$child" ] && kill "$child" 2>/dev/null; exit 0' TERM INT
 bg_wait() { "$@" & child=$!; wait "$child"; }
+# --thinking-display summarized: without it the transcript gets thinking blocks with no text. It changes only what
+# the API returns. --help does not list the flag: check it still works when bumping the CLI pinned in the Containerfile.
 claude_run() {
-  bg_wait claude "$@" --model "${MODEL:-sonnet}" --dangerously-skip-permissions --output-format stream-json --verbose
+  bg_wait claude "$@" --model "${MODEL:-sonnet}" --thinking-display summarized --dangerously-skip-permissions --output-format stream-json --verbose
 }
 
 case "${RUNNER:-claude}" in

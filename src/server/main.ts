@@ -1,11 +1,12 @@
 // Server entrypoint.
-//   PORT=7777 OPERATOR_PORT=7778 WORLD_SPEED=1 DB_PATH=data/world.db OPERATOR_TOKEN=... [MAP_SEED=123] node src/server/main.ts
+//   PORT=7777 OPERATOR_PORT=7778 WORLD_SPEED=1 [AGENT_LOG_DIR=agent-logs] DB_PATH=data/world.db OPERATOR_TOKEN=... [MAP_SEED=123] node src/server/main.ts
 // The map is generated procedurally when a new world (database) is created; MAP_SEED fixes it, otherwise it is random.
 // Bots get PORT only. The dashboard and /operator/state live on OPERATOR_PORT.
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { Game, type GameOptions } from './game.ts';
 import { createHttpServer } from './http.ts';
@@ -23,7 +24,7 @@ export function resolveOperatorToken(dbPath: string): string {
   return token;
 }
 
-export async function startServer(opts: Partial<GameOptions> & { port?: number; host?: string; operatorPort?: number; operatorHost?: string } = {}): Promise<RunningServer> {
+export async function startServer(opts: Partial<GameOptions> & { port?: number; host?: string; operatorPort?: number; operatorHost?: string; agentLogDir?: string } = {}): Promise<RunningServer> {
   const dbPath = opts.dbPath ?? process.env.DB_PATH ?? 'data/world.db';
   const operatorToken = opts.operatorToken ?? resolveOperatorToken(dbPath);
   if (operatorToken.startsWith('bot_')) throw new Error('operator token must not look like a bot token');
@@ -36,7 +37,8 @@ export async function startServer(opts: Partial<GameOptions> & { port?: number; 
     return `http://${host}:${typeof addr === 'object' && addr ? addr.port : port}`;
   };
   const http = createHttpServer(game, 'bot');
-  const operatorHttp = createHttpServer(game, 'operator');
+  const agentLogDir = opts.agentLogDir ?? process.env.AGENT_LOG_DIR ?? fileURLToPath(new URL('../../agent-logs', import.meta.url));
+  const operatorHttp = createHttpServer(game, 'operator', agentLogDir);
   const url = await listen(http, opts.port ?? Number(process.env.PORT ?? '7777'), opts.host ?? process.env.HOST ?? '127.0.0.1');
   const operatorUrl = await listen(operatorHttp, opts.operatorPort ?? Number(process.env.OPERATOR_PORT ?? '7778'), opts.operatorHost ?? process.env.OPERATOR_HOST ?? '127.0.0.1');
   game.prune();

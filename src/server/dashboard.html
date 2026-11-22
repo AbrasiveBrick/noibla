@@ -92,8 +92,38 @@
   tr.bot { cursor: pointer; }
   tr.bot:hover td { background: var(--soft); }
   tr.bot td:first-child b::before { content: '▸ '; color: var(--muted); font-weight: 400; }
-  tr.bot.open td:first-child b::before { content: '▾ '; }
+  tr.bot.open td { background: var(--soft); }
+  tr.bot.open td:first-child b::before { color: var(--accent); }
   tr.card > td { background: var(--soft); padding: 10px 12px 12px; }
+  #mapCanvas { cursor: pointer; }
+  #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); z-index: 5; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
+  #drawer[hidden] { display: none; }
+  @media (min-width: 1200px) { body.inspecting { padding-right: 560px; } }
+  @media (min-width: 1200px) and (max-width: 1800px) { body.inspecting main { grid-template-columns: minmax(0, 1fr); } body.inspecting main > section { grid-column: auto !important; grid-row: auto !important; } }
+  .dhead { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .dtop { display: flex; gap: 10px; align-items: center; }
+  .dtop select { font: inherit; font-weight: 650; max-width: 230px; }
+  .dtop button { margin-left: auto; }
+  .dnow { font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }
+  .dfilters { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin-top: 8px; }
+  .dfilters label { display: inline-flex; gap: 4px; align-items: center; }
+  .dstats { border-bottom: 1px solid var(--line); flex: none; max-height: 45%; overflow: auto; }
+  .dstats > summary { padding: 6px 14px; cursor: pointer; font-size: 12px; color: var(--muted); }
+  .dnote { padding: 8px 14px; font-size: 12px; color: var(--muted); background: var(--soft); border-bottom: 1px solid var(--line); }
+  .dnote[hidden], #tlEarlier[hidden] { display: none; }
+  #timeline { flex: 1; min-height: 0; overflow: auto; }
+  #tlEarlier { margin: 8px 14px 0; }
+  .tl { display: grid; grid-template-columns: 62px 52px minmax(0, 1fr); gap: 0 8px; padding: 6px 14px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .tl time { font: 11px/1.8 var(--mono); color: var(--muted); }
+  .tl .k { font-size: 11px; line-height: 1.8; color: var(--muted); text-transform: uppercase; }
+  .tl .x { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tl.thinks { background: var(--soft); }
+  .tl.thinks .k { color: var(--accent); font-weight: 650; }
+  .tl.says .k { color: var(--good); font-weight: 650; }
+  .tl.error .k, .tl.error .x, .tl.failed .x { color: var(--bad); }
+  .tl details > summary { cursor: pointer; }
+  .tl pre { margin: 4px 0 0; font: 11px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+  #timeline.no-thinks .tl.thinks, #timeline.no-says .tl.says, #timeline.no-does .tl.does, #timeline.no-sees .tl.sees, #timeline.no-game .tl.game { display: none; }
   .cardgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 18px; }
   .cardgrid h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; margin: 0 0 4px; }
   .skills { display: grid; grid-template-columns: auto auto; justify-content: start; gap: 0 14px; font-size: 12px; }
@@ -127,6 +157,22 @@
 </div>
 
 <div id="app" hidden>
+  <aside id="drawer" hidden aria-label="One bot: what it thinks and does">
+    <div class="dhead">
+      <div class="dtop"><span class="dot" id="dDot"></span><select id="dBot" aria-label="Bot"></select><span class="muted" id="dModel"></span><button id="dClose" type="button" title="Close (Esc)">Close</button></div>
+      <div class="dnow muted" id="dNow"></div>
+      <div class="dfilters" id="dFilters">
+        <label><input type="checkbox" value="thinks" checked>Thinking</label>
+        <label><input type="checkbox" value="says" checked>Says</label>
+        <label><input type="checkbox" value="does" checked>Does</label>
+        <label><input type="checkbox" value="sees">Sees (tool output)</label>
+        <label><input type="checkbox" value="game" checked>In game</label>
+      </div>
+    </div>
+    <details class="dstats"><summary>Skills, gear, quests, wealth</summary><div id="dStats"></div></details>
+    <div class="dnote" id="dNote" hidden></div>
+    <div id="timeline" class="no-sees"><button id="tlEarlier" type="button" hidden>Show earlier</button><div id="tlRows"></div></div>
+  </aside>
   <header>
     <h1>World Monitor</h1>
     <div class="stats">
@@ -251,7 +297,8 @@
   let since = 0, events = [], state = null, timer = null, items = {};
   // Progression snapshots per bot (oldest first), fetched in full once and then incrementally.
   let snap = 0, snaps = new Map();
-  const openCards = new Set();
+  // The bot in the side panel, and how much of its transcript and of the event feed the panel has.
+  let picked = null, agent = null, agentSeq = 0;
   const SNAP_GAP_MS = 150_000; // longer than ~2 snapshot intervals: the server was down, leave the strip blank
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -262,6 +309,7 @@
   const zoneTag = (z) => z ? `<span class="zone ${esc(z)}">${esc(z)}</span>` : '';
 
   function showLogin(msg) {
+    if (picked) pickBot(null);
     $('app').hidden = true; $('login').hidden = false; $('loginErr').textContent = msg || '';
     if (timer) clearTimeout(timer);
   }
@@ -389,14 +437,15 @@
       const fr = b.failureRate, rate = fr.attempts ? fr.failures / fr.attempts : 0;
       const chip = fr.failures ? `<span class="chip ${fr.failures >= 3 && rate >= 0.5 ? 'bad' : fr.failures >= 3 && rate >= 0.2 ? 'warn' : ''}" title="${fr.failures} failed of ${fr.attempts} write attempts in the last ${Math.round(fr.windowMs / 60000)} min">${Math.round(rate * 100)}% fail</span>` : '';
       const gear = [b.equipment.weapon, b.equipment.armor, b.equipment.tool].filter(Boolean).map(nm).map(esc).join(', ') || '<span class="muted">none</span>';
-      const open = openCards.has(b.id);
-      return `<tr class="bot ${open ? 'open' : ''}" data-bot="${esc(b.id)}" title="Show bot card"><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b>${chip}<div class="mono muted">${esc(b.id)}</div></td>
+      const open = picked === b.id;
+      return `<tr class="bot ${open ? 'open' : ''}" data-bot="${esc(b.id)}" title="See what it thinks and does"><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b>${chip}<div class="mono muted">${esc(b.id)}</div></td>
         <td>${where}</td><td>${b.hp}/${b.maxHp}<div class="hp ${pct < 35 ? 'low' : ''}"><i style="width:${pct}%"></i></div></td>
         <td>${gear}</td><td>${b.kills}/${b.deaths}</td>
-        <td>${b.lastAction ? `${esc(b.lastAction.summary)}<div class="muted">${ago(b.lastAction.at)}</div>` : ''}</td></tr>${open ? botCard(b, s.now) : ''}`;
+        <td>${b.lastAction ? `${esc(b.lastAction.summary)}<div class="muted">${ago(b.lastAction.at)}</div>` : ''}</td></tr>`;
     }).join('') || '<tr><td colspan="6" class="empty">No bots registered yet.</td></tr>';
     renderPresence(s);
     renderMap(s);
+    renderDrawer();
     $('worldCount').textContent = `${s.bots.length} bots`;
 
     // filter options
@@ -756,13 +805,147 @@
   for (const id of ['fBot', 'fZone', 'fType', 'fRoutine']) $(id).addEventListener('change', renderFeed);
   $('fTransient').addEventListener('change', render);
   $('fTypeAll').addEventListener('click', () => { for (const i of $('fType').querySelectorAll('input')) i.checked = false; renderFeed(); });
+  // ---------- one bot: what it thinks and does ----------
+  const KIND = { thinks: 'thinks', says: 'says', does: 'does', sees: 'sees', error: 'error', game: 'game' };
+  // Too frequent to tell anything next to what the agent says it is doing.
+  const PANEL_SKIP = new Set(['combat.hit', 'travel.depart', 'player.online', 'player.offline']);
+
+  function pickBot(id) {
+    picked = id;
+    agentSeq++;
+    agent = id && { found: null, from: 0, to: 0, unrecorded: 0, recorded: 0, eventId: 0, lastTs: 0, loading: false };
+    $('drawer').hidden = !id;
+    document.body.classList.toggle('inspecting', !!id);
+    $('tlRows').textContent = '';
+    $('tlEarlier').hidden = true;
+    $('dNote').hidden = true;
+    $('dModel').textContent = '';
+    if (state) render();
+    if (id) loadAgent();
+  }
+
+  function entryNode(e) {
+    const el = document.createElement('div');
+    el.className = `tl ${e.kind}${e.failed ? ' failed' : ''}`;
+    el.dataset.ts = e.ts;
+    // Everything in here is written by agents: text goes through esc(), game events through describe(), which escapes.
+    let body;
+    if (e.kind === 'game') body = e.html;
+    else if (e.kind === 'does') body = `<details><summary>${e.why ? esc(e.why) : `<span class="mono">${esc(e.text.split('\n')[0].slice(0, 140) || e.tool)}</span>`}</summary><pre>${esc(`${e.tool}: ${e.text}`)}</pre></details>`;
+    else if (e.kind === 'sees') body = `<details><summary class="mono">${esc(e.text.split('\n')[0].slice(0, 140))}</summary><pre>${esc(e.text)}</pre></details>`;
+    else body = esc(e.text);
+    el.innerHTML = `<time>${e.ts ? t(e.ts) : ''}</time><span class="k">${KIND[e.kind]}</span><div class="x">${body}</div>`;
+    return el;
+  }
+
+  /** Transcript and game events share one timeline, by time. Adding never redraws what is open or selected. */
+  function addEntries(entries) {
+    if (!entries.length) return;
+    const box = $('timeline'), rows = $('tlRows');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+    const height = box.scrollHeight, top = box.scrollTop;
+    let earlier = false;
+    for (const e of entries) {
+      let after = rows.lastElementChild;
+      while (after && Number(after.dataset.ts) > e.ts) after = after.previousElementSibling;
+      const el = entryNode(e);
+      if (after) after.after(el); else { rows.prepend(el); earlier = true; }
+    }
+    if (atBottom) box.scrollTop = box.scrollHeight;
+    else if (earlier) box.scrollTop = top + box.scrollHeight - height;
+  }
+
+  async function loadAgent(before) {
+    if (!picked || agent.loading) return;
+    const seq = agentSeq, a = agent;
+    a.loading = true;
+    const at = before !== undefined ? `&before=${before}` : a.found ? `&after=${a.to}` : '';
+    try {
+      const res = await fetch(`/operator/agent?id=${encodeURIComponent(picked)}${at}`, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+      if (!res.ok || seq !== agentSeq) return;
+      const r = await res.json();
+      if (seq !== agentSeq) return;
+      if (r.found) {
+        if (before !== undefined) a.from = r.from;
+        else {
+          if (!a.found) a.from = r.from;
+          else if (r.to < a.to) { a.from = r.from; } // the log was replaced
+          a.to = r.to;
+        }
+      }
+      a.found = r.found;
+      // A result line has no time of its own: it belongs right after what came before it.
+      let ts = before !== undefined ? 0 : a.lastTs;
+      const entries = [];
+      for (const item of r.items) {
+        if (item.ts) ts = item.ts;
+        if (item.kind === 'turn') { if (before === undefined) $('dModel').textContent = item.text; continue; }
+        if (item.kind === 'thinks') {
+          if (!item.text) { a.unrecorded++; continue; }
+          a.recorded++;
+        }
+        entries.push({ ...item, ts: item.ts || ts });
+      }
+      if (before === undefined) a.lastTs = ts;
+      addEntries(entries);
+      $('tlEarlier').hidden = !a.found || a.from <= 0;
+      const note = !a.found ? 'No transcript for this bot, so only what it did in the game shows. Transcripts are kept for agents started with sandbox/run-agent.sh that play under the name they were started with.'
+        : a.unrecorded && a.unrecorded > a.recorded ? `${a.unrecorded} thinking blocks were recorded without their text, as happens when an agent runs without thinking summaries. Says and Does show what it intended.`
+        : '';
+      $('dNote').textContent = note;
+      $('dNote').hidden = !note;
+    } catch {
+      // the state poll reports a lost connection
+    } finally {
+      a.loading = false;
+    }
+  }
+
+  function renderDrawer() {
+    if (!picked || !state) return;
+    const b = state.bots.find((x) => x.id === picked);
+    if (!b) return;
+    const sel = $('dBot');
+    if (sel.options.length !== state.bots.length) sel.innerHTML = state.bots.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+    if (document.activeElement !== sel) sel.value = picked;
+    $('dDot').className = `dot ${b.online ? 'on' : ''}`;
+    $('dNow').textContent = `${b.zone} · ${b.hp}/${b.maxHp} hp · ${b.silver.carried + b.silver.banked} silver${b.lastAction ? ` · last in game: ${b.lastAction.summary} (${ago(b.lastAction.at)})` : ''}${b.online ? '' : ' · offline'}`;
+    $('dStats').innerHTML = `<table><tbody>${botCard(b, state.now)}</tbody></table>`;
+    const fresh = [];
+    for (const ev of events) {
+      if (ev.id <= agent.eventId) continue;
+      agent.eventId = ev.id;
+      if (PANEL_SKIP.has(ev.type) || !involved(ev).includes(picked)) continue;
+      const d = ev.data || {};
+      if (ev.type === 'command.failed') {
+        if (TRANSIENT.has(d.code)) continue;
+        fresh.push({ kind: 'game', ts: ev.ts, failed: true, html: `${esc(d.type)} failed: ${esc(d.code)} ${esc(d.reason)}` });
+      } else fresh.push({ kind: 'game', ts: ev.ts, html: describe(ev) });
+    }
+    addEntries(fresh);
+    if (agent.found !== null) loadAgent();
+  }
+
   $('world').addEventListener('click', (e) => {
     const row = e.target.closest('tr.bot');
-    if (!row) return;
-    const id = row.dataset.bot;
-    if (openCards.has(id)) openCards.delete(id); else openCards.add(id);
-    if (state) render();
+    if (row) pickBot(picked === row.dataset.bot ? null : row.dataset.bot);
   });
+  $('mapCanvas').addEventListener('click', (e) => {
+    if (!state) return;
+    const cv = $('mapCanvas'), cell = Number(cv.dataset.cell || 10), r = cv.getBoundingClientRect();
+    const x = (e.clientX - r.left) / cell - 0.5, y = (e.clientY - r.top) / cell - 0.5;
+    let best = null, bd = 1.2;
+    for (const b of state.bots) { if (!b.pos) continue; const d = Math.hypot(b.pos.x - x, b.pos.y - y); if (d < bd) { bd = d; best = b.id; } }
+    if (best) pickBot(best);
+  });
+  $('dBot').addEventListener('change', (e) => { e.target.blur(); pickBot(e.target.value); });
+  $('dClose').addEventListener('click', () => pickBot(null));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && picked) pickBot(null); });
+  $('dFilters').addEventListener('change', (e) => {
+    $('timeline').classList.toggle(`no-${e.target.value}`, !e.target.checked);
+    $('timeline').scrollTop = $('timeline').scrollHeight;
+  });
+  $('tlEarlier').addEventListener('click', () => loadAgent(agent.from));
   if (token) start(); else showLogin();
 })();
 </script>

@@ -108,10 +108,11 @@ The run ends with 30 automated checks. Use `npm run demo -- --exit` for CI-style
 
 ## Operator dashboard
 
-Open `http://127.0.0.1:7778/dashboard` and enter the operator token. `npm run demo` prints it. `npm start` reads `OPERATOR_TOKEN` or stores a generated one in `data/operator-token.txt`. Bot tokens don't work here, and the operator token can't play. The dashboard and `/operator/state` are served only on the operator listener (`OPERATOR_PORT`, default 7778); the bot port (`PORT`, default 7777) has no operator routes.
+Open `http://127.0.0.1:7778/dashboard` and enter the operator token. `npm run demo` prints it. `npm start` reads `OPERATOR_TOKEN` or stores a generated one in `data/operator-token.txt`. Bot tokens don't work here, and the operator token can't play. The dashboard, `/operator/state` and `/operator/agent` are served only on the operator listener (`OPERATOR_PORT`, default 7778); the bot port (`PORT`, default 7777) has no operator routes.
 
 - **World map:** the generated map drawn live: regions, walls and water, places, resource nodes (by charges), mobs (and whom they chase), loot bags, and every bot with its walk. Hover for details.
 - **World view:** each bot's online state, region, position and walk target, HP, gear, K/D, and last action.
+- **One bot:** click a bot in the world view or on the map for a side panel with one timeline of what it thinks (summaries of its reasoning), says, does and gets back, next to what happened to it in the game. It covers agents started with `sandbox/run-agent.sh` that play under the name they were started with.
 - **Live activity:** travel, gathering, refining and crafting, combat, deaths, looting, public trade posts, and region chat. Filter by bot, region, or event type.
 - **Trades:** pending trades live, with each side's terms, secret submission and lock state. For each settled trade, what each bot promised, sent, and received. Timeouts are listed separately.
 - **Debug:** failed commands with bot id, command id, and the full reason. Bot feedback reports appear here too.
@@ -137,6 +138,7 @@ src/server/social.ts     region chat, trade forum, private messages, feedback
 src/server/trade.ts      blind trade, escrow, settlement, receipts, expiry
 src/server/party.ts      parties: invites, membership, party chat, ally bonuses
 src/server/settlement.ts settlements: membership, charter, votes, stockpile and its audit log
+src/server/transcript.ts agent transcripts for the dashboard's one-bot panel
 src/server/buildings.ts  what buildings do: levels, stations, capacity, shared work, palisade and watchtower
 src/server/construction.ts projects, upkeep and income, stashes, the watchtower log
 src/server/http.ts       HTTP + SSE transport, operator endpoint

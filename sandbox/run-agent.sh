@@ -5,6 +5,7 @@
 #      NUDGE, LOOP_PAUSE_SECONDS (claude loop; see entrypoint.sh)
 #      CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) for RUNNER=claude
 #      OPENCODE_API_KEY (optional) for RUNNER=opencode
+#      AGENT_LOG_DIR (default agent-logs/): where each transcript is kept for the dashboard
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
@@ -23,7 +24,18 @@ work="$root/agents/$name"
 mkdir -p "$work"
 chmod 700 "$work"
 
-tty=(); [[ -t 0 && -t 1 ]] && tty=(-it)
+tty=()
+if [[ $# -gt 0 ]]; then
+  [[ -t 0 && -t 1 ]] && tty=(-it)
+else
+  # An agent run: the dashboard reads the transcript from a directory no agent has mounted, with credentials hidden.
+  # The filter ignores Ctrl-C, so the last lines still land after podman has passed the signal on.
+  logs=${AGENT_LOG_DIR:-$root/agent-logs}
+  mkdir -p -m 700 "$logs"
+  log="$logs/$name.log"
+  touch "$log"; chmod 600 "$log"
+  exec > >(trap '' INT TERM; sed -u -E 's/sk-ant-[A-Za-z0-9_-]+/[token hidden]/g; s/bot_[A-Za-z0-9_-]{16,}/[bot token hidden]/g' | tee -a "$log") 2>&1
+fi
 # Network: pasta gives the container its own namespace with internet access.
 #   -T <port>     container 127.0.0.1:<port> -> host 127.0.0.1:<port> (bot API only)
 #   --no-map-gw   the host is not reachable through the gateway address, so the

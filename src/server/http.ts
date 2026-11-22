@@ -1,7 +1,7 @@
 // HTTP transport, as two separate listeners. The bot listener serves
 // POST /api/command and GET /api/events (SSE) with a bot token. The operator
-// listener serves the dashboard and GET /operator/state with the operator
-// token, on its own port so sandboxed agents can be given the bot port only.
+// listener serves the dashboard, GET /operator/state and GET /operator/agent
+// (one agent's transcript) with the operator token, on its own port so sandboxed agents can be given the bot port only.
 // The two credentials are distinct and never interchangeable.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -13,6 +13,7 @@ import type { GameEvent } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import { GameError } from './util.ts';
 import { operatorState } from './operator.ts';
+import { readTranscript } from './transcript.ts';
 
 const DASHBOARD = fileURLToPath(new URL('./dashboard.html', import.meta.url));
 const SDK_DOC = fileURLToPath(new URL('../../docs/SDK.md', import.meta.url));
@@ -43,12 +44,13 @@ async function readJson(req: IncomingMessage): Promise<any> {
 
 export type Listener = 'bot' | 'operator';
 
-export function createHttpServer(game: Game, listener: Listener): Server {
+/** `agentLogDir`: where the sandbox launcher keeps agent transcripts. Only the operator listener reads it. */
+export function createHttpServer(game: Game, listener: Listener, agentLogDir?: string): Server {
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     try {
-      if (listener === 'operator') return await handleOperator(game, req, res, url);
+      if (listener === 'operator') return await handleOperator(game, req, res, url, agentLogDir);
       if (req.method === 'GET' && path === '/') return send(res, 200, 'noibla bot API. Read GET /docs/sdk.');
 
       if (req.method === 'GET' && path === '/api/health') return send(res, 200, { ok: true, now: game.now(), speed: game.speed });
@@ -95,7 +97,7 @@ function notFound(res: ServerResponse, req: IncomingMessage, path: string) {
   send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: `no route ${req.method} ${path}` } });
 }
 
-async function handleOperator(game: Game, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+async function handleOperator(game: Game, req: IncomingMessage, res: ServerResponse, url: URL, agentLogDir?: string): Promise<void> {
   const path = url.pathname;
   if (req.method === 'GET' && (path === '/' || path === '/dashboard')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'" });
@@ -107,6 +109,19 @@ async function handleOperator(game: Game, req: IncomingMessage, res: ServerRespo
     const since = Number(url.searchParams.get('since') ?? '0') || 0;
     const snap = Number(url.searchParams.get('snap') ?? '0') || 0;
     return send(res, 200, operatorState(game, since, snap));
+  }
+  if (req.method === 'GET' && path === '/operator/agent') {
+    if (!game.authOperator(bearer(req))) return send(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'operator credential required' } });
+    const player = game.players.get(url.searchParams.get('id') ?? '');
+    if (!player) return send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'no such player' } });
+    const offset = (key: string) => {
+      const raw = url.searchParams.get(key);
+      const n = Number(raw);
+      return raw && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+    };
+    // A sandboxed agent plays under the name it was launched with, which is also its transcript's name.
+    const transcript = agentLogDir ? readTranscript(agentLogDir, player.name, { after: offset('after'), before: offset('before') }) : { found: false, items: [], from: 0, to: 0 };
+    return send(res, 200, transcript);
   }
   notFound(res, req, path);
 }

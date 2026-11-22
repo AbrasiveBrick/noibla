@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEATH_SILVER_LOSS, SKILLS, TRADE_SILVER_FEE, WEAR, levelFor } from '../src/shared/catalog.ts';
 import { Game, REPEAT_THRESHOLD, SNAPSHOT_INTERVAL_MS } from '../src/server/game.ts';
 import { operatorState } from '../src/server/operator.ts';
+import { TRANSCRIPT_CHUNK, readTranscript } from '../src/server/transcript.ts';
 import { killPlayer } from '../src/server/world.ts';
 import { world, OP } from './helpers.ts';
 
@@ -275,4 +276,104 @@ test('snapshots: written every SNAPSHOT_INTERVAL_MS of game time; all on since=0
   g.prune({ snapshotsMs: SNAPSHOT_INTERVAL_MS / 2 });
   assert.equal(count(), 2, 'prune drops snapshots older than the retention');
   g.store.close();
+});
+
+// ---------- agent transcripts ----------
+
+const said = (text: string) => `${JSON.stringify({ type: 'assistant', timestamp: '2026-11-22T17:18:03.699Z', message: { content: [{ type: 'text', text }] } })}\n`;
+
+test('transcripts: the operator reads what an agent thinks and does, and nobody else can', async () => {
+  const w = await world();
+  try {
+    const thinker = await w.bot('Thinker');
+    const spy = await w.bot('Spy');
+    const { playerId, name } = await thinker.whoami();
+    const dir = join(w.dir, 'agent-logs');
+    mkdirSync(dir);
+    const at = '2026-11-22T17:18:03.699Z';
+    const line = (o: object) => `${JSON.stringify(o)}\n`;
+    writeFileSync(join(dir, `${name}.log`),
+      'Warning: not json\n'
+      + line({ type: 'system', subtype: 'init', model: 'claude-haiku-5-5' })
+      + line({ type: 'assistant', timestamp: at, message: { content: [
+        { type: 'thinking', thinking: 'SECRET PLAN: empty the stockpile' },
+        { type: 'thinking', thinking: '', signature: 'x' },
+        { type: 'text', text: '<img src=x onerror=alert(1)> \u001b[31mred\u202e sk-ant-oat01-abcdef123 bot_0123456789abcdef0123' },
+        { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'node loot.ts', description: 'Take the pile' } },
+      ] } })
+      + line({ type: 'user', timestamp: at, message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'took 40 bars' }] }] } })
+      + line({ type: 'result', is_error: true, result: "You've hit your limit" }));
+
+    const op = (query: string) => fetch(`${w.server.operatorUrl}/operator/agent?${query}`, { headers: { authorization: `Bearer ${OP}` } });
+    for (const headers of [{}, { authorization: `Bearer ${spy.botToken}` }, { authorization: `Bearer ${thinker.botToken}` }]) {
+      const r = await fetch(`${w.server.operatorUrl}/operator/agent?id=${playerId}`, { headers: headers as Record<string, string> });
+      assert.equal(r.status, 401);
+      assert.doesNotMatch(await r.text(), /SECRET PLAN/);
+    }
+    for (const token of [OP, spy.botToken]) {
+      const r = await fetch(`${w.url}/operator/agent?id=${playerId}`, { headers: { authorization: `Bearer ${token}` } });
+      assert.equal(r.status, 404, 'the bot port has no transcript route');
+      assert.doesNotMatch(await r.text(), /SECRET PLAN/);
+    }
+
+    const first: any = await (await op(`id=${playerId}`)).json();
+    assert.equal(first.found, true);
+    assert.deepEqual(first.items.map((i: any) => i.kind), ['turn', 'thinks', 'thinks', 'says', 'does', 'sees', 'error']);
+    assert.equal(first.items[1].text, 'SECRET PLAN: empty the stockpile');
+    assert.equal(first.items[2].text, '', 'a block without recorded text still shows as one');
+    assert.equal(first.items[3].text, '<img src=x onerror=alert(1)> red [token hidden] [bot token hidden]', 'escapes and credentials removed; HTML is left to the page to escape');
+    assert.deepEqual([first.items[4].tool, first.items[4].why, first.items[4].text], ['Bash', 'Take the pile', 'node loot.ts']);
+    assert.equal(first.items[1].ts, Date.parse(at));
+
+    assert.deepEqual(((await (await op(`id=${playerId}&after=${first.to}`)).json()) as any).items, [], 'nothing new');
+    appendFileSync(join(dir, `${name}.log`), said('later').slice(0, 30));
+    assert.equal(((await (await op(`id=${playerId}&after=${first.to}`)).json()) as any).to, first.to, 'half a line waits');
+    appendFileSync(join(dir, `${name}.log`), said('later').slice(30));
+    assert.deepEqual(((await (await op(`id=${playerId}&after=${first.to}`)).json()) as any).items.map((i: any) => i.text), ['later']);
+
+    const spyId = (await spy.whoami()).playerId;
+    assert.equal(((await (await op(`id=${spyId}`)).json()) as any).found, false, 'no transcript, no error');
+    assert.equal((await op('id=../../etc/passwd')).status, 404);
+  } finally { await w.close(); }
+});
+
+test('transcripts: no name reaches another file, and a long log reads back in pieces without loss', () => {
+  const root = mkdtempSync(join(tmpdir(), 'noibla-transcript-'));
+  try {
+    const dir = join(root, 'logs');
+    mkdirSync(dir);
+    writeFileSync(join(root, 'outside.log'), said('not yours'));
+    symlinkSync(join(root, 'outside.log'), join(dir, 'linked.log'));
+    mkdirSync(join(dir, 'folder.log'));
+    for (const name of ['../outside', 'linked', 'folder', 'missing', '', 'a/b', 'x'.repeat(33)]) assert.equal(readTranscript(dir, name).found, false, name);
+
+    const count = 4000;
+    const all = Array.from({ length: count }, (_, i) => `${i} é${'x'.repeat(700)}`);
+    writeFileSync(join(dir, 'long.log'), all.map(said).join(''));
+    const newest = readTranscript(dir, 'long');
+    assert.equal(newest.items.at(-1)!.text, all[count - 1]);
+    let got = newest.items.map((i) => i.text);
+    let from = newest.from;
+    for (let guard = 0; from > 0 && guard < 20; guard++) {
+      const earlier = readTranscript(dir, 'long', { before: from });
+      got = [...earlier.items.map((i) => i.text), ...got];
+      from = earlier.from;
+    }
+    assert.deepEqual(got, all, 'backwards');
+
+    const forward: string[] = [];
+    let after = 0;
+    for (let guard = 0; guard < 20; guard++) {
+      const next = readTranscript(dir, 'long', { after });
+      forward.push(...next.items.map((i) => i.text));
+      if (next.to === after) break;
+      after = next.to;
+    }
+    assert.deepEqual(forward, all, 'forwards');
+
+    writeFileSync(join(dir, 'huge.log'), `${said('y'.repeat(TRANSCRIPT_CHUNK + 10))}${said('end')}`);
+    const a = readTranscript(dir, 'huge', { after: 0 });
+    assert.equal(a.to, TRANSCRIPT_CHUNK, 'a line longer than a chunk cannot stall the reader');
+    assert.deepEqual(readTranscript(dir, 'huge', { after: a.to }).items.map((i) => i.text), ['end']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
