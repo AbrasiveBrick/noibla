@@ -219,7 +219,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **As built:**
   - `src/server/death.ts` owns all of it. `src/server/identity.ts` has the hood's rule for every module.
   - **Two event ids a blow:** a hit, going down, a finish and bleeding out each spend two, whoever is present. An outsider's gaps don't tell a death from a hit.
-  - **Timing**, as for theft (#31): a down or a death writes a sighting row for every player, `seen` only for those present, and private notices (`bounty.paid`, `will.*`, `bounty.closed`, a corpse's `loot.taken`) are sent by a later tick.
+  - **Timing**, as for theft (#31): a down or a death writes a sighting row for every player, `seen` only for those present, and private notices (`bounty.paid`, `will.*`, `bounty.closed`, a corpse's `loot.taken`) are sent by a later tick. Those may come a moment late and out of order; none of them needs to be at once. The estate passes on the tick after the first report, not in the reporter's command, whose work would otherwise depend on the will and the bounties.
   - **The time of death** is only ever shown as a 2 minute window: the corpse bag's countdown and the moment a death becomes known are dated by the window too.
   - **The notices of a death made known** (inheritance, bounties) don't say where it happened.
   - **One rule for sight** (`canPlace`): `player.get`, the party view, `move`, `attack` and `revive`. Party bonus and kill credit follow it: partners count only within view, or damage and event ids would tell which of them pulled a hood up.

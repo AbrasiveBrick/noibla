@@ -544,8 +544,8 @@ export interface Commands {
   /** Standing by the corpse. */
   'corpse.examine': { payload: { corpseId: string }; result: CorpseExamination };
   /**
-   * Standing by the corpse: posts a public notice, once per reporter. The first report makes the death known: the
-   * victim's membership ends, the estate passes, and you get the reward their settlement's charter sets.
+   * Standing by the corpse: posts a public notice, once per reporter. The first report makes the death known (by the
+   * next tick): the victim's membership ends, the estate passes, and you get the reward their settlement's charter sets.
    */
   'death.report': { payload: { corpseId: string; text: string; accuse?: string }; result: { corpseId: string; first: boolean; reward: number } };
   /** Anywhere: the reported deaths, newest first. */
