@@ -119,14 +119,14 @@ function carryOff(g: Game, p: Player, s: Settlement, act: PilferSighting['act'],
   const busyMs = g.ms(TIMING.pilferMs);
   p.busyUntil = now + busyMs;
 
-  const everyone = bySeenId(g.players.values()).filter((o) => !o.dead);
+  const everyone = [...g.players.values()].filter((o) => !o.dead);
   // The downed still see; the dead don't, and the tower doesn't count bodies.
   const bystanders = everyone.filter((o) => o.id !== p.id && o.zone === s.zone && !o.travel).map((o) => ({ o, saw: happens(CRIME_ODDS.witness) }));
   const witnesses = bystanders.filter((b) => b.saw).map((b) => b.o);
   // Kept in the operator's event too, so that its row is as long either way.
   const missed = bystanders.filter((b) => !b.saw).map((b) => b.o);
   // The tower makes out who is at the plot, not whose hand it is. Listed by the ids shown, not the thief first.
-  const watched = works(s, 'watchtower') && happens(CRIME_ODDS.watchtower) ? everyone.filter((o) => atPlot(g, o, s)) : [];
+  const watched = works(s, 'watchtower') && happens(CRIME_ODDS.watchtower) ? bySeenId(everyone).filter((o) => atPlot(g, o, s)) : [];
   const stockpile = act === 'stockpile.pilfer';
   const traces = stockpile && happens(works(s, 'storehouse') ? CRIME_ODDS.tracesLocked : CRIME_ODDS.traces);
 

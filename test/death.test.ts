@@ -390,6 +390,7 @@ test('theft: the downed still witness and are watched, the dead neither, and goi
   down(f, v);
   f.listen(v.vic);
   withOdds({ witness: 1, watchtower: 1 }, () => f.ok(v.kim, 'stockpile.pilfer'));
+  f.pass(1000); // copies come a tick later
   assert.ok(f.heard.get(v.vic)!.some((e) => e.type === 'witness.saw'), 'eyes open');
   const theft = f.operator.filter((e) => e.type === 'theft').at(-1).data;
   assert.ok(!theft.witnesses.some((w: any) => w.id === v.wit), 'the dead see nothing');
@@ -448,6 +449,7 @@ test('estate: nothing moves before the death is known, then the will decides', s
 
   f.listen(v.mate, v.heir, v.lead, v.stranger);
   f.pass(1);
+  f.pass(1000); // copies come a tick later
   assert.equal(v.s().members[v.vic], undefined);
   assert.equal(v.s().work[v.vic], undefined, 'and now it stops');
   assert.equal(v.s().barred[v.vic], undefined);
@@ -635,6 +637,7 @@ test('wills: at the bank, told privately, and only the heir can read it', scenar
   f.put(v.vic, bankPos(f));
   f.listen(v.heir, v.heir2, v.lead, v.mate, v.stranger, v.neighbour);
   assert.deepEqual(f.ok(v.vic, 'will.set', { heir: v.heir2 }).heir, { kind: 'player', id: v.heir2, name: NAMES.heir2 });
+  f.pass(1000); // copies come a tick later
   assert.deepEqual(f.heard.get(v.heir2)!.map((e) => e.type), ['will.named']);
   for (const id of [v.heir, v.lead, v.mate, v.stranger]) assert.deepEqual(f.heard.get(id), [], 'private');
   assert.deepEqual(f.ok(v.heir2, 'will.view').heirOf, [{ id: v.vic, name: NAMES.vic, as: 'player' }]);
@@ -642,6 +645,7 @@ test('wills: at the bank, told privately, and only the heir can read it', scenar
   assert.deepEqual(f.ok(v.stranger, 'will.view'), { heir: null, heirOf: [] });
 
   f.ok(v.vic, 'will.set', { heir: v.otherSid });
+  f.pass(1000);
   assert.deepEqual(f.heard.get(v.neighbour)!.map((e) => e.type), ['will.named'], 'its members');
   assert.equal(f.ok(v.neighbour, 'will.view').heirOf[0].as, 'settlement');
   assert.equal(f.ok(v.vic, 'will.set', { heir: null }).heir, null);
@@ -664,6 +668,7 @@ test('bounties: escrow, then the finisher, or the downer of who bled out, and th
   f.listen(v.kim, v.kay, v.poster);
   down(f, v, v.vic, v.kay);
   finish(f, v, v.vic, v.kim);
+  f.pass(1000);
   assert.equal(f.p(v.kim).bank.silver, 180, 'the finisher, every bounty');
   assert.equal(f.p(v.kay).bank.silver, undefined, 'not who downed them');
   assert.ok(f.heard.get(v.kim)!.some((e) => e.type === 'bounty.paid' && e.data.amount === 180));
@@ -673,6 +678,7 @@ test('bounties: escrow, then the finisher, or the downer of who bled out, and th
   assert.deepEqual(f.heard.get(v.poster), [], 'the poster waits');
   assert.equal(f.ok(v.lead, 'bounty.list').bounties.length, 2, 'the list waits');
   f.pass(KNOWN);
+  f.pass(1000);
   assert.deepEqual(f.ok(v.lead, 'bounty.list').bounties, []);
   assert.deepEqual(f.heard.get(v.poster)!.find((e) => e.type === 'bounty.closed')!.data.bounties.map((b: any) => [b.paid, b.refunded]), [[true, 0]]);
   assert.equal(f.no(v.stranger, 'bounty.post', { targetId: v.vic, amount: 5 }).code, 'TARGET_DEAD', 'known now');
@@ -700,7 +706,9 @@ test('bounties: bleeding out pays the downer, a mob refunds the poster, and no i
     f.ok(v.lead, 'bounty.post', { targetId: v.vic, amount: 10 });
     f.listen(v.poster);
     f.pass(KNOWN);
+    f.pass(1000);
     assert.equal(f.p(v.poster).bank.silver, 120 + 777, 'refund and inheritance');
+    assert.deepEqual(f.heard.get(v.poster)!.map((e) => e.type).sort(), ['bounty.closed', 'will.inherited']);
     assert.equal(f.p(v.lead).bank.silver, 10);
     const ids = f.heard.get(v.poster)!.map((e) => e.id);
     assert.equal(new Set(ids).size, ids.length, 'two notices, two ids');
@@ -902,6 +910,24 @@ test('the dead are no cameras: no events, and nothing of the living in observe',
   assert.deepEqual(after.zone, before.zone);
   assert.deepEqual([after.unreadDms, after.party, after.settlement, after.settlementInvites, after.partyInvites], [0, null, null, [], []]);
   for (const key of ['players', 'lootBags', 'corpses', 'mobs', 'plots', 'nodes']) assert.deepEqual(after.zone[key], [], key);
+}));
+
+test('timing: a blow writes the same whoever was there, and its notices come a little later', scenario((f, v) => {
+  const rows = () => f.g.store.get<{ n: number }>('SELECT COUNT(*) AS n FROM sightings')!.n;
+  const before = rows();
+  down(f, v);
+  const alone = rows() - before;
+  for (const id of [v.wit, v.mate, v.stranger, v.late]) f.put(id, v.scene);
+  down(f, v, v.kay);
+  assert.equal(rows() - before - alone, alone, 'four more there, the same work');
+  assert.equal(alone, f.g.players.size - 1);
+
+  // The bounty's payment: not with the blow, a moment later.
+  f.listen(v.kim);
+  finish(f, v);
+  assert.ok(!f.heard.get(v.kim)!.some((e) => e.type === 'bounty.paid'));
+  f.pass(1000);
+  assert.ok(f.heard.get(v.kim)!.some((e) => e.type === 'bounty.paid'));
 }));
 
 // ---------- saves ----------
@@ -1153,6 +1179,7 @@ test('secrecy: looting the corpse is told only to those who can see it', () => {
       f.put(v.wit, c);
       f.listen(v.late, v.wit, v.stranger);
       f.ok(v.kim, 'loot', { bagId: c.bagId });
+      f.pass(1000);
       assert.deepEqual(f.heard.get(v.wit)!.map((e) => e.type), ['loot.taken']);
       assert.deepEqual(f.heard.get(v.late), [], 'in the region, out of sight');
       assert.deepEqual(f.heard.get(v.stranger), []);

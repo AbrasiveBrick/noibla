@@ -39,7 +39,8 @@ test('parties: invite, accept, member view, party chat only for members, kick an
     let seen = await mateSeen();
     assert.deepEqual([seen.name, seen.zone, seen.pos, seen.walking, seen.hp, seen.maxHp], [raw(w, M.playerId).name, null, null, null, null, null]);
     await lead.travelTo('wilds');
-    raw(w, M.playerId).hp = 37;
+    // In combat, so no tick heals it before the read.
+    Object.assign(raw(w, M.playerId), { hp: 37, lastCombatAt: Date.now() + 60_000 });
     seen = await mateSeen();
     assert.equal(seen.zone, 'wilds');
     assert.equal(seen.hp, 37);

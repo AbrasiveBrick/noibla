@@ -10,7 +10,8 @@
 //                   nothing until the death is made known (settleEstate): the first report, else a timer.
 //   the operator    the true killer, behind any hood.
 //   anyone else     nothing. A blow spends two event ids whether it hurts, downs or kills, and whoever is told,
-//                   so the gaps in an outsider's stream don't tell a death from a hit.
+//                   so the gaps in an outsider's stream don't tell a death from a hit. Nor does the work it does count
+//                   who was there (remember), and private notices are sent by a later tick (Game.emitCopy).
 // docs/COMMUNITY_PLAN.md (stage 5) says what may still be inferred.
 
 import { DEATH, DEATH_SILVER_LOSS, HOOD, SETTLEMENT, TIMING, baseOf, itemDef, type ItemStack } from '../shared/catalog.ts';
@@ -70,8 +71,16 @@ function present(g: Game, victim: Player, actorId: string | null): Player[] {
   return [...g.players.values()].filter((o) => o.id !== victim.id && o.id !== actorId && !o.dead && o.zone === victim.zone);
 }
 
-function remember(g: Game, witnesses: Player[], saw: Omit<AttackSighting, 'ts'>) {
-  for (const o of witnesses) g.store.run('INSERT INTO sightings(ts, player_id, data) VALUES(?, ?, ?)', g.now(), o.id, JSON.stringify(saw));
+/**
+ * A row for every player but the victim, `seen` only for those present, as theft does: the work, and so the time the
+ * blow takes to answer, must not count who was there.
+ */
+function remember(g: Game, witnesses: Player[], victim: Player, saw: Omit<AttackSighting, 'ts'>) {
+  const present = new Set(witnesses.map((o) => o.id));
+  const data = JSON.stringify(saw);
+  for (const o of g.players.values()) {
+    if (o.id !== victim.id) g.store.run('INSERT INTO sightings(ts, player_id, data, seen) VALUES(?, ?, ?, ?)', g.now(), o.id, data, present.has(o.id) ? 1 : 0);
+  }
 }
 
 function endRevivesOf(g: Game, targetId: string) {
@@ -120,7 +129,7 @@ export function downPlayer(g: Game, victim: Player, source: Source, damage: numb
     sourceKind: source.kind, sourceId: blow.as.id, sourceName: blow.as.name, damage, leftMs: forMs, bandages: available(victim.inventory, DEATH.bandage),
     note: `You are downed and die for good in ${Math.round(forMs / 1000)}s. revive {} bandages yourself if you carry a ${DEATH.bandage}; otherwise someone has to revive you.`,
   }, { zone: victim.zone });
-  remember(g, witnesses, { act: 'player.downed', zone: victim.zone, actor: blow.as, victim: who });
+  remember(g, witnesses, victim, { act: 'player.downed', zone: victim.zone, actor: blow.as, victim: who });
   g.setLastAction(victim, 'downed', `downed in ${victim.zone} by ${source.name}`);
 }
 
@@ -199,7 +208,7 @@ function die(g: Game, victim: Player, blow: Blow, bledOut: boolean) {
     zone, killerKind: blow.kind, killerId: blow.as.id, killerName: blow.as.name, bledOut, corpseId: corpse.id, bagId, dropped, silverLost,
     note: 'You died, for good. Only observe works now. Register a new character under a new name to go on.',
   }, { zone });
-  remember(g, witnesses, { act: 'player.death', zone, actor, victim: { id: victim.id, name: victim.name } });
+  remember(g, witnesses, victim, { act: 'player.death', zone, actor, victim: { id: victim.id, name: victim.name } });
   if (killer && paid.length) {
     // With the victim's own event, which the killer never gets: nobody receives two events under one id.
     g.emitCopy(died, 'bounty.paid', killer.id, { target: corpse.victim, amount: paid.reduce((n, b) => n + b.amount, 0), bounties: paid.length, to: 'bank' });
