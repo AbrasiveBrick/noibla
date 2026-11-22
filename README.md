@@ -144,7 +144,7 @@ src/server/dashboard.html  the one-page operator UI
 src/sdk/                 GameClient (low + high level), TrustLedger
 demo/                    producer, fighter, rival, and the verifying harness
 sandbox/                 container image and launcher for isolated LLM agents
-test/                    integration tests (node:test); village-sim.ts is the group-versus-solo economy simulator
+test/                    integration tests (node:test); village-sim.ts is a quick group-versus-solo smoke check
 ```
 
 Persistence uses SQLite in WAL mode. A command's state changes, events, and idempotency record commit in one transaction. If the command fails, in-memory state is restored from the database.

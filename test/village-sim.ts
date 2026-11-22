@@ -10,7 +10,6 @@
 //   village      four members of one settlement who pool at the stockpile and refine what the others gave
 //   exile        a village of three, plus the fourth player alone in the same world
 //   separate     four members of one village who each keep their own materials, by any of the tricks in Keep
-//   freeRider    a village in which three pool and the fourth keeps their own materials
 //
 // Income is what the first AMORTIZE_HOURS of play from nothing come to: the run's first `warmMinutes` as played
 // (materials given to the group rest before they pay), then the rate of the rest of the run.
@@ -84,7 +83,7 @@ export const BUILDS = {
 } as const;
 export type BuildId = keyof typeof BUILDS;
 
-export type Side = 'solo' | 'founders' | 'altFounders' | 'village' | 'exile' | 'separate' | 'freeRider';
+export type Side = 'solo' | 'founders' | 'altFounders' | 'village' | 'exile' | 'separate';
 
 /**
  * How a member who keeps their own materials tries for shared work all the same. Each still tries to refine from the
@@ -110,11 +109,9 @@ export interface Strategy {
   roam?: Roam[];
   /** How much of the value further down the chain a player sees in a raw material (0-1). Default 0.8. */
   outlook?: number;
-  /** separate, freeRider: the trick of whoever keeps their own. Default: own. */
+  /** separate: the trick they keep their own by. Default: own. */
   keep?: Keep;
-  /** village: take shared work's output out as soon as it is made, the least trust that still pays. */
-  skim?: boolean;
-  /** exile, freeRider: the fourth player's own habits. The other three keep the village's. */
+  /** exile: the exiled player's own habits. The three who stay keep the village's. */
   exiled?: { tripMs: number; minGain: number; outlook?: number };
 }
 
@@ -139,10 +136,6 @@ export interface SimResult {
   perHour: number;
   /** The same without the shared costs, player by player. A village's income is shared, so `perHour` is what counts there. */
   each: number[];
-  /** Growth of the stockpiles per hour, all settlements together. */
-  pooled: number;
-  /** Silver-equivalent per player-hour once warm, before founding and building. */
-  steady: number;
   /** Units refined with shared work. */
   shared: number;
   deaths: number;
@@ -241,12 +234,12 @@ export function simulate(o: SimOptions): SimResult {
       const armor = gear(p, build.armor);
       must(p.id, 'equip', { item: weapon });
       must(p.id, 'equip', { item: armor });
-      const own = (o.side === 'exile' || o.side === 'freeRider') && i === 3 ? o.strategy.exiled : undefined;
+      const own = o.side === 'exile' && i === 3 ? o.strategy.exiled : undefined;
       return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, outlook: own?.outlook ?? o.strategy.outlook ?? 0.8, roam: o.strategy.roam?.[i] ?? 'any', lent: {}, nextTripAt: 0, deposited: false, deaths: 0, shelved: 0 };
     });
 
     // Settlements, founded and built with the real commands.
-    const groups: Bot[][] = o.side === 'solo' ? [] : ['village', 'separate', 'freeRider'].includes(o.side) ? [bots] : o.side === 'exile' ? [bots.slice(0, 3)] : bots.map((b) => [b]);
+    const groups: Bot[][] = o.side === 'solo' ? [] : ['village', 'separate'].includes(o.side) ? [bots] : o.side === 'exile' ? [bots.slice(0, 3)] : bots.map((b) => [b]);
     const buildings = o.strategy.buildings ?? ['workshop', 'forge_hall', 'farm'];
     let setupCost = 0;
     let builderMs = 0;
@@ -280,7 +273,7 @@ export function simulate(o: SimOptions): SimResult {
       p.skills.construction = trained;
       if (p.wear) p.wear = {};
       p.busyUntil = 0;
-      const team = o.side === 'separate' ? [] : o.side === 'freeRider' ? members.slice(0, 3) : members.length > 1 ? members : [];
+      const team = o.side === 'separate' ? [] : members.length > 1 ? members : [];
       for (const m of members) {
         m.settlementId = sid;
         m.home = home;
@@ -308,7 +301,7 @@ export function simulate(o: SimOptions): SimResult {
       && (!r.requiresFocus || focusedIn(b, r.skill).some((x) => x !== b));
     const pools = (b: Bot, item: string) => {
       if (!b.team || !POOLED.has(item)) return false;
-      if (!SHARED_ITEMS.has(item)) return !o.strategy.skim;
+      if (!SHARED_ITEMS.has(item)) return true;
       const r = RECIPES[REFINES.find((id) => RECIPES[id].inputs.some((i) => i.item === item))!];
       return sharesOut(b, r) || !b.focus.includes(r.skill);
     };
@@ -514,12 +507,6 @@ export function simulate(o: SimOptions): SimResult {
             const out = send(b.id, 'refine', { recipeId: r.id, count: batches, from: 'stockpile' });
             if (!out.ok) { b.nextTripAt = now + 1000; return; }
             sharedUnits += out.result.shared.units;
-            if (o.strategy.skim) {
-              const item = r.output.item;
-              // Duskiron needs iron bars in the stockpile.
-              const qty = Math.min(out.result.output.qty, unreserved(item) - (item === 'iron_bar' ? 100 : 0));
-              if (qty > 0) { must(b.id, 'stockpile.withdraw', { items: [{ item, qty }] }); b.share[item] = (b.share[item] ?? 0) + qty; }
-            }
             return;
           }
           const count = Math.min(10, ...r.inputs.map((i) => Math.floor(((p.inventory[i.item] ?? 0) + (home ? spare(i.item) : 0)) / i.qty)));
@@ -527,6 +514,7 @@ export function simulate(o: SimOptions): SimResult {
           if (draw.length) must(b.id, 'stockpile.withdraw', { items: draw });
           const made = send(b.id, r.kind, { recipeId: r.id, count });
           if (!made.ok) { b.nextTripAt = now + 1000; return; }
+          sharedUnits += made.result.shared?.units ?? 0;
           // Crafted gear is priced and put aside: thousands of uniques in an inventory would make a long run crawl.
           for (const u of made.result.items ?? []) {
             b.shelved += values[u.base] ?? 0;
@@ -650,15 +638,12 @@ export function simulate(o: SimOptions): SimResult {
     const each = last.each.map((x, i) => hourly(x, warm?.each[i]));
     const pooled = hourly(last.pool, warm?.pool);
     const gross = (each.reduce((n, x) => n + x, 0) + pooled) / bots.length;
-    const steady = (last.each.reduce((n, x, i) => n + rate(x, warm?.each[i]), 0) + rate(last.pool, warm?.pool)) / bots.length;
     // Building takes time that would otherwise have earned at this rate.
     const buildTime = (builderMs / 3_600_000) * Math.max(0, gross);
     const setup = (setupCost + buildTime) / AMORTIZE_HOURS / bots.length;
     return {
       perHour: gross - setup,
       each,
-      pooled,
-      steady,
       shared: sharedUnits,
       deaths: bots.reduce((n, b) => n + player(b).stats.deaths, 0),
       stockpile: groups.length ? stockSum / Math.max(1, samples) / groups.length : 0,
