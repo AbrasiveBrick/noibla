@@ -1,6 +1,6 @@
 // Fighter: earns silver by hunting, buys gear from the producer (forum ad →
-// private negotiation → blind trade), banks a spare, dies in the frontier and
-// loses what it carried, then re-gears from the bank and sells wraith essence.
+// private negotiation → blind trade), banks a spare and names an heir, dies for good in the frontier,
+// then plays on as that heir: reports the death, inherits the bank and sells wraith essence.
 
 import { GameClient, CommandError, sleep, type GameEvent } from '../src/sdk/index.ts';
 import { Inbox, fmt, narrator, waitForProposal, type Facts } from './lib.ts';
@@ -76,6 +76,9 @@ export async function runFighter(c: GameClient, facts: Facts) {
   const silver = await c.count('silver');
   await c.deposit([{ item: 'iron_sword', qty: 1 }, ...(silver > 0 ? [{ item: 'silver', qty: silver }] : [])]);
   say(`equipped iron sword + iron mail; banked the spare sword and ${silver} silver`);
+  const reg = await GameClient.register(c.url, 'Fighter-2');
+  await c.setWill(reg.playerId);
+  say(`death is for good, so registered ${reg.name} and named them heir to the bank`);
 
   // --- Frontier trip 1 ---
   await c.acceptQuest('frontier_hunt');
@@ -90,7 +93,8 @@ export async function runFighter(c: GameClient, facts: Facts) {
   say(`carrying ${await c.count('duskiron_ore')} duskiron ore; hunting wraiths`);
   let fleeCommandId: string | undefined;
   for (let i = 0; i < 6 && !ambusher && !died; i++) {
-    await c.restUntil(0.9);
+    // Throws once downed.
+    if (!(await c.restUntil(0.9).catch(() => null))) break;
     if (ambusher || died) break;
     // Walk to the nearest free wraith (from the map when none is in view).
     const wraith = await c.approachMob('wraith', { timeoutMs: 20_000 }).catch(() => null);
@@ -101,7 +105,7 @@ export async function runFighter(c: GameClient, facts: Facts) {
     say(`ambushed by ${ambusher}! trying to retreat to the wilds`);
     while (!died) {
       const obs = await c.observe();
-      if (obs.self.zone === 'town' || obs.self.travel) break;
+      if (obs.self.downed || obs.self.dead || obs.self.travel) break;
       const brace = obs.self.abilities.find((a) => a.id === 'brace' && a.readyInMs === 0);
       if (brace) await c.request('ability.use', { ability: 'brace' });
       const mv = await c.request('move', { to: 'wilds' });
@@ -114,20 +118,35 @@ export async function runFighter(c: GameClient, facts: Facts) {
   offHit(); offDie();
   const d = (died as unknown as GameEvent).data;
   facts.fighterDeath = { zone: d.zone, dropped: d.dropped, killer: d.killerName };
-  say(`killed by ${d.killerName} in the ${d.zone}; dropped ${fmt(d.dropped)}. Respawned in town.`);
+  say(`killed by ${d.killerName} in the ${d.zone}; dropped ${fmt(d.dropped)}. That character is gone for good.`);
+  const refused = await c.request('move', { to: 'wilds' });
+  facts.deadRefusal = refused.ok ? 'moved' : refused.error.code;
 
-  // --- Bank and skills survived ---
-  const after = await c.observe();
-  const bank = await c.bank();
-  facts.fighterBankAfterDeath = bank.items;
-  const xpAfter = Object.values(after.self.skills).reduce((n, s) => n + s.xp, 0);
-  facts.fighterSkillsKept = xpAfter >= xpBefore && after.self.skills.mining.xp > 0;
-  say(`inventory now ${fmt(after.self.inventory)}; bank still holds ${fmt(bank.items)}; skill XP kept (${xpBefore} before the trip → ${xpAfter} now, unarmed L${after.self.skills.unarmed.level}, swords L${after.self.skills.swords.level})`);
-  await c.withdraw([{ item: 'iron_sword', qty: 1 }]);
-  await c.equip('iron_sword');
+  // --- A new character: reports the death, which passes the estate on ---
+  const next = new GameClient({ url: c.url, token: reg.token, recordEvents: true });
+  await next.connect();
+  facts.successor = next;
+  const heirInbox = new Inbox(next);
+  await next.setFocus(facts.fighterFocus);
+  await next.acceptQuest('frontier_hunt');
+  await next.travelTo('frontier');
+  await next.goTo(d.corpseId);
+  const body = await next.examineCorpse(d.corpseId);
+  const report = await next.reportDeath(d.corpseId, 'Found dead by the river, stripped.');
+  facts.reportFirst = report.first;
+  say(`examined the corpse (${JSON.stringify(body.cause)}) and reported the death, which makes it known`);
+  await next.travelTo('town');
+  await next.goTo('bank');
+  const bank = await next.bank();
+  facts.heirBank = bank.items;
+  const xpAfter = Object.values((await next.observe()).self.skills).reduce((n, s) => n + s.xp, 0);
+  facts.heirSkillXp = xpAfter;
+  say(`inherited ${fmt(bank.items)}; skill XP died with the old character (${xpBefore} → ${xpAfter})`);
+  await next.withdraw([{ item: 'iron_sword', qty: 1 }]);
+  await next.equip('iron_sword');
 
   if (fleeCommandId) {
-    const fb = await c.reportFeedback({
+    const fb = await next.reportFeedback({
       category: 'confusing_api',
       summary: 'move returns COMBAT_LOCKED while fleeing; the 5s lock refreshes on every hit taken',
       details: 'While being attacked in the frontier I could never leave. retryAfterMs helps, but the docs should say the lock renews on each hit.',
@@ -138,24 +157,24 @@ export async function runFighter(c: GameClient, facts: Facts) {
   }
 
   // --- Frontier trip 2: wraith essence with the spare sword ---
-  await c.travelTo('frontier');
+  await next.travelTo('frontier');
   say('back in the frontier with the spare sword (no armor); hunting wraiths for essence');
-  await c.hunt('wraith', 2, { restBelowPct: 0.8 });
-  const essence = await c.count('wraith_essence');
-  await c.travelTo('town');
-  await c.claimQuest('frontier_hunt').catch((e: CommandError) => say(`quest claim skipped: ${e.code}`));
+  await next.hunt('wraith', 2, { restBelowPct: 0.8 });
+  const essence = await next.count('wraith_essence');
+  await next.travelTo('town');
+  await next.claimQuest('frontier_hunt').catch((e: CommandError) => say(`quest claim skipped: ${e.code}`));
   say(`returned to town with ${essence} wraith essence`);
 
   // --- Sell essence to the producer ---
-  const wtb = await c.waitFor(async () => (await c.listThreads({ tag: 'wtb' })).threads.find((t) => t.authorId === producerId), { what: 'WTB thread' });
-  const wtbThread = (await c.getThread(wtb.id)).thread;
+  const wtb = await next.waitFor(async () => (await next.listThreads({ tag: 'wtb' })).threads.find((t) => t.authorId === producerId), { what: 'WTB thread' });
+  const wtbThread = (await next.getThread(wtb.id)).thread;
   const warnings = wtbThread.replies.filter((r) => /warning/i.test(r.body));
   if (warnings.length) say(`read public warning on the WTB thread: "${warnings[0].body}"`);
-  await c.replyToThread(wtb.id, `Have ${essence} wraith essence — PMing you.`);
-  await c.sendDm(producerId, `${essence} wraith essence for 50 silver?`);
-  await inbox.next({ from: producerId, match: (m) => /deal/i.test(m.text) });
-  const t = await c.proposeTrade({ to: producerId, give: [{ item: 'wraith_essence', qty: essence }], receive: [{ item: 'silver', qty: 50 }], lockTimeoutMs: 30_000 });
-  await c.waitFor(async () => (await c.getTrade(t.trade.id)).trade.status === 'agreed', { what: 'producer to accept' });
-  const r = await c.completeTrade(t.trade.id, [{ item: 'wraith_essence', qty: essence }]);
+  await next.replyToThread(wtb.id, `Have ${essence} wraith essence — PMing you.`);
+  await next.sendDm(producerId, `${essence} wraith essence for 50 silver?`);
+  await heirInbox.next({ from: producerId, match: (m) => /deal/i.test(m.text) });
+  const t = await next.proposeTrade({ to: producerId, give: [{ item: 'wraith_essence', qty: essence }], receive: [{ item: 'silver', qty: 50 }], lockTimeoutMs: 30_000 });
+  await next.waitFor(async () => (await next.getTrade(t.trade.id)).trade.status === 'agreed', { what: 'producer to accept' });
+  const r = await next.completeTrade(t.trade.id, [{ item: 'wraith_essence', qty: essence }]);
   say(`honest trade ${t.trade.id} settled: sent ${fmt(r.actual.youSent)}, received ${fmt(r.actual.youReceived)}`);
 }

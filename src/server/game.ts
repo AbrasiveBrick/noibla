@@ -8,10 +8,12 @@ import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/
 import { Store } from './store.ts';
 import { GameError, addItems, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
 import type { UniqueItem } from '../shared/protocol.ts';
-import type { CommandDef, LootBag, Mob, Party, Player, ResourceNode, Settlement, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
+import type { Bounty, CommandDef, Corpse, LootBag, Mob, OperatorEvent, Party, Player, ResourceNode, Settlement, SnapshotData, Subscriber, Trade, Visibility, Who } from './types.ts';
 import { syncCarried, syncPooled, upgradeSettlement } from './buildings.ts';
 import { constructionCommands, settlementTick } from './construction.ts';
 import { crimeCommands } from './crime.ts';
+import { blocked, deathCommands, deathTick } from './death.ts';
+import { OWN_NAME_EVENTS, seenAs } from './identity.ts';
 import { orbCommands } from './orbs.ts';
 import { partyCommands } from './party.ts';
 import { settlementCommands } from './settlement.ts';
@@ -68,6 +70,8 @@ export class Game {
   readonly trades = new Map<string, Trade>();
   readonly parties = new Map<string, Party>();
   readonly settlements = new Map<string, Settlement>();
+  readonly corpses = new Map<string, Corpse>();
+  readonly bounties = new Map<string, Bounty>();
   readonly commands: Record<string, CommandDef>;
 
   private nameIndex = new Map<string, string>();
@@ -78,7 +82,10 @@ export class Game {
   private dirtyTrades = new Set<string>();
   private dirtyParties = new Set<string>();
   private dirtySettlements = new Set<string>();
-  private outbox: { ev: GameEvent; vis: Visibility; delayMs?: number }[] = [];
+  private dirtyCorpses = new Set<string>();
+  private dirtyBounties = new Set<string>();
+  /** `ev` is what players get, `truth` what the operator gets. */
+  private outbox: { ev: GameEvent; truth?: OperatorEvent; vis: Visibility; delayMs?: number }[] = [];
   /** Committed copies (emitCopy) waiting to be sent by a later tick. */
   private whispers: { ev: GameEvent; vis: Visibility; dueAt: number }[] = [];
   private subscribers = new Set<Subscriber>();
@@ -101,7 +108,7 @@ export class Game {
     this.tickMs = opts.tickMs ?? 25;
     this.lastSnapshotAt = this.store.get<{ ts: number | null }>('SELECT MAX(ts) AS ts FROM snapshots')?.ts ?? -Infinity;
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
-    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands, ...settlementCommands, ...constructionCommands, ...crimeCommands };
+    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands, ...settlementCommands, ...constructionCommands, ...crimeCommands, ...deathCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     // Procedural map: generated when the world is created; the seed is stored so restarts rebuild the same map.
     let mapSeed = Number(this.store.getMeta('map_seed') ?? NaN);
@@ -128,7 +135,12 @@ export class Game {
     for (const row of this.store.all<{ id: string; name: string; token_hash: string; data: string }>('SELECT id, name, token_hash, data FROM players')) {
       const p = this.migratePlayer(JSON.parse(row.data), relayout);
       if (relayout) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id);
-      if (grantKit(p)) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id);
+      if (p.downed) {
+        // Time the server was down doesn't bleed anyone out: the downed get their whole time again.
+        p.downed.until = this.now() + p.downed.forMs;
+        this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id);
+      }
+      if (!p.dead && grantKit(p)) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id);
       this.players.set(p.id, p);
       this.nameIndex.set(p.name.toLowerCase(), p.id);
       this.tokenIndex.set(row.token_hash, p.id);
@@ -158,6 +170,19 @@ export class Game {
     for (const row of this.store.all<{ data: string }>('SELECT data FROM settlements')) {
       const s = upgradeSettlement(JSON.parse(row.data));
       this.settlements.set(s.id, s);
+    }
+    for (const row of this.store.all<{ data: string }>('SELECT data FROM corpses')) {
+      const c = JSON.parse(row.data) as Corpse;
+      if (relayout) {
+        const pos = this.placeInRegion({ x: c.x, y: c.y }, c.zone);
+        c.x = pos.x; c.y = pos.y;
+        this.store.run('UPDATE corpses SET data = ? WHERE id = ?', JSON.stringify(c), c.id);
+      }
+      this.corpses.set(c.id, c);
+    }
+    for (const row of this.store.all<{ data: string }>('SELECT data FROM bounties')) {
+      const b = JSON.parse(row.data) as Bounty;
+      this.bounties.set(b.id, b);
     }
     if (relayout) this.store.setMeta('map_layout', MAP_LAYOUT);
   }
@@ -199,6 +224,8 @@ export class Game {
   markTrade(t: Trade) { this.dirtyTrades.add(t.id); }
   markParty(pt: Party) { this.dirtyParties.add(pt.id); }
   markSettlement(s: Settlement) { this.dirtySettlements.add(s.id); }
+  markCorpse(c: Corpse) { this.dirtyCorpses.add(c.id); }
+  markBounty(b: Bounty) { this.dirtyBounties.add(b.id); }
 
   private flushDirty() {
     // Shared work follows what inventories and stockpiles really hold (buildings.ts). Both run before anything is written.
@@ -238,6 +265,15 @@ export class Game {
       if (s) this.store.run('INSERT INTO settlements(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data', id, JSON.stringify(s));
       else this.store.run('DELETE FROM settlements WHERE id = ?', id);
     }
+    for (const id of this.dirtyCorpses) {
+      const c = this.corpses.get(id);
+      if (c) this.store.run('INSERT INTO corpses(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data', id, JSON.stringify(c));
+    }
+    for (const id of this.dirtyBounties) {
+      const b = this.bounties.get(id);
+      if (b) this.store.run('INSERT INTO bounties(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data', id, JSON.stringify(b));
+      else this.store.run('DELETE FROM bounties WHERE id = ?', id);
+    }
     if (this.eventSeq !== this.flushedEventSeq) {
       this.store.setMeta('event_seq', String(this.eventSeq));
       this.flushedEventSeq = this.eventSeq;
@@ -245,7 +281,7 @@ export class Game {
     this.clearDirty();
   }
 
-  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyUniques.clear(); this.dirtyTrades.clear(); this.dirtyParties.clear(); this.dirtySettlements.clear(); }
+  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyUniques.clear(); this.dirtyTrades.clear(); this.dirtyParties.clear(); this.dirtySettlements.clear(); this.dirtyCorpses.clear(); this.dirtyBounties.clear(); }
 
   /** After a rollback, restore every touched entity from the database. */
   private reloadDirty() {
@@ -273,6 +309,14 @@ export class Game {
       const row = this.store.get<{ data: string }>('SELECT data FROM settlements WHERE id = ?', id);
       if (row) this.settlements.set(id, upgradeSettlement(JSON.parse(row.data))); else this.settlements.delete(id);
     }
+    for (const id of this.dirtyCorpses) {
+      const row = this.store.get<{ data: string }>('SELECT data FROM corpses WHERE id = ?', id);
+      if (row) this.corpses.set(id, JSON.parse(row.data)); else this.corpses.delete(id);
+    }
+    for (const id of this.dirtyBounties) {
+      const row = this.store.get<{ data: string }>('SELECT data FROM bounties WHERE id = ?', id);
+      if (row) this.bounties.set(id, JSON.parse(row.data)); else this.bounties.delete(id);
+    }
     this.clearDirty();
   }
 
@@ -296,13 +340,41 @@ export class Game {
 
   // ---------- events ----------
 
-  emit(type: EventType, vis: Visibility, data: unknown, meta: { zone?: ZoneId | null; actor?: Player } = {}): GameEvent {
+  /**
+   * `data` is what players may see: acts in the world already name their players with seenAs. `meta.actor` is masked
+   * here. The operator's copy has the hoods lifted, plus `meta.truth`, which players never get.
+   */
+  emit(type: EventType, vis: Visibility, data: unknown, meta: { zone?: ZoneId | null; actor?: Player; truth?: Record<string, unknown> } = {}): GameEvent {
     const ev: GameEvent = { id: ++this.eventSeq, ts: this.now(), type, data };
     if (meta.zone !== undefined) ev.zone = meta.zone;
-    if (meta.actor) { ev.actorId = meta.actor.id; ev.actorName = meta.actor.name; }
-    if (operatorCanSee(vis)) this.store.run('INSERT INTO events(id, ts, type, data) VALUES(?, ?, ?, ?)', ev.id, ev.ts, ev.type, JSON.stringify(ev));
-    this.outbox.push({ ev, vis });
+    if (meta.actor) {
+      const who = vis.kind === 'operator' || OWN_NAME_EVENTS.has(type) ? meta.actor : seenAs(meta.actor);
+      ev.actorId = who.id;
+      ev.actorName = who.name;
+    }
+    let truth: OperatorEvent | undefined;
+    if (operatorCanSee(vis)) {
+      truth = this.operatorCopy(ev, meta);
+      this.store.run('INSERT INTO events(id, ts, type, data) VALUES(?, ?, ?, ?)', ev.id, ev.ts, ev.type, JSON.stringify(truth));
+    }
+    this.outbox.push({ ev, truth, vis });
     return ev;
+  }
+
+  private operatorCopy(ev: GameEvent, meta: { actor?: Player; truth?: Record<string, unknown> }): OperatorEvent {
+    const behind = new Map<string, Who>();
+    for (const p of this.players.values()) if (p.hood) behind.set(p.hood.as, { id: p.id, name: p.name });
+    const found = new Set<string>();
+    let data: any = ev.data;
+    if (behind.size) {
+      data = liftHoods(data, behind, found);
+      if (meta.actor?.hood) found.add(meta.actor.name);
+    }
+    if (meta.truth) data = { ...data, ...meta.truth };
+    const copy: OperatorEvent = { ...ev, data };
+    if (meta.actor) { copy.actorId = meta.actor.id; copy.actorName = meta.actor.name; }
+    if (found.size) copy.hooded = [...found];
+    return copy;
   }
 
   /**
@@ -322,9 +394,9 @@ export class Game {
 
   private dispatchOutbox() {
     const items = this.outbox.splice(0);
-    for (const { ev, vis, delayMs } of items) {
+    for (const { ev, truth, vis, delayMs } of items) {
       if (delayMs !== undefined) this.whispers.push({ ev, vis, dueAt: this.now() + delayMs });
-      else this.send(ev, vis);
+      else this.send(ev, truth, vis);
     }
   }
 
@@ -333,22 +405,25 @@ export class Game {
     const due = this.whispers.filter((w) => w.dueAt <= now);
     if (!due.length) return;
     this.whispers = this.whispers.filter((w) => w.dueAt > now);
-    for (const { ev, vis } of due) this.send(ev, vis);
+    // Copies go to one player each, never to the operator.
+    for (const { ev, vis } of due) this.send(ev, undefined, vis);
   }
 
-  private send(ev: GameEvent, vis: Visibility) {
+  private send(ev: GameEvent, truth: OperatorEvent | undefined, vis: Visibility) {
     for (const sub of this.subscribers) {
-      if (this.canSee(sub, vis)) {
-        try { sub.send(ev); } catch { /* subscriber gone */ }
+      if (this.canSee(sub, vis, ev.type)) {
+        try { sub.send(sub.kind === 'operator' ? truth! : ev); } catch { /* subscriber gone */ }
       }
     }
   }
 
   /** Server-side access control for live events, evaluated at delivery time. */
-  canSee(sub: Subscriber, vis: Visibility): boolean {
+  canSee(sub: Subscriber, vis: Visibility, type: EventType): boolean {
     if (sub.kind === 'operator') return operatorCanSee(vis);
     const p = this.players.get(sub.playerId);
     if (!p) return false;
+    // The dead are no cameras: they hear of their own death and nothing after it.
+    if (p.dead) return type === 'self.died' && vis.kind === 'player' && vis.playerId === p.id;
     switch (vis.kind) {
       case 'zone': return p.zone === vis.zone;
       case 'forum': return p.zone === 'town';
@@ -356,6 +431,7 @@ export class Game {
       case 'dm': return vis.a === p.id || vis.b === p.id;
       case 'party': return p.partyId === vis.partyId;
       case 'settlement': return !!p.settlementId && p.settlementId === vis.id;
+      case 'public': return true;
       case 'operator': return false;
     }
   }
@@ -449,6 +525,8 @@ export class Game {
     }
     const limited = this.rateLimit(p.id);
     if (limited) return this.failure(p, type, commandId, limited);
+    const barred = blocked(this, p, type, def);
+    if (barred) return this.failure(p, type, commandId, barred);
 
     try {
       let response: CommandResponse;
@@ -527,6 +605,7 @@ export class Game {
     try {
       this.mutate(() => {
         worldTick(this, now);
+        deathTick(this, now);
         settlementTick(this, now);
         tradeTick(this, now);
         this.updateOnline(now);
@@ -614,6 +693,26 @@ function grantKit(p: Player): boolean {
   return true;
 }
 
+/**
+ * A copy of event data with every hood's id replaced by its wearer's, and the name beside it by theirs (`xId` goes
+ * with `xName`, `id` and `playerId` with `name`).
+ */
+function liftHoods(v: unknown, behind: Map<string, Who>, found: Set<string>): unknown {
+  if (Array.isArray(v)) return v.map((x) => liftHoods(x, behind, found));
+  if (!v || typeof v !== 'object') return v;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(v)) out[key] = liftHoods(value, behind, found);
+  for (const [key, value] of Object.entries(v)) {
+    const who = typeof value === 'string' ? behind.get(value) : undefined;
+    if (!who) continue;
+    out[key] = who.id;
+    found.add(who.name);
+    const nameKey = key === 'id' || key === 'playerId' ? 'name' : key.replace(/Id$/, 'Name');
+    if (nameKey !== key && nameKey in out) out[nameKey] = who.name;
+  }
+  return out;
+}
+
 function operatorCanSee(vis: Visibility): boolean {
-  return vis.kind === 'zone' || vis.kind === 'forum' || vis.kind === 'party' || vis.kind === 'settlement' || vis.kind === 'operator';
+  return vis.kind === 'public' || vis.kind === 'zone' || vis.kind === 'forum' || vis.kind === 'party' || vis.kind === 'settlement' || vis.kind === 'operator';
 }

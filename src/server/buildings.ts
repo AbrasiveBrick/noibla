@@ -5,6 +5,7 @@ import { BUILDINGS, ITEMS, RECIPES, SETTLEMENT, type BuildingDef, type BuildingI
 import { MAP_RULES, dist, plotOf } from '../shared/map.ts';
 import type { BuildingView, ProjectView, SharedStockView, SharedWorkView, WatchEntry } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
+import { seenAs } from './identity.ts';
 import type { Player, Settlement, SharedWork } from './types.ts';
 import { toBag, toStacks, type Bag } from './util.ts';
 
@@ -20,6 +21,8 @@ export function upgradeSettlement(s: Settlement): Settlement {
   s.work ??= {};
   for (const [id, w] of Object.entries(s.work)) s.work[id] = { gathered: w.gathered ?? {}, given: w.given ?? {}, carry: w.carry ?? {} };
   s.alerts ??= [];
+  // Charters from before stage 5 pay no reward.
+  s.charter.reportReward ??= 0;
   return s;
 }
 
@@ -237,7 +240,8 @@ export function takeShared(g: Game, s: Settlement, p: Player, r: RecipeDef, coun
 
 export function logWatch(g: Game, s: Settlement, ts: number, p: Player, move: WatchEntry['move']) {
   const seq = g.store.nextEntryId('watch_log', s.id);
-  g.store.run('INSERT INTO watch_log(settlement_id, ts, player_id, name, move, seq) VALUES(?, ?, ?, ?, ?, ?)', s.id, ts, p.id, p.name, move, seq);
+  const who = seenAs(p);
+  g.store.run('INSERT INTO watch_log(settlement_id, ts, player_id, name, move, seq) VALUES(?, ?, ?, ?, ?, ?)', s.id, ts, who.id, who.name, move, seq);
 }
 
 /** Someone walked over a region border. */
@@ -247,10 +251,12 @@ export function noteCrossing(g: Game, p: Player, from: ZoneId, to: ZoneId) {
     if (s.zone !== from && s.zone !== to) continue;
     const move = s.zone === to ? 'arrive' : 'depart';
     if (works(s, 'watchtower')) logWatch(g, s, ts, p, move);
-    if (move === 'arrive' && !s.members[p.id] && works(s, 'palisade')) {
+    // Any hooded figure sets it off: silence would say the figure is a member.
+    if (move === 'arrive' && (!s.members[p.id] || p.hood) && works(s, 'palisade')) {
       g.markSettlement(s);
-      s.alerts = [...s.alerts, { ts, playerId: p.id, name: p.name }].slice(-SETTLEMENT.alertsKept);
-      g.emit('settlement.alert', { kind: 'settlement', id: s.id }, { settlementId: s.id, zone: s.zone, playerId: p.id, name: p.name }, { zone: s.zone });
+      const who = seenAs(p);
+      s.alerts = [...s.alerts, { ts, playerId: who.id, name: who.name }].slice(-SETTLEMENT.alertsKept);
+      g.emit('settlement.alert', { kind: 'settlement', id: s.id }, { settlementId: s.id, zone: s.zone, playerId: who.id, name: who.name }, { zone: s.zone });
     }
   }
 }

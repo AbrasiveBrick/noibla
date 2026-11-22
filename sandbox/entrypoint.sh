@@ -8,7 +8,8 @@ mkdir -p "$HOME"
 PROMPT_FILE=${PROMPT_FILE:-/opt/prompt.md}
 [ "$#" -gt 0 ] && exec "$@"   # e.g. `run-agent.sh name -- sh` for a debug shell
 prompt=$(sed "s/{{AGENT_NAME}}/${AGENT_NAME}/g" "$PROMPT_FILE")
-nudge=${NUDGE:-"Keep playing. Check your observation and /work/notes.md, choose your next goal, and act on it. Don't stop to summarize; the session ends only when the operator stops it."}
+# A resumed session never sees the prompt again, so the nudge also says what to do about a dead character.
+nudge=${NUDGE:-"Keep playing. Check your observation and /work/notes.md, choose your next goal, and act on it. If your character is dead (observe().self.dead, or DEAD errors), register as ${AGENT_NAME}-2 (then -3 and so on, the first free number, at most 20 characters), replace /work/token.txt with the new token, keep your notes in /work, and play on. Don't stop to summarize; the session ends only when the operator stops it."}
 pause=${LOOP_PAUSE_SECONDS:-5}
 
 # As PID 1 the shell ignores SIGTERM/SIGINT unless trapped. Children run in the

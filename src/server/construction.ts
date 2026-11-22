@@ -5,6 +5,7 @@ import { BUILDINGS, SETTLEMENT, TIMING, WEAR, XP, type BuildingDef, type Buildin
 import type { StashView, WatchEntry } from '../shared/protocol.ts';
 import { activeLevelOf, capacityOf, hasBuilding, levelOf, projectViews, stillNeeded, units, works } from './buildings.ts';
 import type { Game } from './game.ts';
+import { seenAs } from './identity.ts';
 import { audit, requireAtPlot, requireMember, requireRole, settlementView } from './settlement.ts';
 import type { CommandDef, Player, Settlement } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, optInt, removeItems, reqStr, stacks, toBag, toStacks, type Bag } from './util.ts';
@@ -55,7 +56,7 @@ function contribute(g: Game, p: Player, payload: Record<string, any>) {
   addItems(project.materials, taken);
   audit(g, s, p, 'contribute', taken, def.id);
   const view = projectViews(s).find((v) => v.building === def.id)!;
-  g.emit('settlement.project', members(s), { settlementId: s.id, stage: 'contributed', project: view, items: taken, playerId: p.id, name: p.name }, { zone: s.zone, actor: p });
+  g.emit('settlement.project', members(s), { settlementId: s.id, stage: 'contributed', project: view, items: taken, playerId: seenAs(p).id, name: seenAs(p).name }, { zone: s.zone, actor: p });
   g.setLastAction(p, 'settlement', `contributed ${describe(taken)} to ${s.name}'s ${def.name}`);
   return { contributed: taken, project: view };
 }
@@ -93,7 +94,7 @@ function build(g: Game, p: Player, payload: Record<string, any>) {
     s.buildings.push({ id: def.id, builtAt: now, paidUntil: now + g.ms(SETTLEMENT.upkeepMs) });
     s.level = levelOf(s).level;
   }
-  g.emit('settlement.project', members(s), { settlementId: s.id, stage: built ? 'built' : 'progress', building: def.id, work, workNeeded: def.work, playerId: p.id, name: p.name, ...(built ? { level: s.level } : {}) }, { zone: s.zone, actor: p });
+  g.emit('settlement.project', members(s), { settlementId: s.id, stage: built ? 'built' : 'progress', building: def.id, work, workNeeded: def.work, playerId: seenAs(p).id, name: seenAs(p).name, ...(built ? { level: s.level } : {}) }, { zone: s.zone, actor: p });
   g.setLastAction(p, 'settlement', built ? `finished ${s.name}'s ${def.name}` : `building ${s.name}'s ${def.name} (${work}/${def.work})`);
   return { building: def.id, work, workNeeded: def.work, built, xp, busyMs: busy };
 }
@@ -110,7 +111,7 @@ function cancelProject(g: Game, p: Player, payload: Record<string, any>) {
   delete s.projects[def.id];
   addItems(s.stockpile, returned);
   audit(g, s, p, 'cancel', returned, def.id);
-  g.emit('settlement.project', members(s), { settlementId: s.id, stage: 'cancelled', building: def.id, items: returned, playerId: p.id, name: p.name }, { zone: s.zone, actor: p });
+  g.emit('settlement.project', members(s), { settlementId: s.id, stage: 'cancelled', building: def.id, items: returned, playerId: seenAs(p).id, name: seenAs(p).name }, { zone: s.zone, actor: p });
   g.setLastAction(p, 'settlement', `cancelled ${s.name}'s ${def.name}`);
   return { returned, settlement: settlementView(g, s, p.id) };
 }

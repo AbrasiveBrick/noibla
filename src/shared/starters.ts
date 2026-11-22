@@ -46,7 +46,8 @@ export const TOOL_RULE =
 /** Shared rule text rendered with every starter: how the map works. */
 export const MAP_RULE =
   'The world is a 2D map, generated anew for each world: read it with map() (catalog().map). Town (safe, west), wilds (PvE, middle) and frontier (lethal PvP, east, across a river) are regions of it, and so are two contested regions: ' +
-  'hollow (north of the wilds) and ridge (south of them, with a ford to the frontier), where settlements stand, PvP is allowed and death drops everything. Paths never cut through those two unless you are going there or no other way exists. ' +
+  'hollow (north of the wilds) and ridge (south of them, with a ford to the frontier), where settlements stand and PvP is allowed. ' +
+  'At 0 HP outside town, the wilds included, you are downed for about a minute: revive() uses your field bandage, otherwise someone has to revive you, or you die for good and drop everything. Paths never cut through those two unless you are going there or no other way exists. ' +
   'Walking takes time per tile. Gather, attack and loot within 1.5 tiles; use the bank, stations, quest board and shop within 3 tiles (all surround the town plaza, where travelTo(\'town\') takes you). ' +
   'observe() shows what is within 12 tiles, each with distance and inRange. goTo(target) walks to a region, place, node, mob, bag or player; nearestNode(item) and approachMob(type) find what you need. ' +
   'The high-level helpers (gatherItem, hunt, fight, craftItem, lootAll) walk for you.';
@@ -109,7 +110,7 @@ export const STARTERS: StarterPrompt[] = [
     focus: ['tanning', 'armorcraft', 'unarmed'],
     summary: 'Hunt wolves and boars for hides, tan leather, and stitch a jerkin that grants Evade.',
     prompt:
-      'Wolves and boars in Greenreach drop rough hide and silver. Dying in the wilds keeps your gear and only destroys a quarter of the silver you carry, so bank your silver and learn to fight with your fists. ' +
+      'Wolves and boars in Greenreach drop rough hide and silver. Even they can down you, and death is for good: keep a field bandage on you, bank your silver, name an heir with setWill() at the bank and learn to fight with your fists. ' +
       'Your goal is to wear a leather jerkin you made yourself, which grants the Evade ability, and claim Wolf Cull on the way. ' +
       'Rest between fights with restUntil() so you never start a fight at low HP. Later, sell iron mail to fighters: delivering one pays the Outfitter Contract.',
     firstSteps: [
@@ -131,7 +132,7 @@ export const STARTERS: StarterPrompt[] = [
     summary: 'Gear up in safety, then cross into the Ashen Frontier to slay a wraith for Frontier Hunt.',
     prompt:
       'Wraiths haunt the Ashen Frontier. They hit hard, drop wraith essence, and the Frontier Hunt quest pays 60 silver for one kill. ' +
-      'The frontier is lethal: if you die there, everything you carry and wear drops into a loot bag anyone can take. ' +
+      'The frontier is lethal: you can be finished off while downed, death is for good, and everything you carry and wear drops by your corpse. ' +
       'Your goal is to kill a wraith and come home alive. Buy a sword and armor from crafters (accept hire_a_smith first) instead of levelling every crafting skill yourself, bank your spare silver, and carry only what you can afford to lose. ' +
       'Retreat toward the wilds if another player engages you at low HP.',
     firstSteps: [
@@ -239,7 +240,7 @@ export const STARTERS: StarterPrompt[] = [
     focus: ['swords'],
     summary: 'Hunt other players in the lethal frontier and loot what they drop.',
     prompt:
-      'The Ashen Frontier has no law. Players who die there drop everything into a loot bag, and whoever reaches it first keeps it. ' +
+      'The Ashen Frontier has no law. A downed player can be finished off, the dead drop everything by their corpse, and whoever reaches it first keeps it. ' +
       'Your goal is to win a player-versus-player fight in the frontier and loot the bag. Bring iron gear if you can, use Heavy Strike and your armor buffs, ' +
       'and watch observe().zone.players (everyone within 12 tiles, with distance) for other players; the fords across the river are where travellers pass. Loot fast and head home: you are carrying the bag now. ' +
       'Expect others to hunt you too, and expect traders to warn each other about you.',
@@ -247,7 +248,7 @@ export const STARTERS: StarterPrompt[] = [
       "setFocus(['swords']) in town",
       'Equip the best sword and armor you can make; bank everything else',
       "travelTo('frontier'), wait near a ford or a duskiron vein, and watch observe().zone.players and zone.lootBags",
-      'fight(playerId) when the odds favor you (it closes the distance and uses buffs at low HP)',
+      'fight(playerId) when the odds favor you (it closes the distance, uses buffs at low HP and stops once they are downed). attack(playerId) once more finishes them for good: your choice',
       "lootAll(bagId), then travelTo('town') and deposit",
     ],
     milestone: { description: 'Kill a player in the frontier and bank items looted from their bag.', items: ['iron_sword', 'iron_mail'] },

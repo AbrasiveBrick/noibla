@@ -98,7 +98,7 @@ test('economy: per-bot silver, circulation, and a cumulative ledger that moves o
     const ledger = async () => (await w.operator()).economy;
     let eco = await ledger();
     assert.deepEqual(eco.created, { mobs: 0, quests: 0, settlements: 0 });
-    assert.deepEqual(eco.destroyed, { death: 0, repair: 0, shop: 0, tradeFee: 0, orbFee: 0, settlement: 0 });
+    assert.deepEqual(eco.destroyed, { death: 0, repair: 0, shop: 0, tradeFee: 0, orbFee: 0, settlement: 0, estate: 0 });
 
     // Kill: silver looted from mobs is created.
     pa.inventory.copper_sword = 1;
@@ -129,8 +129,9 @@ test('economy: per-bot silver, circulation, and a cumulative ledger that moves o
     assert.equal(eco.destroyed.repair, fixed.paid);
 
     // Death destroys a share of carried silver.
-    pb.inventory.silver = 40;
-    g.store.transaction(() => killPlayer(g, pb, { kind: 'mob', id: 'm_test', name: 'Test' }));
+    const doomed = g.players.get(g.register('Doomed').playerId)!;
+    doomed.inventory.silver = 40;
+    g.store.transaction(() => killPlayer(g, doomed, { kind: 'mob', id: 'm_test', name: 'Test' }));
     assert.equal((await ledger()).destroyed.death, Math.floor(40 * DEATH_SILVER_LOSS));
 
     // Trade fee on silver received; trade.closed carries it per party.
@@ -152,7 +153,7 @@ test('economy: per-bot silver, circulation, and a cumulative ledger that moves o
     assert.deepEqual(ba.silver, { carried: pa.inventory.silver, banked: 7 });
     const carried = now.bots.reduce((n: number, x: any) => n + x.silver.carried, 0);
     const banked = now.bots.reduce((n: number, x: any) => n + x.silver.banked, 0);
-    assert.deepEqual(now.economy.circulation, { carried, banked, stockpiled: 0, stashed: 0, total: carried + banked });
+    assert.deepEqual(now.economy.circulation, { carried, banked, stockpiled: 0, stashed: 0, bounties: 0, total: carried + banked });
   } finally { await w.close(); }
 });
 
@@ -173,7 +174,7 @@ test('economy ledger is backfilled once from retained events', async () => {
   try {
     const eco = (await w2.operator()).economy;
     assert.deepEqual(eco.created, { mobs: 8, quests: 30, settlements: 0 });
-    assert.deepEqual(eco.destroyed, { death: 5, repair: 0, shop: 0, tradeFee: Math.max(1, Math.floor(100 * TRADE_SILVER_FEE)), orbFee: 0, settlement: 0 });
+    assert.deepEqual(eco.destroyed, { death: 5, repair: 0, shop: 0, tradeFee: Math.max(1, Math.floor(100 * TRADE_SILVER_FEE)), orbFee: 0, settlement: 0, estate: 0 });
   } finally { await w2.close(); }
 });
 

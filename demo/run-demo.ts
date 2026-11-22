@@ -42,6 +42,11 @@ try {
     runFighter(clients.Fighter, facts),
     runRival(clients.Rival, facts),
   ]);
+  // The dead can't read their messages: from here the fighter is their successor.
+  if (facts.successor) {
+    await clients.Fighter.disconnect();
+    clients.Fighter = facts.successor;
+  }
 } catch (e) {
   failed = true;
   log(`a bot failed: ${(e as Error).stack ?? e}`);
@@ -64,6 +69,7 @@ async function allDmTexts(): Promise<DirectMessage[]> {
 try {
   const rival = clients.Rival;
   const pid = facts.producerId!, fid = facts.fighterId!, rid = facts.rivalId!;
+  const successorId = facts.successor ? (await facts.successor.whoami()).playerId : fid;
   const pfConv = `dm:${[pid, fid].sort().join(':')}`;
   const dms = await allDmTexts();
   const pfTexts = dms.filter((m) => m.conversationId === pfConv).map((m) => m.text);
@@ -81,7 +87,7 @@ try {
   expect('rival received no live events of the private conversation', leakedEvents.length === 0 && !pfTexts.some((t) => rivalJson.includes(t)), `${pfTexts.length} private messages checked against ${rival.received.length} rival events`);
   const tradeGet = await rival.request('trade.get', { tradeId: facts.kitTradeId! });
   expect('rival cannot see the producer↔fighter trade', !tradeGet.ok && tradeGet.error.code === 'NOT_FOUND');
-  expect('every DM is player-authored (no system/trade-state messages in chat)', dms.every((m) => m.authorKind === 'player' && [pid, fid, rid].includes(m.fromId)));
+  expect('every DM is player-authored (no system/trade-state messages in chat)', dms.every((m) => m.authorKind === 'player' && [pid, fid, rid, successorId].includes(m.fromId)));
 
   // Trade #1: timeout, catch-up, idempotent retry, settlement
   expect('first kit trade timed out and nothing changed hands', facts.kitTimeoutReceipt?.outcome === 'expired' && facts.kitTimeoutReceipt.actual.youSent.length === 0 && facts.kitTimeoutReceipt.actual.youReceived.length === 0);
@@ -92,7 +98,8 @@ try {
   // Frontier death, banking, looting
   expect('fighter died in the frontier and dropped gear + ore', facts.fighterDeath?.zone === 'frontier' && ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.fighterDeath!.dropped.some((s) => baseOf(s.item) === i)), fmt(facts.fighterDeath?.dropped ?? []));
   expect('the rival, not a wraith, landed the killing blow', facts.fighterDeath?.killer === 'Rival', String(facts.fighterDeath?.killer));
-  expect('fighter\'s banked spare and skills survived death', !!facts.fighterBankAfterDeath?.some((s) => baseOf(s.item) === 'iron_sword') && !!facts.fighterSkillsKept);
+  expect('death was for good: the fighter\'s commands fail with DEAD', facts.deadRefusal === 'DEAD', facts.deadRefusal);
+  expect('reporting the death passed the banked spare to the will\'s heir, and no skills', !!facts.reportFirst && !!facts.heirBank?.some((s) => baseOf(s.item) === 'iron_sword') && facts.heirSkillXp === 0);
   expect('rival looted the fighter\'s gear and duskiron ore', ['iron_sword', 'iron_mail', 'duskiron_ore'].every((i) => facts.rivalLoot?.some((s) => baseOf(s.item) === i)));
 
   // Dishonest trade + refusal

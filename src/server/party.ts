@@ -23,11 +23,14 @@ function hasPartymates(g: Game, p: Player): boolean {
   return (partyOf(g, p)?.members.length ?? 0) > 1;
 }
 
-/** Other party members in the same region as `p` (walking or not). */
+/**
+ * Other party members on their feet in the same region as `p` (walking or not). A hood fights alone, both ways: a
+ * partner's bonus or credit would say who is under it.
+ */
 export function alliesInZone(g: Game, p: Player): Player[] {
   const pt = partyOf(g, p);
-  if (!pt) return [];
-  return pt.members.filter((id) => id !== p.id).map((id) => g.players.get(id)).filter((o): o is Player => !!o && o.zone === p.zone);
+  if (!pt || p.hood) return [];
+  return pt.members.filter((id) => id !== p.id).map((id) => g.players.get(id)).filter((o): o is Player => !!o && !o.hood && !o.downed && !o.dead && o.zone === p.zone);
 }
 
 /** Attack damage multiplier from allies fighting beside you. */
@@ -40,15 +43,19 @@ function liveInvites(g: Game, pt: Party): [string, number][] {
   return Object.entries(pt.invites).filter(([, exp]) => exp > now);
 }
 
-export function partyView(g: Game, pt: Party): PartyView {
+/** As `viewerId` sees it: nothing from afar, so a distant partner can't watch someone go down, and nothing of a hood. */
+export function partyView(g: Game, pt: Party, viewerId: string): PartyView {
   const now = g.now();
+  const viewer = g.players.get(viewerId)!;
   return {
     id: pt.id,
     leaderId: pt.leaderId,
     members: pt.members.map((id) => {
       const o = g.players.get(id)!;
+      const member = { id, name: o.name, leader: id === pt.leaderId, online: g.isOnline(id) };
+      if (id !== viewerId && (o.zone !== viewer.zone || o.hood)) return { ...member, zone: null, pos: null, walking: null, hp: null, maxHp: null };
       const pos = posOf(g, o);
-      return { id, name: o.name, leader: id === pt.leaderId, online: g.isOnline(id), zone: o.zone, pos: { x: Math.round(pos.x * 10) / 10, y: Math.round(pos.y * 10) / 10 }, walking: !!o.travel, hp: o.hp, maxHp: maxHp(o) };
+      return { ...member, zone: o.zone, pos: { x: Math.round(pos.x * 10) / 10, y: Math.round(pos.y * 10) / 10 }, walking: !!o.travel, hp: o.hp, maxHp: maxHp(o) };
     }),
     invites: liveInvites(g, pt).map(([id, exp]) => ({ playerId: id, name: g.players.get(id)?.name ?? 'unknown', expiresInMs: exp - now })),
   };
@@ -102,7 +109,7 @@ function invite(g: Game, p: Player, payload: Record<string, any>) {
   g.emit('party.invited', { kind: 'player', playerId: targetId }, { partyId: pt.id, fromId: p.id, fromName: p.name, members: pt.members.map((id) => g.players.get(id)?.name), expiresInMs: g.ms(PARTY.inviteTtlMs) }, {});
   opLog(g, p, pt, 'invite', { targetName: target!.name });
   g.setLastAction(p, 'party', `invited ${target!.name} to the party`);
-  return { party: partyView(g, pt) };
+  return { party: partyView(g, pt, p.id) };
 }
 
 function accept(g: Game, p: Player, payload: Record<string, any>) {
@@ -127,7 +134,7 @@ function accept(g: Game, p: Player, payload: Record<string, any>) {
   g.emit('party.joined', { kind: 'party', partyId: pt!.id }, { partyId: pt!.id, playerId: p.id, name: p.name }, {});
   opLog(g, p, pt!, 'join');
   g.setLastAction(p, 'party', `joined ${g.players.get(pt!.leaderId)?.name}'s party`);
-  return { party: partyView(g, pt!) };
+  return { party: partyView(g, pt!, p.id) };
 }
 
 function decline(g: Game, p: Player, payload: Record<string, any>) {
@@ -141,11 +148,11 @@ function decline(g: Game, p: Player, payload: Record<string, any>) {
 }
 
 /** Removes `who` from their party: the next member leads if the leader goes, and an empty party disbands. */
-function removeMember(g: Game, pt: Party, who: Player, action: 'leave' | 'kick') {
+export function removeMember(g: Game, pt: Party, who: Player, action: 'leave' | 'kick' | 'death') {
   pt.members = pt.members.filter((id) => id !== who.id);
   delete who.partyId;
   g.markPlayer(who);
-  g.emit('party.left', { kind: 'party', partyId: pt.id }, { partyId: pt.id, playerId: who.id, name: who.name, kicked: action === 'kick' }, {});
+  g.emit('party.left', { kind: 'party', partyId: pt.id }, { partyId: pt.id, playerId: who.id, name: who.name, kicked: action === 'kick', ...(action === 'death' ? { died: true } : {}) }, {});
   if (action === 'kick') g.emit('party.left', { kind: 'player', playerId: who.id }, { partyId: pt.id, playerId: who.id, name: who.name, kicked: true }, {});
   if (!pt.members.length) {
     g.parties.delete(pt.id);
@@ -171,13 +178,13 @@ function kick(g: Game, p: Player, payload: Record<string, any>) {
   if (targetId === p.id) fail('BAD_REQUEST', 'use party.leave to leave your own party');
   const target = g.players.get(targetId);
   if (!target || !pt.members.includes(targetId)) {
-    if (pt.invites[targetId] !== undefined) { delete pt.invites[targetId]; g.markParty(pt); return { party: partyView(g, pt) }; }
+    if (pt.invites[targetId] !== undefined) { delete pt.invites[targetId]; g.markParty(pt); return { party: partyView(g, pt, p.id) }; }
     fail('NOT_FOUND', `${target?.name ?? targetId} is not in your party`);
   }
   removeMember(g, pt, target!, 'kick');
   opLog(g, p, pt, 'kick', { targetName: target!.name });
   g.setLastAction(p, 'party', `kicked ${target!.name} from the party`);
-  return { party: partyView(g, pt) };
+  return { party: partyView(g, pt, p.id) };
 }
 
 function say(g: Game, p: Player, payload: Record<string, any>) {
@@ -199,6 +206,6 @@ export const partyCommands: Record<string, CommandDef> = {
   'party.decline': rw(decline),
   'party.leave': rw((g, p) => leave(g, p)),
   'party.kick': rw(kick),
-  'party.view': ro((g, p) => { const pt = partyOf(g, p); return { party: pt ? partyView(g, pt) : null, invites: invitesFor(g, p) }; }),
+  'party.view': ro((g, p) => { const pt = partyOf(g, p); return { party: pt ? partyView(g, pt, p.id) : null, invites: invitesFor(g, p) }; }),
   'party.say': rw(say),
 };

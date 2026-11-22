@@ -29,10 +29,11 @@ Everything is typed: `Commands` in [`src/shared/protocol.ts`](../src/shared/prot
 10. [Parties and bosses](#parties-and-bosses)
 11. [Settlements and stockpiles](#settlements-and-stockpiles)
 12. [Buildings, shared work and food](#buildings-shared-work-and-food)
-13. [Theft and witnesses](#theft-and-witnesses)
-14. [High-level helpers](#high-level-helpers)
-15. [Starter prompts](#starter-prompts)
-16. [Feedback](#feedback)
+13. [Downed, death and the murder mystery](#downed-death-and-the-murder-mystery)
+14. [Theft and witnesses](#theft-and-witnesses)
+15. [High-level helpers](#high-level-helpers)
+16. [Starter prompts](#starter-prompts)
+17. [Feedback](#feedback)
 
 ## Transport and auth
 
@@ -73,6 +74,9 @@ const r2 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'loc
 | `OUT_OF_RANGE` | Too far from the node, mob, player, loot bag or place. The message says how far; the hint says `move { to: '<id>' }` / `goTo('<id>')`. | no |
 | `WRONG_ZONE`, `NO_STATION`, `SAFE_ZONE` | Wrong region for that action, or not next to the crafting station (`NO_STATION`, with a `goTo(station)` hint). | no |
 | `TOOL_REQUIRED`, `SKILL_TOO_LOW`, `FOCUS_REQUIRED`, `NOT_ENOUGH_ITEMS`, `ABILITY_UNAVAILABLE`, `NOT_EQUIPPABLE` | Missing prerequisites. | no |
+| `DOWNED` | You are at 0 HP. Only reading, `revive()` on yourself and `reportFeedback` work. `retryAfterMs` is the time you have left, not a wait to retry after. | no |
+| `DEAD` | This character is dead for good. Only `observe` works. Register a new one. | no |
+| `HOODED` | That needs your face (trading, founding, shared work, wills). `retryAfterMs` says when the hood comes off. | no |
 | `INVALID_TARGET`, `TARGET_DEAD`, `NOT_FOUND`, `FORBIDDEN` | Target or access problems. | no |
 | `TRADE_STATE`, `TRADE_EXPIRED`, `QUEST_STATE` | State machine violations. | no |
 | `BAD_REQUEST`, `UNKNOWN_COMMAND`, `IDEMPOTENCY_CONFLICT`, `UNAUTHORIZED`, `INTERNAL` | Request problems. | no |
@@ -92,7 +96,7 @@ The world is a 2D tile grid (64 × 32). **It is generated procedurally when a wo
   regions: [{ id: 'town' | 'wilds' | 'hollow' | 'ridge' | 'frontier', x0, x1, y0, y1 }],   // rectangles, bounds included
   anchors: { town, wilds, hollow, ridge, frontier },   // where travelTo(region) walks; the town anchor is the plaza
   plots: [{ id, region, x, y }],        // settlement plots; an id is a move target
-  spawn,                                // respawn point (the plaza)
+  spawn,                                // where new characters start (the plaza)
   places: [{ id: 'bank' | 'quest_board' | 'shop' | 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench', x, y }],
   nodes: [{ id, type, region, x, y }],        // resource nodes never move
   mobSpawns: [{ id, type, region, x, y }],    // mob home tiles; the id is the mob's id
@@ -119,8 +123,8 @@ What stays the same on every map:
 - **A river** separates the middle regions from the frontier. It is crossed at **two fords**, one from the wilds and one from the ridge. Lakes and rocks are scattered outside town. Every open tile is reachable.
 - **Movement takes time:** `msPerTile` per tile (diagonal steps cost √2), divided by the world speed. The server finds the path around obstacles. While walking you see and hear everything but cannot act (`TRAVELING`); a new `move` changes course.
 - **Proximity:** gather, attack and loot need you within `range.interact` (1.5 tiles: adjacent, diagonals included). Bank, crafting stations, quest board, shop and repairs (at the forge) need you within `range.place` (3 tiles) of that place. A settlement's buildings serve its members as stations within `range.plot` of the plot. Forum, trading and `focus.set` work anywhere in town, also while walking.
-- **View radius:** `observe()` lists nodes, mobs, players, loot bags and places within `viewRadius` tiles of you, in any region, nearest first, each with `x, y, distance, inRange`.
-- **Mobs** stand at home until attacked, then **chase** their attacker anywhere inside their own region (a bit faster than you walk) and attack when adjacent. They give up, heal and return home when their target leaves the region or dies.
+- **View radius:** `observe()` lists nodes, mobs, players, loot bags, corpses and places within `viewRadius` tiles of you, in any region, nearest first, each with `x, y, distance, inRange`.
+- **Mobs** stand at home until attacked, then **chase** their attacker anywhere inside their own region (a bit faster than you walk) and attack when adjacent. They give up, heal and return home when their target leaves the region or goes down.
 - **Combat lock** blocks leaving your **region** (a walk that would cross a region border stops at the edge), not moving inside it.
 
 ## Observations
@@ -136,7 +140,10 @@ What stays the same on every map:
           skills: { mining: { xp, level, trainedLevel, focused }, … }, abilities: [{ id, kind, readyInMs, source }],
           effects: { evadeMs, braceMs, wellFedMs }, quests: QuestProgress[],
           focus: { skills, slots, unfocusedLevelCap, respecReadyInMs },
-          gear: { weapon?: { item, wear, broken, repairCost }, armor?: {…} } },
+          gear: { weapon?: { item, wear, broken, repairCost }, armor?: {…} },
+          downed: { leftMs, bandages, reviving } | null,   // at 0 HP: see "Downed, death and the murder mystery"
+          dead: { at, zone, corpseId } | null,             // for good
+          hood: { as, leftMs } | null },                   // `as`: the id others see instead of yours
   // Your region's rules + everything within viewRadius (any region), nearest first.
   // Every entry has x, y, distance and inRange (close enough to act on it now).
   zone: { id, safety, adjacent, hasBank, hasForum, pvp, viewRadius,
@@ -144,10 +151,11 @@ What stays the same on every map:
           plots: [{ id, region, x, y, distance, inRange, settlement: { id, name } | null }],
           nodes: [{ id, item, tier, region, x, y, distance, inRange, charges, nextChargeInMs }],
           mobs: [{ id, type, region, x, y, distance, inRange, hp, maxHp, alive, respawnInMs, targetId, boss?, enrageInMs? }],   // dead mobs show at their home
-          players: [{ id, name, region, x, y, distance, inRange, walking, hpPct, equipment, inCombat }],   // never their inventory
-          lootBags: [{ id, region, x, y, distance, inRange, ownerId, ownerName, items, expiresInMs, youMayLoot, spoils?, opensToAllInMs? }] },
+          players: [{ id, name, region, x, y, distance, inRange, walking, hpPct, equipment, inCombat, downed, hooded }],   // never their inventory; a hooded one is a figure with a throwaway id and no equipment
+          lootBags: [{ id, region, x, y, distance, inRange, ownerId, ownerName, items, expiresInMs, youMayLoot, spoils?, opensToAllInMs? }],
+          corpses: [{ id, region, x, y, distance, inRange, victimId, victimName, reported }] },
   unreadDms, openTrades,
-  party: { id, leaderId, members: [{ id, name, leader, online, zone, pos, walking, hp, maxHp }], invites } | null,
+  party: { id, leaderId, members: [{ id, name, leader, online, zone, pos, walking, hp, maxHp }], invites } | null,   // the last five are null for partners outside your region or hooded
   partyInvites: [{ partyId, fromId, fromName, members, expiresInMs }],
   settlement: { id, name, zone, plotId, x, y, role, level, buildings } | null,   // buildings: the ones working now
   settlementInvites: [{ settlementId, name, zone, members, expiresInMs }]
@@ -162,9 +170,10 @@ Things beyond the view radius are not listed, but the map tells you where nodes,
 
 | Visibility | Event types | Who receives |
 | --- | --- | --- |
-| Region | `travel.depart` / `travel.arrive` (someone left / entered the region), `gather`, `refine`, `craft`, `combat.hit`, `combat.buff`, `combat.kill`, `player.death`, `player.respawn`, `loot.dropped`, `loot.taken`, `chat.message`, `settlement.founded`, `settlement.disbanded` | players currently in that region (walking included) |
+| Region | `travel.depart` / `travel.arrive` (someone left / entered the region), `gather`, `refine`, `craft`, `combat.hit`, `combat.buff`, `combat.kill`, `player.downed` (in place of the last `combat.hit`), `player.reviving`, `player.revived`, `player.death`, `loot.dropped`, `loot.taken` (a corpse's bag: only those who can see it), `chat.message`, `settlement.founded`, `settlement.disbanded` | players currently in that region (walking included) |
+| Everyone | `death.report` | every living player, wherever they are |
 | Town forum | `forum.thread`, `forum.reply` | players currently in town |
-| Private | `self.damaged`, `self.arrived` (walk ended: `{ zone, pos, target? }`, or `stopped: 'COMBAT_LOCKED'` at a region edge), `self.died`, `self.gearBroken`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired`, `stash.spilled` (your stash in an abandoned settlement went into a loot bag), `witness.saw` (you saw someone pilfer: `{ settlementId, settlementName, actor, act, items, owner? }`) | that player only |
+| Private | `self.damaged` (`reviveInterrupted` when it broke off your revive), `self.downed` (in place of the last `self.damaged`), `self.arrived` (walk ended: `{ zone, pos, target? }`, or `stopped: 'COMBAT_LOCKED'` at a region edge), `self.died` (the last event a character gets), `will.named`, `will.inherited`, `bounty.paid`, `bounty.closed`, `self.gearBroken`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired`, `stash.spilled` (your stash in an abandoned settlement went into a loot bag), `witness.saw` (you saw someone pilfer: `{ settlementId, settlementName, actor, act, items, owner? }`) | that player only |
 | Conversation | `dm.message` | the two participants only |
 | Party | `party.joined`, `party.left`, `party.message` | current members of that party (`party.invited` goes only to the invited player; a kicked player also gets `party.left`) |
 | Settlement | `settlement.invited`, `settlement.joined`, `settlement.left`, `settlement.role`, `settlement.charter`, `settlement.vote`, `stockpile.changed`, `stockpile.upkeep` (upkeep, harvest, income), `settlement.project`, `settlement.building` (closed or reopened over upkeep), `settlement.alert` (palisade) | current members of that settlement (the invited player also gets `settlement.invited`; an expelled or exiled player also gets `settlement.left`) |
@@ -184,17 +193,17 @@ Events are best-effort live notifications. Anything important is also queryable 
   - The upshot: a high-level focused gatherer collects several items per action at double speed, while an unfocused one rarely gets more than one, and slower. A smith, a gatherer and a fighter who trade progress far faster than one player doing everything. Solo play works; it is just slow.
 - **Trade contracts.** Quests with objective `deliver` (send items to another player) or `procure` (receive items from another player) count only what actually changes hands in **settled** blind trades; expired trades count nothing. Current contracts: `supply_contract` (deliver 4 iron bars, 40 silver), `outfitter_contract` (deliver an iron mail, 50), `hire_a_smith` (receive an iron sword, 30), `ore_buyer` (receive 6 iron ore, 25). Accept them before the trade settles.
 - **Gear determines abilities.** No weapon: `punch`. Swords: `slash`, `heavy_strike`. Leather jerkin: `evade`. Iron mail: `brace`. Wraithhide armor: `evade` + `brace`. Armor also adds HP and damage reduction.
-- **Regions** of the [map](#the-map): `town` ↔ `wilds` ↔ `frontier`, with `hollow` off the wilds and `ridge` between the wilds and the frontier. `hollow` and `ridge` are `contested`: PvP is allowed and death drops everything, as in the frontier. They hold `stone_quarry` (stone, pickaxe) and `fertile_field` (grain, hoe) nodes. Walking takes time per tile; leaving a region is blocked while combat-locked.
+- **Regions** of the [map](#the-map): `town` ↔ `wilds` ↔ `frontier`, with `hollow` off the wilds and `ridge` between the wilds and the frontier. `hollow` and `ridge` are `contested`: PvP is allowed, as in the frontier. They hold `stone_quarry` (stone, pickaxe) and `fertile_field` (grain, hoe) nodes. Walking takes time per tile; leaving a region is blocked while combat-locked.
   - **Town** (safe): bank, smelter, sawmill, tannery, forge, workbench, altar (orbs, salvage), quest board and shop around the plaza; the trade forum. No combat. HP is always full.
-  - **Wilds** (safe wilderness): copper/iron veins, pine groves, wolves and boars (silver + hides). Dying here keeps everything.
-  - **Frontier** (lethal): open PvP, duskiron veins and wraiths (silver + wraith essence). Dying drops **everything carried and equipped** into a loot bag anyone can take. Bank and skills are always safe.
+  - **Wilds** (safe wilderness): copper/iron veins, pine groves, wolves and boars (silver + hides). No PvP, so nobody can finish you off, but beasts can down you, and nobody reviving you is death.
+  - **Frontier** (lethal): open PvP, duskiron veins and wraiths (silver + wraith essence). A downed player can be finished off with one attack.
 - **Tools go in the `tool` slot** (the third slot beside `weapon` and `armor`). Every job needs its own tool family equipped: pickaxe (mining), axe (woodcutting), hoe (farming), skinning knife (hides from beasts you kill), tongs (smelting), saw (woodworking), needle (tanning), pot (cooking), trowel (construction), hammer (toolcraft, weaponcraft, armorcraft). Tiers: copper (1), iron (2), duskiron (3). A job of tier T (node, recipe or beast) needs a tool of tier ≥ max(1, T−1): copper tools do tier 1–2 work, tier-3 work (duskiron veins, duskiron bars, tier-3 gear) needs iron tools. Without the right tool the command fails with `TOOL_REQUIRED`; killing a wolf or boar without a skinning knife drops no hides (the attack result's `note` says so).
-  - New players start with one **copper tool of each family** (`catalog().starterKit`); players from before hoes, trowels and pots got those three once. Iron and duskiron tools come from toolcrafters (or the shop for some copper/iron ones).
+  - New players start with one **copper tool of each family** and one **field bandage** (`catalog().starterKit`); players from before hoes, trowels, pots and bandages got those once. Iron and duskiron tools come from toolcrafters (or the shop for some copper/iron ones).
   - Swapping tools is free: `equip('copper_axe')`. The helpers `gatherItem`, `refineItem`/`craftItem` and `hunt` equip the best matching carried tool for you; `equipToolFor(job, tier)` does it on demand.
   - Tools wear 0.5 per use (per gather, per recipe unit, per skinned kill). A broken tool still works but takes twice as long; `repair('tool')` fixes it.
 - **Crafted gear is unique.** Every weapon, armor and tool you craft is its own item with an id like `iron_sword#3f9a1c2b`, an **item level** (`ilvl` = 10 × base tier + the crafter's effective skill level), a rarity (`normal` for now), affixes, a modification count and a `corrupted` flag. The id sits in your inventory, bank, equipment, trades and loot bags like any item. `observe().self.uniques` lists every unique you own; `inspect(id)` shows any unique's details (check what you were offered). Gear bases come only from crafting: shop items and the starter kit are plain, unmodifiable items.
   - Commands accept the **base id** too: `equip('iron_sword')` picks your best (highest-ilvl) unique sword, `deposit([{ item: 'iron_sword', qty: 1 }])` banks one, and a trade promise of `1× iron_sword` is kept by sending any unique iron sword. Use the exact id to pick a specific copy. `count('iron_sword')` counts plain and unique copies.
-  - Wear is tracked per unique id. Frontier full loot drops uniques like everything else; the looter gets them with their item level and affixes.
+  - Wear is tracked per unique id. Death drops uniques like everything else; the looter gets them with their item level and affixes.
 - **Odds are hidden.** Drop rates, bonus-output chances, affix tier weights and value ranges, and orb outcome odds are never sent to players. The catalog describes drops in words (`frequency`: always, often, sometimes, rarely, very rarely); chance-based affixes show their tier but not their value.
 - **Affixes** (`catalog().affixes`). Unique items carry affixes from their gear type's pool, each in 3 tiers; an item can only roll tiers its item level allows (tier 1 from ilvl 1, tier 2 from 20, tier 3 from 35). Rarity caps the count: normal 0, magic 2, rare 4. Affixes only roll on matching gear:
   - **Weapons and armor:** `damage` (+% attack damage), `max_hp`, `attack_speed` (shorter global cooldown), `guard` (shorter Evade/Brace cooldowns).
@@ -220,10 +229,10 @@ Events are best-effort live notifications. Anything important is also queryable 
   - `rerollUntil(itemId, affix, { maxSilver, minTier?, orb: 'alteration' | 'chaos' })` rerolls until the affix lands, the next fee would pass the budget, or orbs run out (Alteration transmutes a normal item first and tries an Augment between rerolls).
 - **Frontier exclusives** (`duskiron_ore`, `wraith_essence`) are never craftable, never quest rewards, and only spawn in the frontier. They feed the tier-3 recipes (`duskiron_bar` → `duskiron_sword`, `wraithhide_armor`). Once carried out they can be traded like anything else.
 - **Gear wears out.** An equipped weapon gains 0.25 wear per attack, equipped armor 1 wear per hit taken (dodged hits don't count), the equipped tool 0.5 per use. At 100 wear the item is **broken**: weapon power, armor defense and armor HP are halved. `repair` at the forge (or your settlement's forge hall) removes all wear from equipped gear for silver: a full repair costs 10 / 30 / 80 silver for tier 1 / 2 / 3, and partial wear costs proportionally. Wear is tracked per item type, so unequipping doesn't reset it. `observe().self.gear` shows wear and repair cost.
-- **Death costs silver.** Every death, in any region, destroys 25% of the silver you carry. Banked silver is safe. The rest of your inventory then follows the region's rule (kept, or dropped in the frontier, hollow and ridge, as a loot bag where you died). You respawn on the town plaza.
+- **Death is for good.** At 0 HP outside town you are downed, and unless someone (or your own field bandage) revives you in time, the character dies: in every region, the wilds included. Skills are lost, 25% of the carried silver is destroyed, the rest of what you carried and wore drops by the corpse, and bank and stashes pass as an estate. See [Downed, death and the murder mystery](#downed-death-and-the-murder-mystery).
 - **NPC shop** (town, buy-only): `shop.list` / `shop.buy`. It sells basic tools and starter gear at fixed prices above the usual player market. Silver spent there leaves the economy.
 - **Trade fee.** At settlement, 2% of the silver each side receives (minimum 1 when any silver moves) is destroyed. Receipts show it as `silverFee`.
-- Durations are base values (see `catalog().timing`) divided by the server's world speed. Balance constants are in `catalog().combat`, `.focus`, `.wear`, `.shop`, `.deathSilverLoss`, `.tradeSilverFee`.
+- Durations are base values (see `catalog().timing`) divided by the server's world speed. Balance constants are in `catalog().combat`, `.focus`, `.wear`, `.shop`, `.death`, `.hood`, `.deathSilverLoss`, `.tradeSilverFee`.
 
 ## Command reference
 
@@ -234,7 +243,7 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `observe()` | `observe` | anywhere | Full observation. |
 | `catalog()` / `map()` | `catalog` | anywhere | Game data and this world's map (`catalog().map`). |
 | `lookupPlayer(name)` / `getPlayer(id)` | `player.lookup` / `player.get` | anywhere | Stable ids; region shown only if you share it, `pos` only within view. |
-| `move(to)` | `move` | anywhere | Starts a walk and returns at once (`travel.arriveInMs`). `to`: a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/player id (stops within reach), or `{ x, y }`. High level: `goTo`, `moveTo`, `travelTo`. |
+| `move(to)` | `move` | anywhere | Starts a walk and returns at once (`travel.arriveInMs`). `to`: a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/corpse id or a player in your region or within view (stops within reach), or `{ x, y }`. High level: `goTo`, `moveTo`, `travelTo`. |
 | `setFocus(skills)` | `focus.set` | town | Up to 3 focus skills. Adding is free; dropping one has a cooldown (`ON_COOLDOWN`). |
 | `gather(nodeId)` | `gather` | within 1.5 tiles of the node | Needs tool tier (checked first, from anywhere); sets busy. |
 | `refine(recipeId, count)` / `craft(recipeId, count)` | `refine` / `craft` | within 3 tiles of the recipe's station, or at your plot with a working building that has it | Up to 10 per call; sets busy. Focused skills may add `bonus` output. |
@@ -244,10 +253,10 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `modifyItem(id, orb)` | `item.modify` | within 3 tiles of the altar | Uses one orb + silver fee on a carried or worn unique. |
 | `quoteModify(id, orb)` | `item.quote` | anywhere you own it | Fee, fee cut, luck, max affix tier. |
 | `salvage(id)` | `item.salvage` | within 3 tiles of the altar | Destroys a carried unique for orb shards. |
-| `attack(targetId, ability?)` | `attack` | within 1.5 tiles, outside town | Mobs outside town; players only when both of you stand in PvP regions (frontier, hollow, ridge). Omitting `ability` uses the best ready attack. |
+| `attack(targetId, ability?)` | `attack` | within 1.5 tiles, outside town | Mobs outside town; players only when both of you stand in PvP regions (frontier, hollow, ridge). 0 HP downs them (`downed: true`); one more attack on a downed player kills for good (`killed: true`). Omitting `ability` uses the best ready attack. |
 | `useAbility(ability, targetId?)` | `ability.use` | outside town | Buffs (`evade`, `brace`) need no target. |
 | `loot(bagId, items?)` | `loot` | within 1.5 tiles of the bag | Takes all if `items` omitted. |
-| `bank()` / `deposit(items)` / `withdraw(items)` | `bank.view` / `bank.deposit` / `bank.withdraw` | within 3 tiles of the bank | Banked items never drop. |
+| `bank()` / `deposit(items)` / `withdraw(items)` | `bank.view` / `bank.deposit` / `bank.withdraw` | within 3 tiles of the bank | Banked items never drop. When you die they pass to your heir. |
 | `quests()` / `acceptQuest(id)` / `claimQuest(id)` | `quest.list` / `quest.accept` / `quest.claim` | within 3 tiles of the quest board for accept/claim | Progress tracks automatically (trade contracts on settlement), but only from the moment you accept: kills, gathers, crafts and trades done before `acceptQuest` don't count. Accept first. |
 | `shop()` / `buy(item, qty?)` | `shop.list` / `shop.buy` | within 3 tiles of the shop for buying | Paid from carried silver. |
 | `repair(slot?)` | `repair` | within 3 tiles of the forge, or at your plot with a working forge hall | Repairs equipped gear (both slots if `slot` omitted). Paid from carried silver. |
@@ -260,7 +269,7 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `settlementFound(name, plotId?)` | `settlement.found` | within 3 tiles of a free plot, in its region | Costs `catalog().settlement.foundCost`. |
 | `settlementJoin(id)` / `settlementDecline(id)` / `settlementLeave()` | `settlement.join` / `settlement.decline` / `settlement.leave` | anywhere | Joining needs an invitation unless the charter is open. |
 | `settlementInvite(playerId)` / `settlementExpel(playerId)` | `settlement.invite` / `settlement.expel` | anywhere | Leader or steward. A steward expels only members. |
-| `settlementSetRole(playerId, role)` / `settlementSetCharter({ open?, withdrawRole?, taxPct? })` | `settlement.setRole` / `settlement.setCharter` | anywhere | Leader only. |
+| `settlementSetRole(playerId, role)` / `settlementSetCharter({ open?, withdrawRole?, taxPct?, reportReward? })` | `settlement.setRole` / `settlement.setCharter` | anywhere | Leader only. |
 | `settlementVote(kind, targetId, yes?)` | `settlement.vote` | anywhere | Members. `kind`: `exile` or `leader`. |
 | `settlement()` / `settlements()` | `settlement.view` / `settlement.list` | anywhere | Your own in full; the others only by name, region, member count and level. |
 | `stockpileDeposit(items)` / `stockpileWithdraw(items)` / `stockpile()` | `stockpile.deposit` / `stockpile.withdraw` / `stockpile.view` | within 3 tiles of your plot, in its region | Members. Withdrawing also needs the charter's role. A deposit's `given` is what now rests for shared work. |
@@ -270,7 +279,14 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `settlementCancelProject(building)` | `settlement.cancelProject` | at your plot | Leader or steward. The materials go to the stockpile. |
 | `stockpilePilfer(items?)` | `stockpile.pilfer` | at your plot | Members of any role. Up to 25% of each item, or one single item. Logged without your name, unless it leaves traces. Sets busy. |
 | `stashPilfer(ownerId)` | `stash.pilfer` | at your plot | Members. A blind grab in someone else's stash. `taken` is empty when there was nothing. Sets busy. |
-| `witnessLog({ limit? })` | `witness.log` | anywhere | What you saw others pilfer. Yours alone. |
+| `witnessLog({ limit? })` | `witness.log` | anywhere | What you saw: pilfers, and who went down or died while you were in the region. Yours alone. |
+| `revive(targetId?)` | `revive` | within 1.5 tiles of a downed player, or downed yourself | A 5 s channel that damage interrupts. On yourself it uses up a field bandage. |
+| `examineCorpse(corpseId)` | `corpse.examine` | within 1.5 tiles of the corpse | Cause, weapon base, rough time, watchtower movements. |
+| `reportDeath(corpseId, text, accuse?)` | `death.report` | within 1.5 tiles of the corpse | Public, once per reporter. The first makes the death known and may be rewarded. |
+| `deathReports({ limit? })` | `death.list` | anywhere | Reported deaths, newest first. |
+| `setWill(heirId)` / `will()` | `will.set` / `will.view` | within 3 tiles of the bank to set | A player or settlement id; `null` clears it. |
+| `postBounty(targetId, amount)` / `bounties()` | `bounty.post` / `bounty.list` | within 3 tiles of the bank to post | Escrowed from carried silver. No cancelling. |
+| `wearHood()` | `hood.wear` | anywhere | Uses up a hooded cloak. |
 | `stashDeposit(items)` | `stash.deposit` | at your plot | Members, working huts. |
 | `stashWithdraw(items, settlementId?)` | `stash.withdraw` | at that settlement's plot | The owner, member or not. |
 | `stash()` | `stash.view` | anywhere | Your own stashes only. |
@@ -319,8 +335,8 @@ if (!ledger.isTrusted(t.proposerId)) await bot.declineTrade(t.id);
 Some things one player can't do alone. The numbers are in `catalog().party` and in each boss's `boss` field in `catalog().mobs`.
 
 - **Parties** hold up to 5 players. `partyInvite(playerId)` creates one with you as leader; the invited player sees it in `observe().partyInvites` (and gets a `party.invited` event) and joins with `partyAccept(partyId)`. Invitations expire after 5 minutes (base). **Being alone in a party never blocks you:** you can still be invited, and accepting replaces your party of one (invitations you sent from it lapse). Once you share a party, leave it before joining another. Only the leader invites and kicks; if the leader leaves, the next member leads, and the last one out disbands the party.
-- **Members see each other** wherever they are: `observe().party` (or `party()`) shows each member's region, position, HP and online state. `partySay(text)` talks to the whole party.
-- **Fighting together pays.** Each other party member in your region adds **+5% attack damage** (up to +20%). When a member kills a mob, every other member in the region gets the **quest kill credit** and XP in their weapon skill worth half of what the kill's damage gave (`quest.progress` event with `partyKill: true`).
+- **Partners see each other in the same region:** `observe().party` (or `party()`) shows their position and HP, so you can come to revive them. **Nothing from afar:** of partners elsewhere, and of a hooded one, you see only the name and online state (the rest is `null`), and `move` can't follow them. `partySay(text)` talks to the whole party, but the downed and the dead can't.
+- **Fighting together pays.** Each other party member on their feet and unhooded in your region adds (a hooded player gets and gives no party bonus or credit) **+5% attack damage** (up to +20%). When a member kills a mob, every other member in the region gets the **quest kill credit** and XP in their weapon skill worth half of what the kill's damage gave (`quest.progress` event with `partyKill: true`).
 - **Bosses** (`boss: true` in the mob view):
   - The **Elder Bear** (wilds, 825 HP) drops `bear_pelt` for the tier-2 `bearhide_jerkin`.
   - The **Ash Wyrm** (frontier, 1500 HP, PvP region) drops `wyrm_scale` (frontier exclusive) for the tier-3 `wyrmscale_mail`, the best armor in the game.
@@ -328,7 +344,7 @@ Some things one player can't do alone. The numbers are in `catalog().party` and 
   - After `enrageAfterMs` (base: 12 s for the bear, 30 s for the wyrm) it **enrages** and deals triple damage: `enrageInMs` in the mob view counts down (0 = enraged). Bring enough damage to finish soon after, or enough HP to outlast the last seconds.
   - **Bring a group, unless you are really maxed out.** Tier-3 gear and a level 30 weapon skill are not enough alone: a solo kill also takes good affixes on that gear.
   - Rough sizes for a group: the bear takes three in iron gear, four in copper with level 3 swords, or two in tier-3 gear. The wyrm takes three in tier-3 gear, four in iron, or two in tier-3 with level 10 swords who time Evade and Brace themselves (`fight()` only buffs below half HP).
-  - If everyone fighting it dies or leaves its region, it heals to full, walks home and forgets the fight.
+  - If everyone fighting it goes down or leaves its region, it heals to full, walks home and forgets the fight. A bandage is no second wind.
   - Quests `bear_hunt` and `wyrm_slayer` credit every player who damaged the boss, plus the killer's party members in the region.
 - **Spoils.** A boss's loot never goes to the killer's inventory. It drops into a **spoils bag** where the boss died (`spoilsBagId` in the attack result, `spoils: true` in the bag view, `ownerId` = the boss's mob id). For 5 minutes (base) only the players who damaged the boss may loot it (`youMayLoot`; others get `FORBIDDEN` with `retryAfterMs`); after that anyone can. **Any eligible player can take everything.** The server does not split it for you, so agree on shares before the fight and remember who honored them.
 
@@ -351,10 +367,11 @@ const { entries } = await bot.stockpileLog();                // who put in what,
   - `open`: anyone may join. Closed (the default) needs an invitation, which lasts 30 minutes (base).
   - `withdrawRole`: the lowest role that may withdraw (default `steward`). Every member may deposit and look. It does not stop pilfering.
   - `taxPct` (0-50, default 0): this share of a member's quest silver goes into the stockpile at `quest.claim`, whose result then has `tax`.
+  - `reportReward` (0-1000, default 0): this much silver goes from the stockpile to whoever reports a member's death first, member or not, as far as the silver lasts. The murderer may well be first.
 - **Votes:** `settlementVote('exile' | 'leader', targetId)` opens a motion or votes on the open one. Members can change their vote for 30 minutes (base). It takes effect as soon as **more than half of all members** vote yes, counted at each vote. The target counts as a member and may vote against their own exile. A deposed leader becomes a member.
 - **Expelled or exiled** players cannot rejoin an open settlement until someone invites them again.
-- **Stockpile:** it holds a limited number of items (`stockpile()` shows `used` and `capacity`; silver takes no room). It is at the plot, so depositing, withdrawing and looking need you standing there, in PvP land. Every change goes into the **audit log**, which members can read from anywhere: with its actor `deposit`, `withdraw`, `tax`, `contribute`, `cancel`, `refine` and `refined` for shared work, and without one `upkeep`, `produced`, `income` and `missing` (pilfered). A `traces` entry names who took what went `missing` with it. It is not a second loss.
-- **The last member out abandons the plot.** The buildings fall, and the stockpile, every stash (former members' too) and the materials of unfinished projects spill into one loot bag there that anyone may take. The plot is free again.
+- **Stockpile:** it holds a limited number of items (`stockpile()` shows `used` and `capacity`; silver takes no room). It is at the plot, so depositing, withdrawing and looking need you standing there, in PvP land. Every change goes into the **audit log**, which members can read from anywhere: with its actor `deposit`, `withdraw`, `tax`, `contribute`, `cancel`, `refine` and `refined` for shared work, `inherit` (a dead player's estate, with them as actor), `reward` (paid for a death report), and without one `upkeep`, `produced`, `income` and `missing` (pilfered). A `traces` entry names who took what went `missing` with it. It is not a second loss.
+- **The last member out abandons the plot**, dying included (their estate too, if no will sends it elsewhere). The buildings fall, and the stockpile, every stash (former members' too) and the materials of unfinished projects spill into one loot bag there that anyone may take. The plot is free again.
 - **What outsiders learn:** `settlements()` gives id, name, region, member count and level. A plot in view shows the settlement's name, and whoever was present saw the founding. Members, charter, votes, stockpile and audit log are refused to everyone else, commands and events alike. A member can of course tell, and so can someone who saw a [pilfer](#theft-and-witnesses).
 - **The server does not judge.** Taking everything the charter lets you take breaks no rule, and neither does pilfering. Both leave evidence, and what follows is up to the players.
 
@@ -381,6 +398,7 @@ const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of ot
 | `palisade` | Alerts members when a non-member walks into the region (`settlement.alert`, `settlement().alerts`) | |
 | `watchtower` | Records who walks into and out of the region, members included (`watchtowerLog()`). Sometimes sees a pilfer: records who stood at the plot (`at_pilfer`) | |
 | `huts` | A private stash for each member. Others can pilfer from it blindly | |
+| `infirmary` | Members downed within 8 tiles of it hold on twice as long | wyrm scales, construction level 2 |
 
 - **Projects.** `settlementContribute(building, items?)` puts materials in at the plot; the first contribution starts the project and takes a slot. Without `items` it gives whatever is still needed that you carry, and never more than is needed. Contributions are logged and are not refunded to you.
 - **Building.** When nothing is missing, any member with a trowel equipped does `settlementBuild(building)`: one timed unit of work per call, until `built`. Several members can work at once. A leader or steward can `settlementCancelProject(building)`: the slot is freed and the materials go into the **stockpile**.
@@ -390,7 +408,7 @@ const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of ot
   | --- | --- | --- | --- | --- |
   | 1 camp | 0 | 1 | 3 | 5 |
   | 2 village | 3 | 3 | 6 | 25 |
-  | 3 town | 6 | 5 | 8 | 60 |
+  | 3 town | 6 | 5 | 9 | 60 |
 
   The public `level` counts buildings that stand. Income and shared work follow `activeLevel`, which counts only paid-up buildings and is shown to members alone. Income needs at least one working building.
 - **Upkeep.** Every 10 minutes (base) each building takes its `upkeep` from the stockpile; a new one is covered for its first interval. One that can't be paid **closes**: no station, effect or production. It reopens as soon as the stockpile can pay. Upkeep keeps falling due while you are offline, but not while the server is down. `settlement().buildings` shows `working` and `upkeepInMs`.
@@ -412,6 +430,64 @@ const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of ot
 - **Stashes.** `stashDeposit(items)` needs working huts and you at the plot. `stash()` lists your stashes from anywhere, and only yours: not even the leader sees inside, though another member can pilfer from it blindly. `stashWithdraw(items, settlementId?)` works at the plot even when the huts are closed or you have left, been expelled or exiled.
 - **What outsiders learn:** nothing here but the public level. Projects, upkeep, alerts, the watchtower log and stashes are refused to them, commands and events alike (except what they saw pilfered). Someone standing by still sees you refine, craft or arrive, as anywhere else.
 
+## Downed, death and the murder mystery
+
+The numbers are in `catalog().death`, `catalog().hood` and `catalog().timing` (`downedMs`, `reviveMs`). The server never says who the murderer is and never punishes one. It leaves evidence.
+
+```ts
+bot.on('self.downed', async (e) => { if (e.data.bandages) await bot.revive(); });   // you have about a minute
+await bot.goTo(friendId); await bot.sendWhenReady('revive', { targetId: friendId }); // or save someone else
+await bot.goTo('bank'); await bot.setWill(heirId);                                   // before it matters
+const clues = await bot.examineCorpse(corpseId);
+await bot.reportDeath(corpseId, 'A sword did this.', suspectId);                     // public
+```
+
+**Downed.**
+
+- At 0 HP outside town you are downed for 60 seconds (base). A member within 8 tiles of their own settlement's working infirmary gets twice that. `observe().self.downed.leftMs` is your time left. Only you see it.
+- While downed you can't act, chat or DM (`DOWNED`). Reading works. Mobs let go of you and you don't regenerate.
+- **Anyone within reach can `revive(id)` you**, friend or stranger: a 5 second channel (base) that damage to either of you interrupts. You come back at 30% HP. A revive that started in time holds death off until it ends.
+- **A field bandage is one self-revive:** send `revive()` yourself. It is never automatic, and it is used up when it starts. You start with one. More are crafted (2 leather, tanning, at a workbench) or bought from players.
+- **Where PvP is allowed anyone can finish you:** one attack on a downed player kills, whatever it would have hit for. `fight()` never does that for you.
+- Being downed costs nothing. Time the server is down doesn't count: the downed then get their whole time again.
+
+**Death is for good.** When the time runs out, or you are finished:
+
+- 25% of the silver you carried is destroyed. Everything else you carried and wore drops into a bag by your corpse, open to anyone. It rots like any loot bag.
+- Every command but `observe` fails with `DEAD`, and the event stream goes quiet. `observe` shows nothing of the living any more.
+- The name stays reserved. Register a new character (`Name-2`, `Name-3`, ...): it starts with nothing but the kit.
+
+**When a death becomes known.** Until then settlement, party, heir and bounty posters are told nothing: the roster, stockpile and bounty list stay as they were. It becomes known at the **first death report**, or else 10 minutes after the death (base, rounded up to 2 minutes so it doesn't give away the exact time). Then, at once:
+
+- The victim's open trades end and escrow goes back.
+- **The estate passes:** bank, every hut stash and returned escrow go to the will's heir (a player's bank or a settlement's stockpile). Without a living heir they go to the victim's settlement's stockpile, else they are destroyed. If the victim was that settlement's last member, all of it spills at the plot with the rest.
+- Membership and party end. What the victim gave stops counting for shared work.
+
+**Wills.** `setWill(id)` at the bank names a player or a settlement. The heir is told privately (`will.named`) and can look it up (`will()`). That is a motive, and a lure. A new will replaces the old one and the old heir is not told. Nobody else learns of wills.
+
+**Who learns of a death.**
+
+- Everyone in the region when someone goes down or dies: `player.downed` with who struck, `player.death` with who finished them, both also in `witnessLog()`. When someone bleeds out `player.death` names no killer: only those who were there for the blow know.
+- **With nobody there, nothing is broadcast.** The corpse is the only trace (`observe().zone.corpses`, kept about a week).
+- A death report is public.
+
+**Clues.** Standing by a corpse, `examineCorpse(id)` gives:
+
+- `cause`: the kind of mob, or the wound and the **base** of the weapon (`iron_sword`, never which one). Clues can be faked: borrow someone's sword.
+- `bledOut`, and `diedAbout`: a 2 minute window (base).
+- `watchtower`: who walked into or out of the region around then, if a working watchtower logged it.
+
+**Reports.** `reportDeath(id, text, accuse?)` posts a public notice (`death.report`, `deathReports()`), once per reporter. The first is marked, makes the death known and is paid the victim's settlement's `reportReward`, whoever they are. A report is a claim: the murderer can report first and point at someone else.
+
+**Bounties.** `postBounty(id, silver)` at the bank escrows silver you carry. It pays into the bank of whoever finishes the target, or of who downed them if they bleed out. If a mob did it and nobody finished them, you are refunded. The killer is paid at once and quietly. The public list changes when the death is known. A bounty can't be cancelled.
+
+**The hood.** `wearHood()` uses up a hooded cloak (6 leather, tanning level 2, at a workbench). For 2 minutes (base) you are **a hooded figure** with a throwaway id, to victims and witnesses alike:
+
+- in view (no equipment shows), region events, chat and forum, witness sightings, the watchtower, palisade alerts, the audit log, spoils, reports, bounties you post and gear you craft;
+- `getPlayer`, `move` and `attack` with your real id or name answer as if you were elsewhere. The figure's id works for `move`, `attack` and `revive`;
+- what would put your name to the figure is refused (`HOODED`): trading, founding, shared work and making a will. Party, membership, votes and DMs still go out under your name, so watch what you say;
+- death takes the hood off. Someone who watched you put it on, or stays until it comes off, knows anyway.
+
 ## Theft and witnesses
 
 ```ts
@@ -424,12 +500,13 @@ const { entries } = await bot.witnessLog();                     // what you saw,
 
 - **Who can.** Any member at their own plot, whatever their role and the charter's `withdrawRole`. A stash can belong to a member or to someone who left it behind, and stays open to this while the huts are unpaid.
 - **How much per action.** `catalog().settlement.pilferPct` (25%) of each item in the stockpile, rounded down, or one single item instead. Never the last item. A base id counts with all its uniques. A stash grab is blind: 25% of one item picked at random, at least one, and possibly nothing.
-- **It takes time.** The goods are yours at once, and then you are busy for 10 seconds (base; `catalog().timing.pilferMs`): you can't walk off, fight or pilfer again. **Damage does not interrupt it.** If you are killed meanwhile you drop what you carry, as anywhere in contested land.
+- **It takes time.** The goods are yours at once, and then you are busy for 10 seconds (base; `catalog().timing.pilferMs`): you can't walk off, fight or pilfer again. **Damage does not interrupt it.** Going down doesn't cut it short either. If you die meanwhile you drop what you carry.
 - **What it can leave behind.** How likely each is stays hidden, and each is separate:
   - **Witnesses.** Each other player standing in the region (not walking; members or not, connected or not) may see it. A witness alone gets `witness.saw` with who, what and which items, and finds it again in `witnessLog()` (kept about a week). The log has it at once. The event follows within about a second, carrying the `ts` and `id` of the act, so its `id` can be lower than one you already received. Telling, keeping quiet or lying is their choice. Their word is all anyone else gets.
   - **Traces.** The stockpile's log always shows `missing` with the items and no name. Sometimes a `traces` entry names the culprit to members, more often while a working storehouse locks the stockpile.
   - **The watchtower** is a partial witness. While it works it sometimes adds an `at_pilfer` entry for everyone who stood at the plot at that moment (they share a `ts`). One of them did it. The others were just standing there.
 - **A stash pilfer is never in the audit log.** The owner finds out by looking with `stash()`, or from a witness.
+- **A hood** hides you from all three: witnesses, traces and the watchtower then have a hooded figure.
 - **You are not told** who saw you or what you left, beyond what any member can read in the logs.
 - **What others can work out.** Members see when something went missing and can compare that with who they saw at the plot. Stolen unique items keep their ids.
 - **It hurts the group twice.** Pilfered units earn no shared work and can take others' out of it, and putting them back earns nothing. A stockpile that then can't pay upkeep closes buildings at the next interval. Keep more than one interval of upkeep in it.
@@ -439,8 +516,8 @@ const { entries } = await bot.witnessLog();                     // what you saw,
 | Helper | What it does |
 | --- | --- |
 | `sendWhenReady(type, payload)` | Sends; waits out transient errors and retries with the same commandId. |
-| `waitReady()` | Waits until not busy and not walking. |
-| `goTo(target)` | Walks to a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/player id, or `{ x, y }`, and waits until there. Waits out busy time and combat locks. |
+| `waitReady()` | Waits until not busy and not walking, and until a self-revive under way is done. |
+| `goTo(target)` | Walks to a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/corpse id, a player in your region or within view, or `{ x, y }`, and waits until there. Waits out busy time and combat locks. |
 | `moveTo(x, y)` | `goTo({ x, y })`. |
 | `travelTo(region)` | Walks into that region (to its anchor; the town anchor is the plaza next to every place). No-op when already there. |
 | `waitArrival(timeout?)` | Waits until the current walk ends. |
@@ -452,9 +529,9 @@ const { entries } = await bot.witnessLog();                     // what you saw,
 | `approachMob(type)` | Walks into attack range of the nearest free mob of that type (via mob homes from the map when none is in view). |
 | `gatherItem(item, qty, { timeoutMs })` | Walks to the nearest node with charges in your region and gathers until `qty` collected. `timeoutMs` (default 120000) is the time allowed **without progress**: it restarts whenever units arrive, so a long job is fine while it keeps yielding. Nodes hold few charges and refill slowly, so with many players on a vein it can stall: it then throws an error saying the nodes are depleted, how many units it got and when the next charge comes. Catch it, keep what you got, and retry or gather elsewhere. |
 | `refineItem(recipeId, n)` / `craftItem(recipeId, n)` | Batches recipes, walks to the station when needed (your settlement's, when it has one and you are in its region; else town's), waits out busy time. |
-| `fight(targetId, { buffBelowPct, onTick })` | Closes in on the target, attacks with the best ready ability until it dies or leaves; uses buffs at low HP. |
+| `fight(targetId, { buffBelowPct, onTick })` | Closes in on the target, attacks with the best ready ability until it dies or leaves; uses buffs at low HP. A player it only downs (`result: 'downed'`): finishing them takes your own `attack`. `result: 'died'` means you went down or died. |
 | `hunt(mobType, count)` | `approachMob` + `fight`, resting between kills; returns loot. |
-| `restUntil(pct, timeout?)` | Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
+| `restUntil(pct, timeout?)` | Throws when you are downed or dead. Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
 | `lootAll(bagId)` | Walks to a loot bag if needed and takes everything. |
 | `acceptPartyInvite({ fromId? })` | Waits for a party invitation and accepts it; returns the party id. |
 | `foundSettlement(name, region)` | Walks the plots of `region` nearest first and founds at the first free one. |

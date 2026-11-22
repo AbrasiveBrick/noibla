@@ -1,6 +1,6 @@
 // The economy simulator behind the group-versus-solo check in economy.test.ts. It plays the real server rules on a
-// fake clock through Game.execute: scripted players walk, gather, hunt, refine, craft, repair, pay upkeep, die and
-// fetch their bags. Nothing here multiplies catalog constants into a result: income is what the players hold at the
+// fake clock through Game.execute: scripted players walk, gather, hunt, refine, craft, repair, pay upkeep and bandage
+// themselves when downed. Nothing here multiplies catalog constants into a result: income is what the players hold at the
 // end, minus what they held at the start.
 //
 // All sides use the same player script. They differ only in what the rules give them:
@@ -14,7 +14,7 @@
 // Income is what the first AMORTIZE_HOURS of play from nothing come to: the run's first `warmMinutes` as played
 // (materials given to the group rest before they pay), then the rate of the rest of the run.
 import {
-  AFFIXES, BUILDINGS, FOOD, ITEMS, MOB_TYPES, NODE_TYPES, RECIPES, SETTLEMENT, SKILLS, TOOL_FAMILIES, UNIQUE_SEP, WEAR,
+  AFFIXES, BUILDINGS, DEATH, FOOD, ITEMS, MOB_TYPES, NODE_TYPES, RECIPES, SETTLEMENT, SKILLS, TOOL_FAMILIES, UNIQUE_SEP, WEAR,
   baseOf, gearGroup, requiredToolTier, type BuildingId, type RecipeDef, type SkillId,
 } from '../src/shared/catalog.ts';
 import { MAP_RULES, dist, placeOf, regionAt, type MapPlot } from '../src/shared/map.ts';
@@ -178,8 +178,6 @@ interface Bot {
   nextTripAt: number;
   deposited: boolean;
   job?: { id: string; mob: boolean; engaged?: boolean };
-  deaths: number;
-  bagId?: string;
   /** Value of the crafted gear shelved at the station it was made at. */
   shelved: number;
 }
@@ -235,7 +233,7 @@ export function simulate(o: SimOptions): SimResult {
       must(p.id, 'equip', { item: weapon });
       must(p.id, 'equip', { item: armor });
       const own = o.side === 'exile' && i === 3 ? o.strategy.exiled : undefined;
-      return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, outlook: own?.outlook ?? o.strategy.outlook ?? 0.8, roam: o.strategy.roam?.[i] ?? 'any', lent: {}, nextTripAt: 0, deposited: false, deaths: 0, shelved: 0 };
+      return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, outlook: own?.outlook ?? o.strategy.outlook ?? 0.8, roam: o.strategy.roam?.[i] ?? 'any', lent: {}, nextTripAt: 0, deposited: false, shelved: 0 };
     });
 
     // Settlements, founded and built with the real commands.
@@ -386,23 +384,12 @@ export function simulate(o: SimOptions): SimResult {
       if (p.travel || p.busyUntil > now) return;
       const drop = () => { if (b.job) claimed.delete(b.job.id); b.job = undefined; };
 
-      // Died: walk back for the bag, then dress.
-      if (p.stats.deaths > b.deaths) {
-        b.deaths = p.stats.deaths;
+      if (p.dead) return;
+      // Downed: the bandage from the kit, once.
+      if (p.downed) {
         drop();
-        b.bagId = [...g.bags.values()].filter((bag) => bag.ownerId === b.id).sort((x, y) => y.createdAt - x.createdAt)[0]?.id;
-      }
-      if (b.bagId) {
-        const bag = g.bags.get(b.bagId);
-        if (!bag) { b.bagId = undefined; } else if (dist(p.pos, { x: bag.x!, y: bag.y! }) > MAP_RULES.range.interact) {
-          send(b.id, 'move', { to: bag.id });
-          return;
-        } else {
-          send(b.id, 'loot', { bagId: bag.id });
-          for (const item of [b.weapon, b.armor]) if (p.inventory[item]) send(b.id, 'equip', { item });
-          b.bagId = undefined;
-          return;
-        }
+        if (!p.reviving && p.inventory[DEATH.bandage]) send(b.id, 'revive');
+        return;
       }
       if (b.settlementId && (p.wellFedUntil ?? 0) <= now && p.inventory[FOOD.item]) { send(b.id, 'eat'); return; }
 

@@ -51,7 +51,8 @@ export interface ClientOptions {
   log?: (line: string) => void;
 }
 
-export type FightOutcome = { result: 'killed' | 'target_gone' | 'died' | 'fled'; loot: ItemStack[]; hits: number };
+/** `died`: you went down (revive yourself if you carry a field bandage) or died. `downed`: you downed a player, whom another attack() finishes for good. */
+export type FightOutcome = { result: 'killed' | 'downed' | 'target_gone' | 'died' | 'fled'; loot: ItemStack[]; hits: number };
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -154,7 +155,7 @@ export class GameClient {
   getPlayer(playerId: string) { return this.send('player.get', { playerId }); }
 
   // ---- movement & skills ----
-  /** Starts a walk (returns at once). `to`: region, place, node/mob/bag/player id, or { x, y }. High level: goTo / moveTo / travelTo. */
+  /** Starts a walk (returns at once). `to`: region, place, node/mob/bag/corpse id, a player in your region or view, or { x, y }. High level: goTo / moveTo / travelTo. */
   move(to: string | Pos, opts?: SendOptions) { return this.send('move', typeof to === 'string' ? { to } : { x: to.x, y: to.y }, opts); }
   gather(nodeId: string, opts?: SendOptions) { return this.send('gather', { nodeId }, opts); }
   refine(recipeId: string, count = 1, opts?: SendOptions) { return this.send('refine', { recipeId, count }, opts); }
@@ -288,6 +289,29 @@ export class GameClient {
   /** Eats a ration: Well fed. */
   eat(opts?: SendOptions) { return this.send('eat', {}, opts); }
 
+  // ---------- downed, death and clues ----------
+
+  /**
+   * Starts a catalog.timing.reviveMs channel on a downed player in range, or on yourself while downed (no argument;
+   * uses up a field bandage). Damage interrupts it. waitReady() waits for it to finish.
+   */
+  revive(targetId?: string, opts?: SendOptions) { return this.send('revive', targetId ? { targetId } : {}, opts); }
+  /** Standing by a corpse: the cause, the weapon's base, the time within a couple of minutes, watchtower movements. */
+  examineCorpse(corpseId: string) { return this.send('corpse.examine', { corpseId }); }
+  /** Standing by a corpse: a public notice, once per reporter. The first makes the death known and may be rewarded. `accuse`: a player id. */
+  reportDeath(corpseId: string, text: string, accuse?: string, opts?: SendOptions) { return this.send('death.report', { corpseId, text, ...(accuse ? { accuse } : {}) }, opts); }
+  /** Reported deaths, newest first. */
+  deathReports(o: { limit?: number } = {}) { return this.send('death.list', o); }
+  /** At the town bank: names who inherits your bank and stashes (a player or settlement id; null clears it). They are told privately. */
+  setWill(heir: string | null, opts?: SendOptions) { return this.send('will.set', { heir }, opts); }
+  /** Your will, and whose wills name you or your settlement. */
+  will() { return this.send('will.view', {}); }
+  /** At the town bank: escrows silver you carry for whoever kills `targetId`. It can't be cancelled. */
+  postBounty(targetId: string, amount: number, opts?: SendOptions) { return this.send('bounty.post', { targetId, amount }, opts); }
+  bounties() { return this.send('bounty.list', {}); }
+  /** Uses up a hooded cloak: for catalog.hood.ms others see "a hooded figure". */
+  wearHood(opts?: SendOptions) { return this.send('hood.wear', {}, opts); }
+
   reportFeedback(o: { category: FeedbackCategory; summary: string; details?: string; relatedCommandId?: string }, opts?: SendOptions) {
     return this.send('reportFeedback', o, opts);
   }
@@ -405,7 +429,8 @@ export class GameClient {
   async waitReady(): Promise<Observation> {
     for (;;) {
       const o = await this.observe();
-      const wait = Math.max(o.self.busyMs, o.self.travel?.arriveInMs ?? 0);
+      // A self-revive completes on the tick after its busy time ends.
+      const wait = Math.max(o.self.busyMs, o.self.travel?.arriveInMs ?? 0, o.self.downed?.reviving ? 20 : 0);
       if (wait <= 0) return o;
       await sleep(Math.min(wait + 2, 1000));
     }
@@ -450,7 +475,7 @@ export class GameClient {
   /**
    * Walks to `target` and waits until there, retrying through busy time and combat locks.
    * `target`: a region (`'wilds'`), a place (`'bank'`, `'forge'`, …), a settlement plot, the id of a node, mob, loot bag or player
-   * (stops within interaction range), or `{ x, y }`.
+   * (stops within interaction range; a player only in your region or within view), a corpse id, or `{ x, y }`.
    */
   async goTo(target: string | Pos, o: { timeoutMs?: number } = {}): Promise<Observation> {
     const deadline = Date.now() + (o.timeoutMs ?? 120_000);
@@ -654,35 +679,41 @@ export class GameClient {
     // Accept percent too (restUntil(80)): a fraction > 1 could never be reached.
     const frac = pct > 1 ? pct / 100 : pct;
     if (!(frac > 0 && frac <= 1)) throw new RangeError(`restUntil(${pct}): pass a fraction like 0.9 or a percent like 90`);
-    return this.waitFor(async () => { const o = await this.observe(); return o.self.hp >= o.self.maxHp * frac ? o : null; }, { timeoutMs, intervalMs: 150, what: 'HP regen' });
+    return this.waitFor(async () => {
+      const o = await this.observe();
+      if (o.self.dead) throw new Error('restUntil: this character is dead for good; register a new one');
+      // A self-revive under way ends in HP to rest up from; lying downed never does.
+      if (o.self.downed && !o.self.downed.reviving) throw new Error('restUntil: you are downed and regain no HP; revive() uses a field bandage');
+      return o.self.hp >= o.self.maxHp * frac ? o : null;
+    }, { timeoutMs, intervalMs: 150, what: 'HP regen' });
   }
 
   /**
-   * Fights a mob or player until it dies, leaves, or we die. Uses the best
-   * ready attack from current gear; uses Brace/Evade when HP drops below `buffBelowPct`.
+   * Fights a mob until it dies, or a player until they go down, or until either side leaves or we go down. Never
+   * finishes a downed player: call attack() for that. Uses the best ready attack from current gear; uses Brace/Evade
+   * when HP drops below `buffBelowPct`.
    */
   async fight(targetId: string, o: { buffBelowPct?: number; timeoutMs?: number; onTick?: (obs: Observation) => Promise<'continue' | 'stop'> } = {}): Promise<FightOutcome> {
     const deadline = Date.now() + (o.timeoutMs ?? 60_000);
     const loot: ItemStack[] = [];
     let hits = 0;
     const start = await this.observe();
-    const deaths = () => this.received.filter((e) => e.type === 'self.died').length;
-    const deathsBefore = deaths();
-    const zone = start.self.zone;
+    if (start.self.downed || start.self.dead) return { result: 'died', loot, hits };
     for (;;) {
       const obs = await this.observe();
-      // Death respawns you in town (a region change you did not walk).
-      if ((obs.self.zone !== zone && !obs.self.travel) || deaths() > deathsBefore) return { result: 'died', loot, hits };
+      if (obs.self.downed || obs.self.dead) return { result: 'died', loot, hits };
       if (o.onTick && (await o.onTick(obs)) === 'stop') return { result: 'fled', loot, hits };
       const mob = obs.zone.mobs.find((m) => m.id === targetId);
       const player = obs.zone.players.find((p) => p.id === targetId);
       if ((mob && !mob.alive) || (!mob && !player)) return { result: mob ? 'killed' : 'target_gone', loot, hits };
+      if (player?.downed) return { result: 'downed', loot, hits };
       if (Date.now() > deadline) throw new Error(`fight(${targetId}) timed out`);
       const wait = obs.self.busyMs;
       if (!(mob ?? player)!.inRange) {
         // Close in (the target may be moving): re-aim every few hundred ms.
         const mv = await this.request('move', { to: targetId });
         if (!mv.ok && !TRANSIENT_ERRORS.has(mv.error.code)) {
+          if (mv.error.code === 'DOWNED' || mv.error.code === 'DEAD') return { result: 'died', loot, hits };
           if (mv.error.code === 'BAD_REQUEST') return { result: 'target_gone', loot, hits };
           throw new CommandError(mv.error, 'move', mv.commandId);
         }
@@ -702,6 +733,9 @@ export class GameClient {
         hits++;
         loot.push(...resp.result.loot);
         if (resp.result.killed) return { result: 'killed', loot, hits };
+        if (resp.result.downed) return { result: 'downed', loot, hits };
+      } else if (resp.error.code === 'DOWNED' || resp.error.code === 'DEAD') {
+        return { result: 'died', loot, hits };
       } else if (resp.error.code === 'TARGET_DEAD' || resp.error.code === 'INVALID_TARGET') {
         return { result: 'target_gone', loot, hits };
       } else if (resp.error.code === 'OUT_OF_RANGE') {
@@ -780,7 +814,7 @@ export class GameClient {
       const target = await this.approachMob(mobType, { timeoutMs: Math.max(1000, deadline - Date.now()) });
       const r = await this.fight(target.id);
       loot.push(...r.loot);
-      if (r.result === 'died') throw new Error(`died while hunting ${mobType}`);
+      if (r.result === 'died') throw new Error(`went down while hunting ${mobType}: revive() if you carry a field bandage`);
       if (r.result === 'killed') kills++;
     }
     return loot;
@@ -802,7 +836,7 @@ export class GameClient {
 
   /**
    * Walks from plot to plot in `region` (nearest first) until one is free, and founds `name` there. Carry
-   * catalog.settlement.foundCost. These regions are PvP land where death drops everything you carry.
+   * catalog.settlement.foundCost. These regions are PvP land, where the downed can be finished off and death is for good.
    */
   async foundSettlement(name: string, region: ZoneId): Promise<SettlementView> {
     const [m, start] = await Promise.all([this.map(), this.observe()]);
@@ -824,7 +858,7 @@ export class GameClient {
   }
 
   /**
-   * Walks to the boss of type `mobType` in your region, waits for it to be alive, fights it until it dies or we die,
+   * Walks to the boss of type `mobType` in your region, waits for it to be alive, fights it until it dies or we go down,
    * then loots its spoils bag if we may (`loot: false` leaves it). Bosses are built for groups: hunt them with a party (unless you are really maxed out).
    */
   async huntBoss(mobType: string, o: { timeoutMs?: number; waitForSpawnMs?: number; loot?: boolean } = {}): Promise<{ result: FightOutcome['result']; spoilsBagId: string | null; looted: ItemStack[] }> {

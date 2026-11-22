@@ -1,6 +1,6 @@
 import type { AbilityId, BuildingId, SkillId, Slot, ZoneId } from '../shared/catalog.ts';
 import type { Pos } from '../shared/map.ts';
-import type { GameEvent, PalisadeAlert } from '../shared/protocol.ts';
+import type { DeathCause, GameEvent, PalisadeAlert } from '../shared/protocol.ts';
 import type { Bag } from './util.ts';
 import type { Game } from './game.ts';
 
@@ -45,7 +45,58 @@ export interface Player {
   partyId?: string;
   /** Settlement the player belongs to (see Settlement). */
   settlementId?: string;
+  /** At 0 HP and not yet dead. `forMs`: the whole time allowed, given again after a restart. */
+  downed?: { at: number; until: number; forMs: number; blow: Blow };
+  /** Dead for good. `settled`: the estate passed. */
+  dead?: { at: number; zone: ZoneId; corpseId: string; settled?: true };
+  /** A revive under way (`targetId` may be the player's own id). */
+  reviving?: { targetId: string; until: number };
+  /** Set while hooded and only then: the tick removes it, so it can't run out halfway through a command. */
+  hood?: { as: string; until: number };
+  /** The heir named at the bank: a player or settlement id. */
+  will?: { kind: 'player' | 'settlement'; id: string };
 }
+
+/** A player or mob, by name. */
+export interface Who { id: string; name: string }
+
+/** What put a player down or killed them. Server-only: `as` is what players may be told. */
+export interface Blow { kind: 'mob' | 'player'; id: string; name: string; as: Who; cause: DeathCause }
+
+/** A player's corpse. The death is secret until `settledAt`: that is when the estate passed. */
+export interface Corpse {
+  id: string;
+  zone: ZoneId;
+  x: number;
+  y: number;
+  victim: Who;
+  at: number;
+  /** Server-only truth. Players get the cause and nothing else of it. */
+  blow: Blow;
+  bledOut: boolean;
+  bagId: string | null;
+  /** The settlement the victim belonged to when they died. */
+  settlementId?: string;
+  dueAt: number;
+  settledAt?: number;
+  /** `byId` is never shown: `reporter` is how they appeared. */
+  reports: { ts: number; byId: string; reporter: Who; accuse: Who | null; text: string }[];
+}
+
+/** Escrowed silver. `paidTo` stays secret: the list changes when the target's death is made known. */
+export interface Bounty {
+  id: string;
+  target: Who;
+  amount: number;
+  posterId: string;
+  /** How the poster appeared. */
+  poster: Who;
+  postedAt: number;
+  paidTo?: string;
+}
+
+/** An operator's copy of an event adds the truth behind hoods. */
+export interface OperatorEvent extends GameEvent { hooded?: string[] }
 
 export type SettlementRole = 'leader' | 'steward' | 'member';
 
@@ -56,6 +107,8 @@ export interface SettlementCharter {
   withdrawRole: SettlementRole;
   /** Percent of members' quest silver paid into the stockpile. */
   taxPct: number;
+  /** Silver from the stockpile to the first to report a member's death. */
+  reportReward: number;
 }
 
 /** A settlement.vote motion: exile a member, or make a member the leader. */
@@ -164,6 +217,8 @@ export interface Mob {
   nextAoeAt?: number;
   /** Bosses: every player who damaged it this fight (dying does not remove you). Decides who may open the spoils. */
   contributors?: string[];
+  /** Those of them who wore a hood when they joined the fight: the spoils never name them. */
+  hoodedContributors?: string[];
 }
 
 export interface ResourceNode {
@@ -189,7 +244,11 @@ export interface LootBag {
   expiresAt: number;
   /** Boss spoils: only these players may loot until `opensToAllAt`. */
   eligible?: string[];
+  /** Who `eligible` are, as they were seen. */
+  eligibleNames?: string[];
   opensToAllAt?: number;
+  /** Lies by a corpse: looting it is told only to those who can see it. */
+  corpse?: true;
 }
 
 export interface TradeSubmission { items: Bag; locked: boolean; lockedAt: number | null }
@@ -218,6 +277,8 @@ export type Visibility =
   | { kind: 'party'; partyId: string }
   /** Members of a settlement only (stockpile activity, membership, votes). */
   | { kind: 'settlement'; id: string }
+  /** Every living player, wherever they are (death reports). */
+  | { kind: 'public' }
   | { kind: 'operator' };
 
 export type Subscriber =

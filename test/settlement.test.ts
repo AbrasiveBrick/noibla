@@ -61,17 +61,22 @@ test('contested regions: PvP is allowed, death drops everything, and whoever is 
       for (const id of [K, V, S]) place(w, id, at);
       give(w, V, { silver: 100, stone: 7 });
       const carried = raw(w, V).inventory.silver;
-      raw(w, V).hp = 1;
+      Object.assign(raw(w, V), { hp: 1, lastCombatAt: Date.now() }); // in combat, so a tick can't heal it first
+      const felled = witness.waitForEvent((e) => e.type === 'player.downed' && e.data.victimId === V, 5000);
+      const blow = await killer.attack(V);
+      assert.deepEqual([blow.downed, blow.killed], [true, false], zone);
+      assert.equal((await felled).data.byId, K);
       const seen = witness.waitForEvent((e) => e.type === 'player.death' && e.data.victimId === V, 5000);
+      await killer.waitReady();
       assert.ok((await killer.attack(V)).killed, zone);
       const death = (await seen).data;
       assert.equal(death.killerId, K);
-      assert.equal(death.fullLoot, true);
       const bag = w.server.game.bags.get(death.bagId)!;
       assert.equal(bag.items.stone, 7);
       assert.equal(bag.items.silver, carried - Math.floor(carried * DEATH_SILVER_LOSS));
       assert.deepEqual(raw(w, V).inventory, {});
-      assert.equal(raw(w, V).zone, 'town');
+      assert.equal(raw(w, V).zone, zone, 'no respawn');
+      assert.ok(raw(w, V).dead);
     }
   } finally { await w.close(); }
 });

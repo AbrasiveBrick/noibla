@@ -14,6 +14,7 @@ import type {
   SettlementInviteView, SettlementMotionView, SettlementPublicView, SettlementSummary, SettlementView, StockpileEntry,
 } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
+import { requireFace, seenAs } from './identity.ts';
 import type { CommandDef, Player, Settlement, SettlementMotion, SettlementRole } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks, type Bag } from './util.ts';
 
@@ -149,8 +150,9 @@ export function audit(g: Game, s: Settlement, actor: Player | null, action: Stoc
   if (!items.length) return;
   const ts = g.now();
   const id = g.store.nextEntryId('stockpile_log', s.id);
-  g.store.run('INSERT INTO stockpile_log(settlement_id, ts, actor_id, actor_name, action, items, building, seq) VALUES(?, ?, ?, ?, ?, ?, ?, ?)', s.id, ts, actor?.id ?? null, actor?.name ?? null, action, JSON.stringify(items), building ?? null, id);
-  const entry: StockpileEntry = { id, ts, actorId: actor?.id ?? null, actorName: actor?.name ?? null, action, items, ...(building ? { building } : {}) };
+  const who = actor ? seenAs(actor) : null;
+  g.store.run('INSERT INTO stockpile_log(settlement_id, ts, actor_id, actor_name, action, items, building, seq) VALUES(?, ?, ?, ?, ?, ?, ?, ?)', s.id, ts, who?.id ?? null, who?.name ?? null, action, JSON.stringify(items), building ?? null, id);
+  const entry: StockpileEntry = { id, ts, actorId: who?.id ?? null, actorName: who?.name ?? null, action, items, ...(building ? { building } : {}) };
   // The automatic entries get their own event type, which the operator's event log prunes.
   const type = action === 'upkeep' || action === 'produced' || action === 'income' ? 'stockpile.upkeep' : 'stockpile.changed';
   g.emit(type, vis(s), { settlementId: s.id, entry }, actor ? { actor, zone: s.zone } : { zone: s.zone });
@@ -177,21 +179,23 @@ function promoteSuccessor(g: Game, s: Settlement) {
 }
 
 /** Removes `who`. The best-ranked, longest-standing member leads if the leader goes; the last one out abandons the plot. */
-function removeMember(g: Game, s: Settlement, who: Player, reason: 'leave' | 'expel' | 'exile', by?: Player): boolean {
+export function removeMember(g: Game, s: Settlement, who: Player, reason: 'leave' | 'expel' | 'exile' | 'death', by?: Player): boolean {
   const wasLeader = roleOf(s, who.id) === 'leader';
   g.markSettlement(s);
   g.markPlayer(who);
   delete s.members[who.id];
-  // What they gathered and gave stops counting for shared work. Their stash stays theirs: stash.withdraw at the plot still works.
+  // What they gathered and gave stops counting for shared work. Their stash stays theirs (stash.withdraw at the plot still
+  // works), unless they died: then it has passed with the estate (death.ts).
   delete s.work[who.id];
   s.level = levelOf(s).level;
   delete who.settlementId;
   for (const m of s.motions) delete m.votes[who.id];
   s.motions = s.motions.filter((m) => m.targetId !== who.id);
-  if (reason !== 'leave') s.barred[who.id] = g.now();
+  const thrownOut = reason === 'expel' || reason === 'exile';
+  if (thrownOut) s.barred[who.id] = g.now();
   const data = { settlementId: s.id, playerId: who.id, name: who.name, reason, ...(by ? { byId: by.id, byName: by.name } : {}) };
   g.emit('settlement.left', vis(s), data, { zone: s.zone, actor: who });
-  if (reason !== 'leave') g.emit('settlement.left', { kind: 'player', playerId: who.id }, { ...data, settlementName: s.name }, {});
+  if (thrownOut) g.emit('settlement.left', { kind: 'player', playerId: who.id }, { ...data, settlementName: s.name }, {});
   g.markSettlement(s);
   if (!memberCount(s)) { disband(g, s); return true; }
   if (wasLeader) promoteSuccessor(g, s);
@@ -231,6 +235,7 @@ function found(g: Game, p: Player, payload: Record<string, any>) {
   const name = reqStr(payload, 'name', SETTLEMENT.nameMax).trim().replace(/\s+/g, ' ');
   if (!NAME_RE.test(name)) fail('BAD_REQUEST', `name must be ${SETTLEMENT.nameMin}-${SETTLEMENT.nameMax} chars: letters, digits, spaces, ' _ or -, starting with a letter`);
   if (p.settlementId) fail('SETTLEMENT_STATE', 'you are already in a settlement', undefined, 'settlement.leave first');
+  requireFace(p, g.now(), 'founding a settlement');
   if ([...g.settlements.values()].some((s) => s.name.toLowerCase() === name.toLowerCase())) fail('NAME_TAKEN', `a settlement named "${name}" exists`);
   if (p.travel) fail('TRAVELING', `walking to ${p.travel.target ?? p.travel.to}`, p.travel.arriveAt - g.now(), 'wait for arrival');
   if (ZONES[p.zone].safety !== 'contested') fail('WRONG_ZONE', `settlements can only be founded on a plot in a contested region (${Object.values(ZONES).filter((z) => z.safety === 'contested').map((z) => z.id).join(', ')})`, undefined, 'free plots are the catalog().map.plots whose observe().zone.plots entry has no settlement; walk to one with move { to: <plotId> }');
@@ -364,6 +369,7 @@ function setCharter(g: Game, p: Player, payload: Record<string, any>) {
     c.withdrawRole = payload.withdrawRole;
   }
   if (payload.taxPct !== undefined) c.taxPct = optInt(payload, 'taxPct', 0, SETTLEMENT.maxTaxPct, 0);
+  if (payload.reportReward !== undefined) c.reportReward = optInt(payload, 'reportReward', 0, SETTLEMENT.maxReportReward, 0);
   s.charter = c;
   g.markSettlement(s);
   g.emit('settlement.charter', vis(s), { settlementId: s.id, charter: { ...c }, byId: p.id, byName: p.name }, { zone: s.zone, actor: p });
@@ -448,7 +454,8 @@ function withdraw(g: Game, p: Player, payload: Record<string, any>) {
   if (RANK[role] < RANK[s.charter.withdrawRole]) fail('FORBIDDEN', `${s.name}'s charter lets only a ${s.charter.withdrawRole}${s.charter.withdrawRole === 'leader' ? '' : ' or higher'} withdraw; you are a ${role}`, undefined, 'ask someone who may, or the leader to change the charter');
   requireAtPlot(g, p, s, 'the stockpile');
   const items = removeItems(s.stockpile, stacks(payload.items, 'items', false));
-  takeBack(g, s, p, items);
+  // Taking back your own first would say whose hand a hooded withdrawal was: then the youngest units go (syncPooled).
+  if (!p.hood) takeBack(g, s, p, items);
   addItems(p.inventory, items);
   g.markSettlement(s);
   g.markPlayer(p);
@@ -475,6 +482,8 @@ function stockpileLog(g: Game, p: Player, payload: Record<string, any>) {
  * made goes back into the stockpile.
  */
 export function requireSharedWork(g: Game, p: Player, r: RecipeDef, count: number): Settlement {
+  // Whose units it uses up would say who is under the hood.
+  requireFace(p, g.now(), 'shared work');
   const { building } = SETTLEMENT.sharedWork;
   const def = BUILDINGS[building];
   if (!def.stations!.includes(r.station)) fail('BAD_REQUEST', `${r.id} is not refined at a ${def.name}, so there is no shared work in it`, undefined, 'withdraw what it needs and refine from your inventory');

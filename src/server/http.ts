@@ -119,8 +119,12 @@ async function handleOperator(game: Game, req: IncomingMessage, res: ServerRespo
       const n = Number(raw);
       return raw && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
     };
-    // A sandboxed agent plays under the name it was launched with, which is also its transcript's name.
-    const transcript = agentLogDir ? readTranscript(agentLogDir, player.name, { after: offset('after'), before: offset('before') }) : { found: false, items: [], from: 0, to: 0 };
+    // A sandboxed agent plays under the name it was launched with, which is also its transcript's name. After a death it
+    // goes on as <name>-2 and so on, in the same transcript.
+    const at = { after: offset('after'), before: offset('before') };
+    let transcript = agentLogDir ? readTranscript(agentLogDir, player.name, at) : { found: false, items: [], from: 0, to: 0 };
+    const launched = player.name.replace(/-\d+$/, '');
+    if (agentLogDir && !transcript.found && launched !== player.name) transcript = readTranscript(agentLogDir, launched, at);
     return send(res, 200, transcript);
   }
   notFound(res, req, path);

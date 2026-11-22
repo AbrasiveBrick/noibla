@@ -1,5 +1,5 @@
 // Rival: crafts its own starter gear, reads the public ad (but can't read the
-// private negotiation), ambushes the fighter in the frontier, loots the bag,
+// private negotiation), ambushes and finishes off the fighter in the frontier, loots the bag,
 // brings the duskiron ore to town and runs a dishonest blind trade.
 
 import { GameClient, sleep } from '../src/sdk/index.ts';
@@ -48,6 +48,10 @@ export async function runRival(c: GameClient, facts: Facts) {
   say(`caught ${fighter.name} alone — attacking (open PvP zone)`);
   const outcome = await c.fight(fighter.playerId, { timeoutMs: 60_000 });
   say(`fight over: ${outcome.result} after ${outcome.hits} hits`);
+  if (outcome.result === 'downed') {
+    await c.sendWhenReady('attack', { targetId: fighter.playerId });
+    say(`finished ${fighter.name} off before anyone could revive them`);
+  }
 
   // --- Loot ---
   const bag = await c.waitFor(async () => (await c.observe()).zone?.lootBags.find((b) => b.ownerId === fighter.playerId), { timeoutMs: 10_000, what: "the fighter's loot bag" });

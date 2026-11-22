@@ -32,10 +32,15 @@ test('parties: invite, accept, member view, party chat only for members, kick an
     assert.equal((await err(mate.partyInvite(O.playerId))).code, 'FORBIDDEN', 'only the leader invites');
     assert.equal((await err(lead.partyInvite(M.playerId))).code, 'PARTY_STATE', 'already in a party');
 
-    // Members see each other's zone and HP, even in different zones.
+    // Nothing from afar: partners see each other's zone and HP only in the same region.
     await mate.travelTo('wilds');
     raw(w, M.playerId).hp = 37;
-    const seen = (await lead.party()).party!.members.find((m) => m.id === M.playerId)!;
+    const mateSeen = async () => (await lead.party()).party!.members.find((m) => m.id === M.playerId)!;
+    let seen = await mateSeen();
+    assert.deepEqual([seen.name, seen.zone, seen.pos, seen.walking, seen.hp, seen.maxHp], [raw(w, M.playerId).name, null, null, null, null, null]);
+    await lead.travelTo('wilds');
+    raw(w, M.playerId).hp = 37;
+    seen = await mateSeen();
     assert.equal(seen.zone, 'wilds');
     assert.equal(seen.hp, 37);
 
@@ -108,8 +113,8 @@ test('a lone fighter loses to the Elder Bear; the boss resets, and enrage triple
     assert.equal(bear.engagedAt, undefined);
 
     // Enrage: a fight that has lasted past enrageAfterMs hits three times as hard.
-    await solo.waitReady();
-    await solo.travelTo('wilds');
+    await solo.revive();
+    assert.equal((await solo.waitReady()).self.downed, null, 'bandaged back up');
     await solo.goTo(bear.id);
     const p = raw(w, S.playerId);
     await solo.attack(bear.id);
