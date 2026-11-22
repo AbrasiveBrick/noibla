@@ -426,7 +426,7 @@ export interface AttackResult {
   busyMs: number;
   /** Wear of the equipped weapon after this attack, when one is equipped. */
   weaponWear?: number;
-  /** Why a kill dropped less than usual (for example no skinning knife equipped), or where boss spoils went. */
+  /** Why a kill dropped less than usual (for example no skinning knife equipped), where boss spoils went, or that you reached a boss's per-player damage cap. */
   note?: string;
   /** A boss kill: its loot is in this spoils bag next to the boss (not in your inventory). */
   spoilsBagId?: string;

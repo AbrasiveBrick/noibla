@@ -220,3 +220,55 @@ test('reserved spoils open to anyone later; parties survive a restart', async ()
     assert.ok(taken.taken.length > 0);
   } finally { await w2.close(); }
 });
+
+test('being alone in a party never blocks joining another: declined, expired, crossed invites and leftovers', async () => {
+  const w = await world();
+  try {
+    const [a, b, c, d, e] = await Promise.all(['Asker', 'Busy', 'Caller', 'Drifter', 'Extra'].map((n) => w.bot(n)));
+    const [A, B, C, D, E] = await Promise.all([a, b, c, d, e].map((x) => x.whoami()));
+
+    // Declined: the asker can still be invited and join.
+    const first = (await a.partyInvite(B.playerId)).party;
+    await b.partyDecline(first.id);
+    const fromC = (await c.partyInvite(A.playerId)).party;
+    await a.partyAccept(fromC.id);
+    assert.equal((await a.observe()).party!.id, fromC.id);
+    assert.ok(!w.server.game.parties.has(first.id), 'the party of one gave way');
+
+    // Sharing a party still blocks both being invited and joining another.
+    assert.equal((await err(d.partyInvite(A.playerId))).code, 'PARTY_STATE');
+    await c.partyLeave();
+    // Left alone by the others: free again.
+    const fromD = (await d.partyInvite(A.playerId)).party;
+    await a.partyAccept(fromD.id);
+    await a.partyLeave();
+    await d.partyLeave();
+
+    // Expired: the same.
+    const stale = (await a.partyInvite(B.playerId)).party;
+    w.server.game.parties.get(stale.id)!.invites[B.playerId] = Date.now() - 1;
+    const fromE = (await e.partyInvite(A.playerId)).party;
+    await a.partyAccept(fromE.id);
+    await a.partyLeave();
+    await e.partyLeave();
+
+    // Crossed invites: whoever accepts first joins, and their own invitation lapses.
+    const byB = (await b.partyInvite(C.playerId)).party;
+    const byC = (await c.partyInvite(B.playerId)).party;
+    await b.partyAccept(byC.id);
+    assert.deepEqual((await c.party()).party!.members.map((m) => m.id).sort(), [B.playerId, C.playerId].sort());
+    assert.equal((await c.observe()).partyInvites.length, 0);
+    assert.equal((await err(c.partyAccept(byB.id))).code, 'NOT_FOUND');
+
+    // A full party turns you away without costing you your own party or the invitations you sent.
+    const mine = (await a.partyInvite(E.playerId)).party;
+    const target = w.server.game.parties.get(byC.id)!;
+    target.invites[A.playerId] = Date.now() + 60_000;
+    const members = [...target.members];
+    target.members.push(D.playerId, D.playerId, D.playerId);
+    assert.equal((await err(a.partyAccept(byC.id))).code, 'PARTY_STATE');
+    target.members = members;
+    assert.equal((await a.observe()).party!.id, mine.id);
+    assert.equal((await e.observe()).partyInvites[0].partyId, mine.id);
+  } finally { await w.close(); }
+});
