@@ -82,6 +82,9 @@ export type BuildId = keyof typeof BUILDS;
 
 export type Side = 'solo' | 'founders' | 'altFounders' | 'village' | 'exile';
 
+/** Where a player looks for work: anywhere, only in the frontier, or everywhere but there. */
+export type Roam = 'any' | 'frontier' | 'near';
+
 export interface Strategy {
   /** Focus skills of the four players. */
   focus: SkillId[][];
@@ -90,8 +93,12 @@ export interface Strategy {
   /** Skip recipes that earn less than this many silver per second of work. */
   minGain: number;
   buildings?: BuildingId[];
+  /** Per player. Default: anywhere. */
+  roam?: Roam[];
+  /** How much of the value further down the chain a player sees in a raw material (0-1). Default 0.8. */
+  outlook?: number;
   /** exile: the exiled player's own habits. The three who stay keep the village's. */
-  exiled?: { tripMs: number; minGain: number };
+  exiled?: { tripMs: number; minGain: number; outlook?: number };
 }
 
 export interface SimOptions {
@@ -144,6 +151,8 @@ interface Bot {
   worth: Record<string, number>;
   tripMs: number;
   minGain: number;
+  outlook: number;
+  roam: Roam;
   nextTripAt: number;
   deposited: boolean;
   job?: { id: string; mob: boolean; engaged?: boolean };
@@ -204,7 +213,7 @@ export function simulate(o: SimOptions): SimResult {
       must(p.id, 'equip', { item: weapon });
       must(p.id, 'equip', { item: armor });
       const own = o.side === 'exile' && i === 3 ? o.strategy.exiled : undefined;
-      return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, nextTripAt: 0, deposited: false, deaths: 0, shelved: 0 };
+      return { id: p.id, focus, tools, weapon, armor, worth: {}, share: {}, tripMs: own?.tripMs ?? o.strategy.tripMs, minGain: own?.minGain ?? o.strategy.minGain, outlook: own?.outlook ?? o.strategy.outlook ?? 0.8, roam: o.strategy.roam?.[i] ?? 'any', nextTripAt: 0, deposited: false, deaths: 0, shelved: 0 };
     });
 
     // Settlements, founded and built with the real commands.
@@ -274,7 +283,7 @@ export function simulate(o: SimOptions): SimResult {
         const doer = (b.team ?? [b]).find((x) => x.focus.includes(r.skill)) ?? b;
         const out = (r.kind === 'refine' ? b.worth[id] : values[id]) * expectedOutput(doer, r);
         const cost = r.inputs.reduce((n, i) => n + values[i.item] * i.qty, 0);
-        if (out > cost) for (const i of r.inputs) b.worth[i.item] = Math.max(b.worth[i.item], values[i.item] * (1 + (out / cost - 1) * 0.8));
+        if (out > cost) for (const i of r.inputs) b.worth[i.item] = Math.max(b.worth[i.item], values[i.item] * (1 + (out / cost - 1) * b.outlook));
       }
     }
     const recipesOf = (b: Bot) => {
@@ -450,8 +459,9 @@ export function simulate(o: SimOptions): SimResult {
         // The upkeep's stone has to be mined by somebody.
         const short = !!s && (keep.stone ?? 0) > (s.stockpile.stone ?? 0) + (b.team ?? [b]).reduce((n, x) => n + (player(x).inventory.stone ?? 0), 0);
         let best = 0;
+        const roams = (zone: string) => b.roam === 'any' || (b.roam === 'frontier') === (zone === 'frontier');
         for (const n of g.nodes.values()) {
-          if (!n.charges || claimed.has(n.id) || (n.zone !== p.zone && p.combatLockUntil > now)) continue;
+          if (!n.charges || !roams(n.zone) || claimed.has(n.id) || (n.zone !== p.zone && p.combatLockUntil > now)) continue;
           const def = NODE_TYPES[n.type];
           if ((ITEMS[baseOf(b.tools[def.skill]!)].toolTier ?? 0) < requiredToolTier(def.tier)) continue;
           const level = skillLevel(p, def.skill);
@@ -464,7 +474,7 @@ export function simulate(o: SimOptions): SimResult {
         }
         for (const m of g.mobs.values()) {
           const def = MOB_TYPES[m.type];
-          if (def.boss || !alive(m.id) || claimed.has(m.id) || m.targetId || (m.zone !== p.zone && p.combatLockUntil > now)) continue;
+          if (def.boss || !roams(m.zone) || !alive(m.id) || claimed.has(m.id) || m.targetId || (m.zone !== p.zone && p.combatLockUntil > now)) continue;
           const weapon = p.equipment.weapon ? ITEMS[baseOf(p.equipment.weapon)] : undefined;
           const damage = (weapon?.power ?? 4) * (1 + 0.03 * skillLevel(p, 'swords')) * (build.perfect ? 1.25 : 1);
           const hits = Math.max(1, Math.ceil(def.hp / damage) - 1);

@@ -589,8 +589,16 @@ export class GameClient {
       const missing = project?.needs ?? BUILDINGS[building].cost;
       const inv = (await this.observe()).self.inventory;
       if (!missing.some((m) => inv.some((i) => i.item === m.item))) return { built: false, needs: missing };
-      const { project: after } = await this.settlementContribute(building);
-      if (!after.readyToBuild) return { built: false, needs: after.needs };
+      try {
+        const { project: after } = await this.settlementContribute(building);
+        if (!after.readyToBuild) return { built: false, needs: after.needs };
+      } catch (e) {
+        if (!(e instanceof CommandError) || e.code !== 'SETTLEMENT_STATE') throw e;
+        // Another member put the last of it in, or finished it, meanwhile.
+        const now = await view();
+        if (now?.buildings.some((b) => b.id === building)) return { built: true, needs: [] };
+        if (!now?.projects.find((p) => p.building === building)?.readyToBuild) throw e;
+      }
     }
     await this.equipToolFor('construction', BUILDINGS[building].tier);
     for (;;) {

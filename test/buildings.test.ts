@@ -943,6 +943,20 @@ test('SDK: helpers build, refine and cook at the settlement, and survive a resta
     assert.equal(lacking.built, false);
     assert.ok(lacking.needs.length > 0);
 
+    // Two members calling buildBuilding at once: whoever is second neither throws nor builds twice.
+    const mate = await w.bot('Mate');
+    const M = (await mate.whoami()).playerId;
+    const sid = (await bot.settlement()).settlement!.id;
+    await bot.settlementInvite(M);
+    await mate.settlementJoin(sid);
+    const m = g.players.get(M)!;
+    Object.assign(m, { pos: { ...p.pos }, zone: p.zone });
+    const cost = bag(BUILDINGS.watchtower.cost);
+    p.inventory = sum([p.inventory, cost]);
+    m.inventory = sum([m.inventory, cost]);
+    const both = await Promise.all([bot.buildBuilding('watchtower', { timeoutMs: 30_000 }), mate.buildBuilding('watchtower', { timeoutMs: 30_000 })]);
+    assert.deepEqual(both.map((r) => r.built), [true, true]);
+    await bot.waitReady();
     await bot.goTo(g.map.anchors.hollow);
     assert.ok((await bot.refineItem('pine_plank')).qty >= 1);
     assert.equal((await bot.observe()).self.zone, plot.region, 'refineItem used the workshop, not town');
@@ -956,7 +970,7 @@ test('SDK: helpers build, refine and cook at the settlement, and survive a resta
   try {
     const again = attach(w2.url, token);
     const s = (await again.settlement()).settlement!;
-    assert.deepEqual(s.buildings.map((b) => b.id), ['workshop', 'kitchen']);
+    assert.deepEqual(s.buildings.map((b) => b.id), ['workshop', 'kitchen', 'watchtower']);
     assert.ok((await again.observe()).self.effects.wellFedMs > 0);
   } finally { await w2.close(); }
 });
