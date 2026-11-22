@@ -7,6 +7,7 @@ import type { GameEvent } from '../shared/protocol.ts';
 import { REPEAT_THRESHOLD, type Game } from './game.ts';
 import type { Store } from './store.ts';
 import { gearView, maxHp, posOf } from './world.ts';
+import { activeLevelOf, projectViews } from './buildings.ts';
 import { MOB_TYPES, NODE_TYPES } from '../shared/catalog.ts';
 import type { SnapshotData } from './types.ts';
 import { silverFee } from './trade.ts';
@@ -14,7 +15,7 @@ import { toStacks } from './util.ts';
 
 /** Commands and failures counted for the per-bot failure rate. */
 const RATE_WINDOW_MS = 10 * 60_000;
-const LEDGER_KINDS = { created: ['mobs', 'quests'], destroyed: ['death', 'repair', 'shop', 'tradeFee', 'orbFee', 'settlement'] } as const;
+const LEDGER_KINDS = { created: ['mobs', 'quests', 'settlements'], destroyed: ['death', 'repair', 'shop', 'tradeFee', 'orbFee', 'settlement'] } as const;
 
 const silverOf = (stacks: { item: string; qty: number }[] | undefined) => (stacks ?? []).reduce((n, s) => n + (s.item === 'silver' ? s.qty : 0), 0);
 
@@ -43,15 +44,18 @@ export function backfillEconomyLedger(store: Store) {
 }
 
 function economy(g: Game, circulation: { carried: number; banked: number }) {
-  let stockpiled = 0;
-  for (const s of g.settlements.values()) stockpiled += s.stockpile.silver ?? 0;
+  let stockpiled = 0, stashed = 0;
+  for (const s of g.settlements.values()) {
+    stockpiled += s.stockpile.silver ?? 0;
+    for (const stash of Object.values(s.stashes)) stashed += stash.silver ?? 0;
+  }
   const rows = new Map(g.store.all<{ kind: string; qty: number }>('SELECT kind, qty FROM economy_ledger').map((r) => [r.kind, r.qty]));
   const side = (k: 'created' | 'destroyed') => Object.fromEntries(LEDGER_KINDS[k].map((n) => [n, rows.get(`${k}.${n}`) ?? 0]));
   return {
     since: Number(g.store.getMeta('economy_since') ?? 0),
     created: side('created') as Record<(typeof LEDGER_KINDS)['created'][number], number>,
     destroyed: side('destroyed') as Record<(typeof LEDGER_KINDS)['destroyed'][number], number>,
-    circulation: { ...circulation, stockpiled, total: circulation.carried + circulation.banked + stockpiled },
+    circulation: { ...circulation, stockpiled, stashed, total: circulation.carried + circulation.banked + stockpiled + stashed },
     /** Orb and shard flows (counts of items, not silver). */
     orbs: {
       created: { mobs: rows.get('orbs.created.mobs') ?? 0, crafted: rows.get('orbs.created.crafted') ?? 0, shop: rows.get('orbs.created.shop') ?? 0 },
@@ -132,6 +136,7 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
     focus: [...(p.focus ?? [])],
     quests: Object.entries(p.quests).filter(([, q]) => q.status !== 'claimed').map(([questId, q]) => ({ questId, name: QUESTS[questId]?.name ?? questId, status: q.status, progress: Math.min(q.progress, QUESTS[questId]?.objective.count ?? q.progress), goal: QUESTS[questId]?.objective.count ?? 0 })),
     combatLockUntil: p.combatLockUntil,
+    wellFedUntil: p.wellFedUntil ?? 0,
   }));
   const circulation = bots.reduce((c, b) => ({ carried: c.carried + b.silver.carried, banked: c.banked + b.silver.banked }), { carried: 0, banked: 0 });
   const closed = g.store.all<{ data: string }>("SELECT data FROM events WHERE type = 'trade.closed' ORDER BY id DESC LIMIT 200").map((r) => (JSON.parse(r.data) as GameEvent).data);
@@ -166,7 +171,17 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
         return { id: m.id, type: m.type, name: MOB_TYPES[m.type]?.name ?? m.type, x: Math.round((alive ? m.x : m.home.x) * 10) / 10, y: Math.round((alive ? m.y : m.home.y) * 10) / 10, alive, hp: m.hp, maxHp: MOB_TYPES[m.type]?.hp ?? 0, targetId: alive ? m.targetId : null };
       }),
       nodes: [...g.nodes.values()].map((n) => ({ id: n.id, type: n.type, item: NODE_TYPES[n.type]?.item ?? n.type, x: n.x, y: n.y, charges: n.charges, maxCharges: NODE_TYPES[n.type]?.maxCharges ?? 0 })),
-      plots: g.map.plots.map((pl) => ({ ...pl, settlement: [...g.settlements.values()].find((x) => x.plotId === pl.id)?.name ?? null })),
+      plots: g.map.plots.map((pl) => {
+        const x = [...g.settlements.values()].find((y) => y.plotId === pl.id);
+        return {
+          ...pl, settlement: x?.name ?? null,
+          ...(x ? {
+            level: x.level, activeLevel: activeLevelOf(x).level,
+            buildings: x.buildings.map((b) => ({ id: b.id, working: !b.unpaid })),
+            projects: projectViews(x).map((pr) => ({ id: pr.building, work: pr.work, workNeeded: pr.workNeeded, readyToBuild: pr.readyToBuild })),
+          } : {}),
+        };
+      }),
       bags: [...g.bags.values()].map((b) => ({ id: b.id, x: b.x ?? 0, y: b.y ?? 0, ownerName: b.ownerName, items: toStacks(b.items) })),
     },
     items: Object.fromEntries(Object.values(ITEMS).map((i) => [i.id, i.name])),

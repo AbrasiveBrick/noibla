@@ -24,7 +24,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 3. **Numbers decide whether the dilemma works.** The tunables live in `src/shared/catalog.ts` next to `FOCUS` and `WEAR`, and are exposed in `CATALOG`. Targets:
    - A 4-player village with a workshop, a farm and a forge hall earns **≥1.5× the silver-equivalent per member-hour** of 4 solo players.
    - A steady-state stockpile holds **2-4 member-hours of output**, so one theft pays for several hours of solo play.
-   - An exiled player loses **≥30% efficiency** (building bonuses, boss access, food).
+   - An exiled player loses **≥30% efficiency** (shared work, building bonuses, food). Boss access no longer counts: maxed players may solo bosses.
 4. **Reuse the existing patterns:**
    - command registries (`ro`/`rw` in `world.ts`, `social.ts`)
    - `mutate` and the dirty sets for persistence (`game.ts:140-210`)
@@ -78,50 +78,67 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 
 ## Stage 3: Buildings, upkeep, new roles
 
-- **`BUILDINGS` catalog**: each building has a cost, an upkeep per interval taken from the stockpile, and an effect for members (allies where noted).
+- **Why cooperation pays: shared work** (decided with the user, because the buildings alone did not reach the 1.5x target).
+  - In a village with a working workshop, refining there makes **+125% output** on each unit covered by *other* members' work.
+  - Each raw unit a member gathers or skins covers one unit of that same item in someone else's refining. It never covers their own, is used up, and leaves with them.
+  - Idle alt accounts therefore add nothing. Working alts count as members: the server cannot tell identities apart.
+- **`BUILDINGS` catalog** (`src/shared/catalog.ts`), effects for members:
 
   | Building | Effect |
   | --- | --- |
-  | Workshop | Smelter, sawmill and tannery in the settlement zone; +10% refine output |
-  | Forge hall | Forge and workbench; +2 item level on crafts (needs `bear_pelt`) |
-  | Farm | Produces grain each interval |
-  | Kitchen | Turns grain into rations. Eating gives *Well fed* (+25% XP, faster regen) |
-  | Storehouse | Larger stockpile; a lock raises theft detection |
-  | Palisade | Members are told when a non-member enters; boss and raid defense |
-  | Watchtower | Logs arrivals and departures in the zone for members; acts as a partial witness |
-  | Infirmary | Doubles the downed timer for members in the zone; faster revive (needs `wyrm_scale`) |
-  | Huts | One personal stash per member, which others can steal from |
+  | Workshop | Smelter, sawmill and tannery at the plot, sometimes with extra output (the chance is in `odds.ts`); shared work in a village |
+  | Forge hall | Forge, workbench and repairs; +2 item level on crafts (needs `bear_pelt`) |
+  | Farm | Puts grain in the stockpile each time its upkeep is paid |
+  | Kitchen | The only place to cook rations. Eating gives *Well fed* (+25% XP, double out-of-combat regeneration, 10 min, does not stack) |
+  | Storehouse | A four times larger stockpile |
+  | Palisade | Members are alerted when a non-member walks into the region |
+  | Watchtower | Logs who walks into and out of the region, members included |
+  | Huts | One private stash per member |
 
-- **Construction projects:** members contribute materials with `settlement.contribute`, then builders finish the building with timed `settlement.build` actions.
-- **Settlement levels:** camp, then village (3 buildings, 3 members), then town (6 buildings, 5 members). Each level unlocks more building slots and a small passive silver income into the stockpile.
-- **Upkeep:** unpaid upkeep disables a building. This keeps the stockpile in steady use and always worth stealing.
-- **New skills:** `construction`, `farming` and `cooking`, with tool families trowel, hoe and pot.
-  - Added to `SKILLS`, `TOOL_FAMILIES`, `STARTER_KIT` and the affix pools. Move `fertile_field` from woodcutting to farming.
-  - Focus stays at 3 slots, so groups need more specialists.
-- **Station bonuses:** `makeItem` (`world.ts:298`) checks settlement stations and bonuses besides `ZONES[zone].stations`.
-- Tests: `test/buildings.test.ts` covers projects, upkeep disabling a building, bonuses, food, and a numeric check of the group-versus-solo target.
+- **Construction projects:** members put materials in with `settlement.contribute`, then anyone with a trowel finishes the building with timed `settlement.build` actions. A leader or steward can cancel a project: its materials go to the stockpile and its slot is freed.
+- **Settlement levels:** camp (3 slots, 5 silver), village (3 buildings and 3 members: 6 slots, 25 silver), town (6 buildings and 5 members: 8 slots, 60 silver), the silver paid into the stockpile every 10 minutes.
+  - The public `level` counts standing buildings, so outsiders cannot watch upkeep through it.
+  - The members-only `activeLevel` counts paid-up buildings and decides income and shared work.
+- **Upkeep:** taken from the stockpile every 10 minutes per building. An unpaid building does nothing and reopens when it can be paid. Server downtime is neither billed nor paid.
+- **Stockpile capacity:** 25,000 items (100,000 with a storehouse), silver excluded. A full one is the theft prize.
+- **New skills:** `construction`, `farming` and `cooking`, with trowel, hoe and pot families, recipes and affix pools. `fertile_field` is reaped with farming and a hoe. Existing players got the three copper tools once (`KIT_VERSION`).
+- **Stations:** `makeItem` and `repair` accept the member's own building at the plot. Repairing outside town never heals.
+- **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions stay with the settlement, and their shared-work cover disappears.
+- **Abandonment:** the buildings fall. The stockpile, every stash and the materials of unfinished projects spill into one bag at the plot, and stash owners are told.
+- **Left for later stages, and not advertised until then:**
+  - Stage 4: `stash.pilfer`, the watchtower as a witness, and the storehouse lock.
+  - Stage 5: the infirmary (needs `wyrm_scale`, a ninth building and town slot), and watchtower movements in `corpse.examine`. The watchtower logs walking only, so a death leaves an arrival with no departure.
+  - Stage 6: allies using stations and not setting off the palisade (`buildingStation` and `noteCrossing` in `buildings.ts`), and the palisade's raid defense.
+- **Measured** (`test/village-sim.ts`, 27 cases: items valued at cost, at quest pay and at half shop prices; newcomer, veteran and perfectly geared players; 3 maps; searched strategies on every side):
+  - A village earns **1.66-3.94x** the best solo play per member-hour (median 2.25x). The solo side may found alone, recruit idle accounts and solo every boss respawn.
+  - An exiled member loses **32-73%** (median 57%).
+  - A full stockpile is worth **2.1-3.6 member-hours** at cost and at quest pay. At half shop prices it is 1.0-3.1: crafted gear dominates that valuation, so veteran and maxed villages fall short of 2.
+  - Without shared work only 4 of the 27 cases reach 1.5x.
+- Tests: `test/buildings.test.ts` covers projects, upkeep, bonuses, shared work, food, stashes, secrecy, old saves and the boss bar with the new buffs. `test/economy.test.ts` checks the targets by playing the real rules (`test/village-sim.ts`).
 
 ## Stage 4: Theft and witnesses
 
 - **Who can steal:**
   - `stockpile.pilfer` is open to any member, and to outsiders who carry a key.
-  - `stash.pilfer` targets another member's hut stash.
+  - `stash.pilfer` targets another member's hut stash, or one a former member left behind.
   - Each takes up to a capped share per action, and the action takes time.
 - **Witnesses:** at the moment of the act, every other player present in the zone (not traveling) has a chance to see it, and so does the watchtower.
   - Each witness gets a private event, `witness.saw { actor, act, items }`.
   - Nothing is broadcast. A witness decides whether to tell, keep quiet, or lie.
-- **Undetected theft:** the audit log shows a `missing` entry with the items and no actor. The storehouse lock raises the chance of a `traces` entry that names the culprit to members.
+- **Shared work:** stolen raw materials refine like any others, and only gathering and skinning give cover.
+- **Undetected theft:** the audit log shows a `missing` entry with the items and no actor. A storehouse lock (added to the stage 3 storehouse here) raises the chance of a `traces` entry that names the culprit to members.
 - The operator feed gets `theft` events with the true culprit.
 - Tests: `test/theft.test.ts` covers no-witness theft leaving `missing` without an actor, a witness getting the private event, and non-witnesses learning nothing through any command or event.
 
 ## Stage 5: Downed, permanent death, murder mysteries
 
 - **Downed** (replaces respawn in `killPlayer`, `world.ts:594`):
-  - At 0 HP outside town the player becomes `downed` for `TIMING.downedMs` (~60 s; doubled near an infirmary).
+  - At 0 HP outside town the player becomes `downed` for `TIMING.downedMs` (~60 s; doubled near an infirmary, a building this stage adds).
   - While downed the player cannot act, chat or DM. Mobs drop their aggro.
   - Any player can `revive` them (a 5 s channel that damage interrupts), bringing them back at 30% HP.
   - In PvP zones, any player can `attack` a downed player to finish them.
   - **Field bandage:** a craftable item that allows one self-revive. It is a trade good and stops solo deaths from wiping out every bot.
+- **Settlement membership of the dead:** remove them as `removeMember` does, so their shared-work cover goes too. Decide who gets their stash.
 - **Permanent death:**
   - **Character state:** `Player.dead = { at, zone }`. Commands return a `DEAD` error with a hint to register a new character, and `observe` still works. The name stays reserved.
   - **Loot:** everything carried and equipped drops into a corpse bag.

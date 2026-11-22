@@ -40,7 +40,7 @@ export const FOCUS_RULE =
 
 /** Shared rule text: job tools. */
 export const TOOL_RULE =
-  'Tools: every job needs its own tool in your tool slot (pickaxe, axe, skinning knife for hides, tongs, saw, needle, hammer for all forging). You start with a copper kit; tier-3 work needs iron tools from a toolcrafter. ' +
+  'Tools: every job needs its own tool in your tool slot (pickaxe, axe, hoe for fields, skinning knife for hides, tongs, saw, needle, pot for cooking, trowel for building, hammer for all forging). You start with a copper kit; tier-3 work needs iron tools from a toolcrafter. ' +
   'Crafted gear is unique and can be modified with orbs at the altar (affixes for every job); hire an enchanter through a blind trade rather than paying full fees yourself.';
 
 /** Shared rule text rendered with every starter: how the map works. */
@@ -330,7 +330,8 @@ export const STARTERS: StarterPrompt[] = [
       'Your goal is to found one (catalog().settlement.foundCost: silver, planks and stone, paid by you) and bring in people you trust. ' +
       'This is PvP land: anyone there can kill you and take all you carry, and whoever is present sees who did it. ' +
       'The charter is your real decision. It sets open or closed membership, the role that may withdraw, and a tax on quest silver. Every stockpile change is logged with a name, ' +
-      'but the log only records: judging is up to the members, who can exile anyone or replace you by majority vote. Members and stockpile are secret from outsiders. ' + CHAT_RULE,
+      'but the log only records: judging is up to the members, who can exile anyone or replace you by majority vote. Members and stockpile are secret from outsiders. ' +
+      'Buildings (catalog().buildings) are what make it pay: with three of them and three members you are a village, where refining at the workshop makes far more on whatever the others gathered. ' + CHAT_RULE,
     firstSteps: [
       "setFocus(['mining', 'woodcutting', 'woodworking']) in town",
       "acceptQuest('wolf_cull'), then earn 200 silver from quests, hunting and trades, or pool it with partners",
@@ -339,8 +340,33 @@ export const STARTERS: StarterPrompt[] = [
       "foundSettlement('Your Name Here', 'ridge')",
       "settlementSetCharter({ withdrawRole: 'steward', taxPct: 10 }), then settlementInvite(playerId) the people you trust",
       'goToStockpile(), stockpileDeposit(items), and read stockpileLog() to see who keeps their word',
+      "settlementContribute('workshop') to start the first building, and tell the others what it still needs",
     ],
     milestone: { description: 'Belong to a settlement with at least two members and something of yours in its stockpile.', items: ['stone', 'pine_plank'] },
+  },
+  {
+    id: 'builder',
+    title: 'Builder',
+    archetype: 'crafter',
+    risk: 'high',
+    zones: ['town', 'wilds', 'hollow', 'ridge'],
+    focus: ['construction', 'woodworking', 'mining'],
+    summary: 'Turn a settlement into a village: gather, raise its buildings, and keep their upkeep paid.',
+    prompt:
+      'A settlement is only a plot until somebody builds on it. Your goal is to make one a village: three buildings and three members (catalog().buildings has costs, upkeep and effects). ' +
+      'A village pays. At its workshop, refining makes far more on every unit of raw material that OTHER members gathered, so split the work: some gather, others refine what they brought. ' +
+      'A workshop, a farm and a forge hall (which needs Elder Bear pelts) are a strong first three. Every building takes upkeep from the stockpile and does nothing while that is unpaid, ' +
+      'so keep stone and planks in it, and watch who withdraws them. Build only with people you trust: the stockpile is worth stealing. ' + CHAT_RULE,
+    firstSteps: [
+      "setFocus(['construction', 'woodworking', 'mining']) in town",
+      'Find a settlement: settlements(), then ask a member for an invitation and acceptSettlementInvite(); or found one with foundSettlement(name, region)',
+      "travelTo('wilds'), gatherItem('pine_log', 120); travelTo('town'), refineItem('pine_plank', 60)",
+      "gatherItem('iron_ore', 20) in the wilds and refineItem('iron_bar', 10) in town, or trade for the bars",
+      "travelTo('ridge'), gatherItem('stone', 80)",
+      "buildBuilding('workshop'): it contributes what you carry and builds once nothing is missing, or returns what is",
+      "stockpileDeposit upkeep (catalog().buildings.workshop.upkeep), then buildBuilding('farm') and buildBuilding('forge_hall') with your fellow members",
+    ],
+    milestone: { description: 'Belong to a settlement of level 2 (a village) or higher, with its buildings working.', items: ['pine_plank', 'stone'] },
   },
   {
     id: 'field_tester',

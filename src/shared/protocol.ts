@@ -2,10 +2,10 @@
 // Commands:  POST /api/command   { commandId, type, payload }  ->  CommandResponse
 // Events:    GET  /api/events    (Server-Sent Events, one JSON GameEvent per message)
 
-import type { AbilityId, ItemStack, Safety, Slot, ZoneId, CATALOG } from './catalog.ts';
+import type { AbilityId, BuildingId, ItemStack, Safety, Slot, ZoneId, CATALOG } from './catalog.ts';
 import type { MAP_RULES, PlaceId, Pos, WorldMap } from './map.ts';
 
-export type { ItemStack, ZoneId, Pos, PlaceId, WorldMap };
+export type { BuildingId, ItemStack, ZoneId, Pos, PlaceId, WorldMap };
 
 export type ErrorCode =
   | 'BAD_REQUEST' | 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'UNKNOWN_COMMAND'
@@ -60,7 +60,8 @@ export interface SelfView {
   inventory: ItemStack[];
   skills: Record<string, SkillView>;
   abilities: AbilityView[];
-  effects: { evadeMs: number; braceMs: number };
+  /** `wellFedMs`: time left of Well fed (catalog.food). */
+  effects: { evadeMs: number; braceMs: number; wellFedMs: number };
   quests: QuestProgress[];
   /** Focus skills (up to catalog.focus.slots). Focused skills earn more XP, level past the unfocused cap, and unlock tier-3 recipes. */
   focus: FocusView;
@@ -114,16 +115,42 @@ export interface SettlementView {
   members: { id: string; name: string; role: SettlementRole; online: boolean; joinedAt: number }[];
   invites: { playerId: string; name: string; expiresInMs: number }[];
   motions: SettlementMotionView[];
+  levelName: string;
+  /** The level that counts only paid-up buildings. It decides income and shared work. */
+  activeLevel: number;
+  slots: { used: number; max: number };
+  buildings: BuildingView[];
+  projects: ProjectView[];
+  sharedWork: SharedWorkView;
+  /** Palisade alerts, newest first. */
+  alerts: PalisadeAlert[];
 }
-/** observe().settlement: the settlement you belong to. */
-export interface SettlementSummary { id: string; name: string; zone: ZoneId; plotId: string; x: number; y: number; role: SettlementRole }
+/** A finished building. `upkeepInMs`: until the stockpile is next charged (0 while unpaid). */
+export interface BuildingView { id: BuildingId; working: boolean; upkeep: ItemStack[]; upkeepInMs: number }
+/** A building under construction. `readyToBuild`: the materials are all in, so settlement.build works. */
+export interface ProjectView { building: BuildingId; contributed: ItemStack[]; needs: ItemStack[]; work: number; workNeeded: number; readyToBuild: boolean }
+/** `covered`: raw units other members gathered that will cover your refining at the workshop (catalog.settlement.sharedWork). */
+export interface SharedWorkView { active: boolean; outputPct: number; covered: ItemStack[] }
+export interface PalisadeAlert { ts: number; playerId: string; name: string }
+export interface WatchEntry { id: number; ts: number; playerId: string; name: string; move: 'arrive' | 'depart' }
+/** One of your stashes. `member: false`: you left that settlement, and can still take your things out at its plot. */
+export interface StashView { settlementId: string; name: string; plotId: string; member: boolean; items: ItemStack[] }
+/** observe().settlement: the settlement you belong to. `buildings`: the ones working now. */
+export interface SettlementSummary { id: string; name: string; zone: ZoneId; plotId: string; x: number; y: number; role: SettlementRole; level: number; buildings: BuildingId[] }
 /** An invitation you received. Join with settlement.join. */
 export interface SettlementInviteView { settlementId: string; name: string; zone: ZoneId; members: number; expiresInMs: number }
 /**
  * One stockpile_log row. Every change to a stockpile is recorded with its actor. `tax`: a member's quest tax.
- * `abandoned`: the last member left and the stockpile spilled into a loot bag at the plot (no actor).
+ * `abandoned`: the last member left and everything spilled into a loot bag at the plot (no actor).
+ * `contribute` / `cancel`: materials went into a project, or back out of a cancelled one into the stockpile (`building` says which).
+ * `upkeep` / `produced` / `income`: taken for upkeep, grown by the farm, paid by the settlement's level (no actor).
  */
-export interface StockpileEntry { id: number; ts: number; actorId: string | null; actorName: string | null; action: 'deposit' | 'withdraw' | 'tax' | 'abandoned'; items: ItemStack[] }
+export interface StockpileEntry {
+  id: number; ts: number; actorId: string | null; actorName: string | null;
+  action: 'deposit' | 'withdraw' | 'tax' | 'abandoned' | 'contribute' | 'cancel' | 'upkeep' | 'produced' | 'income';
+  items: ItemStack[];
+  building?: BuildingId;
+}
 /** A settlement plot within view. `settlement` is null for a free plot. */
 export interface PlotView extends Located { id: string; region: ZoneId; settlement: { id: string; name: string } | null }
 
@@ -315,7 +342,8 @@ export interface Commands {
   /** `shards`: orb shards found by a shard_find tool. */
   gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number; shards?: number } };
   /** `bonus`: extra outputs from focused specialization (already included in `output.qty`). */
-  refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; inputsSaved?: number } };
+  /** `shared`: shared work at your village's workshop: the units other members' gathering covered, and the extra output (already in `output.qty`). */
+  refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; inputsSaved?: number; shared?: { units: number; output: number } } };
   /** Gear recipes create unique items, listed in `items` (their ids are in your inventory). */
   craft: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; items?: UniqueItem[] } };
   'focus.set': { payload: { skills: string[] }; result: FocusView };
@@ -332,6 +360,8 @@ export interface Commands {
   attack: { payload: { targetId: string; ability?: AbilityId }; result: AttackResult };
   'ability.use': { payload: { ability: AbilityId; targetId?: string }; result: AttackResult };
   loot: { payload: { bagId: string; items?: ItemStack[] }; result: { taken: ItemStack[]; remaining: ItemStack[] } };
+  /** Eats one ration from your inventory: Well fed for catalog.food.wellFedMs. */
+  eat: { payload: Empty; result: { ate: string; wellFedMs: number; busyMs: number } };
   // Banking
   'bank.view': { payload: Empty; result: { items: ItemStack[] } };
   'bank.deposit': { payload: { items: ItemStack[] }; result: { bank: ItemStack[]; inventory: ItemStack[] } };
@@ -403,9 +433,24 @@ export interface Commands {
   /** Members at the plot whose role the charter allows (withdrawRole). Recorded in the audit log. */
   'stockpile.withdraw': { payload: { items: ItemStack[] }; result: { stockpile: ItemStack[]; inventory: ItemStack[] } };
   /** Members at the plot: contents plus the latest audit entries (newest first). */
-  'stockpile.view': { payload: Empty; result: { settlementId: string; items: ItemStack[]; log: StockpileEntry[] } };
+  'stockpile.view': { payload: Empty; result: { settlementId: string; items: ItemStack[]; used: number; capacity: number; log: StockpileEntry[] } };
   /** Members, anywhere: page through the audit log (newest first). */
   'stockpile.log': { payload: { limit?: number; beforeId?: number }; result: { settlementId: string; entries: StockpileEntry[] } };
+  // Buildings (members at the plot)
+  /** Puts materials into a building project and starts it if needed. Without `items`: everything it still needs that you carry. */
+  'settlement.contribute': { payload: { building: BuildingId; items?: ItemStack[] }; result: { contributed: ItemStack[]; project: ProjectView } };
+  /** One timed unit of work on a project with all its materials. Needs a trowel in the tool slot. */
+  'settlement.build': { payload: { building: BuildingId }; result: { building: BuildingId; work: number; workNeeded: number; built: boolean; xp: number; busyMs: number } };
+  /** Leader or steward: frees the slot, and the materials go to the stockpile. */
+  'settlement.cancelProject': { payload: { building: BuildingId }; result: { returned: ItemStack[]; settlement: SettlementView } };
+  /** Members at the plot, with working huts. Only you see your stash. */
+  'stash.deposit': { payload: { items: ItemStack[] }; result: { stash: ItemStack[]; inventory: ItemStack[] } };
+  /** The owner at the plot, also after leaving the settlement or while the huts are unpaid. */
+  'stash.withdraw': { payload: { items: ItemStack[]; settlementId?: string }; result: { stash: ItemStack[]; inventory: ItemStack[] } };
+  /** Your own stashes, from anywhere. */
+  'stash.view': { payload: Empty; result: { stashes: StashView[] } };
+  /** Members, anywhere: who walked into and out of the region while the watchtower worked (newest first). */
+  'watchtower.log': { payload: { limit?: number; beforeId?: number }; result: { settlementId: string; recording: boolean; entries: WatchEntry[] } };
   // Feedback
   reportFeedback: { payload: { category: FeedbackCategory; summary: string; details?: string; relatedCommandId?: string }; result: { feedbackId: number } };
 }
@@ -450,8 +495,11 @@ export type EventType =
   | 'party.invited' | 'party.joined' | 'party.left' | 'party.message'
   // settlements: founded/disbanded go to the region; the rest only to members (settlement.invited/left also to the player concerned)
   | 'settlement.founded' | 'settlement.disbanded' | 'settlement.invited' | 'settlement.joined' | 'settlement.left' | 'settlement.role' | 'settlement.charter' | 'settlement.vote' | 'stockpile.changed'
+  | 'settlement.project' | 'settlement.building' | 'settlement.alert' | 'stockpile.upkeep'
+  // private to a former member whose stash spilled when the settlement was abandoned
+  | 'stash.spilled'
   // operator only
-  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired' | 'shop' | 'repair' | 'item.modified' | 'item.salvaged' | 'party';
+  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired' | 'shop' | 'repair' | 'item.modified' | 'item.salvaged' | 'party' | 'stash' | 'eat';
 
 export interface GameEvent<D = any> {
   id: number;

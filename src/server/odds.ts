@@ -24,6 +24,9 @@ export const SKILL_ODDS = {
   maxBonusOutput: 0.5,
 };
 
+/** Building perks that are chances: the workshop's extra output per unit refined there. */
+export const BUILDING_ODDS = { workshopOutput: 0.1 };
+
 /** Affix value range [min, max] per tier (index 0 = tier 1). */
 export const AFFIX_RANGES: Record<string, [[number, number], [number, number], [number, number]]> = {
   damage: [[4, 8], [9, 15], [16, 25]],
@@ -38,6 +41,9 @@ export const AFFIX_RANGES: Record<string, [[number, number], [number, number], [
   refine_output: [[4, 8], [9, 15], [16, 25]],
   save_inputs: [[3, 6], [7, 11], [12, 18]],
   refine_speed: [[5, 10], [11, 18], [19, 28]],
+  build_speed: [[5, 10], [11, 18], [19, 28]],
+  build_xp: [[5, 10], [11, 20], [21, 35]],
+  build_durable: [[10, 20], [21, 35], [36, 55]],
   craft_ilvl: [[1, 2], [3, 5], [6, 9]],
   mod_odds: [[5, 10], [11, 20], [21, 35]],
   orb_fee: [[5, 10], [11, 20], [21, 35]],
@@ -75,4 +81,4 @@ export function rollAffix(rng: () => number, base: string, ilvl: number, exclude
 }
 
 /** Operator view of every odds table (dashboard only). */
-export const ODDS = { mobLoot: MOB_LOOT, skill: SKILL_ODDS, affixRanges: AFFIX_RANGES, affixTierWeight: AFFIX_TIER_WEIGHT, orbs: ORB_ODDS };
+export const ODDS = { mobLoot: MOB_LOOT, skill: SKILL_ODDS, buildings: BUILDING_ODDS, affixRanges: AFFIX_RANGES, affixTierWeight: AFFIX_TIER_WEIGHT, orbs: ORB_ODDS };

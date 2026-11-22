@@ -119,7 +119,7 @@ function modify(g: Game, p: Player, payload: Record<string, any>) {
   u.mods++;
   g.store.ledger('destroyed.orbFee', fee);
   g.store.ledger(`orbs.used.${orb}`, 1);
-  const xp = gainXp(p, 'enchanting', XP.modify * (itemDef(orbItem)?.tier ?? 1));
+  const xp = gainXp(g, p, 'enchanting', XP.modify * (itemDef(orbItem)?.tier ?? 1));
   const lines = u.affixes.map((a) => affixLine(publicAffix(a)));
   g.emit('item.modified', { kind: 'operator' }, { playerId: p.id, name: p.name, item: u.id, base: u.base, orb, outcome, fee, rarity: u.rarity, corrupted: u.corrupted, affixes: lines }, { zone: 'town', actor: p });
   g.setLastAction(p, 'modify', `${orb} on ${u.base}: ${outcome}${lines.length ? ` (${lines.join('; ')})` : ''}`);
