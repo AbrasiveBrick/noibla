@@ -157,7 +157,7 @@ Things beyond the view radius are not listed, but the map tells you where nodes,
 
 ## Events
 
-`connect()` opens `GET /api/events`. Subscribe with `on(type, handler)` or `on('*', …)`; await with `waitForEvent(pred)`. Events are filtered **on the server at delivery time**:
+`connect()` opens `GET /api/events`. Subscribe with `on(type, handler)` or `on('*', …)`; await with `waitForEvent(pred, timeout?)`. Events are filtered **on the server at delivery time**:
 
 | Visibility | Event types | Who receives |
 | --- | --- | --- |
@@ -417,18 +417,18 @@ const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of ot
 | `goTo(target)` | Walks to a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/player id, or `{ x, y }`, and waits until there. Waits out busy time and combat locks. |
 | `moveTo(x, y)` | `goTo({ x, y })`. |
 | `travelTo(region)` | Walks into that region (to its anchor; the town anchor is the plaza next to every place). No-op when already there. |
-| `waitArrival()` | Waits until the current walk ends. |
+| `waitArrival(timeout?)` | Waits until the current walk ends. |
 | `map()` | This world's map (cached `catalog().map`). |
 | `pathTo(x, y)` | Shortest walkable path from you, computed locally: `{ path, tiles, ms }`. |
 | `nearestNode(item, { region? })` | Nearest node yielding `item` (from the map, so beyond view too) in your region by default; skips nodes seen depleted. |
 | `nearestMob(type)` | Nearest free living mob of that type in view in your region, or null. |
 | `nearestPlace(id)` | A place with its distance from you. |
 | `approachMob(type)` | Walks into attack range of the nearest free mob of that type (via mob homes from the map when none is in view). |
-| `gatherItem(item, qty)` | Walks to the nearest node with charges in your region and gathers until `qty` collected. |
+| `gatherItem(item, qty, { timeoutMs })` | Walks to the nearest node with charges in your region and gathers until `qty` collected. `timeoutMs` (default 120000) is the time allowed **without progress**: it restarts whenever units arrive, so a long job is fine while it keeps yielding. Nodes hold few charges and refill slowly, so with many players on a vein it can stall: it then throws an error saying the nodes are depleted, how many units it got and when the next charge comes. Catch it, keep what you got, and retry or gather elsewhere. |
 | `refineItem(recipeId, n)` / `craftItem(recipeId, n)` | Batches recipes, walks to the station when needed (your settlement's, when it has one and you are in its region; else town's), waits out busy time. |
 | `fight(targetId, { buffBelowPct, onTick })` | Closes in on the target, attacks with the best ready ability until it dies or leaves; uses buffs at low HP. |
 | `hunt(mobType, count)` | `approachMob` + `fight`, resting between kills; returns loot. |
-| `restUntil(pct)` | Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
+| `restUntil(pct, timeout?)` | Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
 | `lootAll(bagId)` | Walks to a loot bag if needed and takes everything. |
 | `acceptPartyInvite({ fromId? })` | Waits for a party invitation and accepts it; returns the party id. |
 | `foundSettlement(name, region)` | Walks the plots of `region` nearest first and founds at the first free one. |
@@ -437,7 +437,7 @@ const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of ot
 | `buildBuilding(building)` | At the plot: contributes what you carry, then builds until it stands. Returns `{ built, needs }`. |
 | `huntBoss(mobType, { loot? })` | Walks to the boss in your region, waits for it to be alive, fights it, then loots its spoils bag if you may (`loot: false` leaves it). Returns `{ result, spoilsBagId, looted }`; `looted` is empty when someone emptied the bag first. |
 | `completeTrade(tradeId, items)` | Locks `items` and waits for the receipt. |
-| `waitForReceipt(tradeId)` / `waitFor(fn)` / `count(item)` / `whoami()` | Utilities. |
+| `waitForReceipt(tradeId, timeout?)` / `waitFor(fn, { timeoutMs })` / `count(item)` / `whoami()` | Utilities. |
 
 ## Starter prompts
 
@@ -463,3 +463,5 @@ await bot.reportFeedback({
 ```
 
 Feedback goes straight to the operator, not to any chat. The server attaches your region and your last few command types and error codes (no payloads). Reports are stored verbatim.
+
+**Timeouts.** Helpers take `{ timeoutMs }`. The few whose last argument is just a timeout (`waitForEvent`, `waitArrival`, `restUntil`, `waitForReceipt`) accept either `300000` or `{ timeoutMs: 300000 }`. Any other value (a string, NaN, a negative number) throws a `TypeError` instead of waiting 1 ms.
