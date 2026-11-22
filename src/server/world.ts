@@ -3,15 +3,16 @@
 
 import { randomBytes } from 'node:crypto';
 import {
-  ABILITIES, AFFIXES, BASE_HP, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
+  ABILITIES, AFFIXES, BASE_HP, PARTY, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
   effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
 } from '../shared/catalog.ts';
-import type { AffixRoll, UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
+import type { AffixRoll, MobView, UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
 import { MAP_RULES, dist, findPath, inBounds, nearestWalkable, pathLength, placeOf, pointAlong, regionAt, walkable, type PlaceId, type Pos } from '../shared/map.ts';
 import type { Game } from './game.ts';
 import { MOB_LOOT, SKILL_ODDS } from './odds.ts';
-import type { CommandDef, Mob, Player, Walk } from './types.ts';
-import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
+import type { CommandDef, LootBag, Mob, Player, Walk } from './types.ts';
+import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
+import { alliesInZone, invitesFor, partyDamageMult, partyOf, partyView } from './party.ts';
 
 // ---------- affixes ----------
 
@@ -233,12 +234,17 @@ function zoneView(g: Game, p: Player): ZoneView {
     mobs: near([...g.mobs.values()].map((m) => {
       const def = MOB_TYPES[m.type];
       const alive = m.deadUntil <= now && m.hp > 0;
-      return { id: m.id, type: m.type, name: def.name, region: m.zone, ...loc(alive ? m : m.home, I), hp: alive ? m.hp : 0, maxHp: def.hp, alive, respawnInMs: alive ? 0 : Math.max(0, m.deadUntil - now), targetId: alive ? m.targetId : null };
+      const view: MobView = { id: m.id, type: m.type, name: def.name, region: m.zone, ...loc(alive ? m : m.home, I), hp: alive ? m.hp : 0, maxHp: def.hp, alive, respawnInMs: alive ? 0 : Math.max(0, m.deadUntil - now), targetId: alive ? m.targetId : null };
+      if (def.boss) { view.boss = true; view.enrageInMs = alive && m.engagedAt !== undefined ? Math.max(0, m.engagedAt + g.ms(def.boss.enrageAfterMs) - now) : null; }
+      return view;
     })),
     players: near([...g.players.values()].filter((o) => o.id !== p.id).map((o) => ({
       id: o.id, name: o.name, region: o.zone, ...loc(posOf(g, o), I), walking: !!o.travel, hpPct: Math.round((o.hp / maxHp(o)) * 100), equipment: { ...o.equipment }, inCombat: now - o.lastCombatAt < g.ms(TIMING.outOfCombatMs),
     }))),
-    lootBags: near([...g.bags.values()].map((b) => ({ id: b.id, region: b.zone, ...loc({ x: b.x!, y: b.y! }, I), ownerId: b.ownerId, ownerName: b.ownerName, items: toStacks(b.items), expiresInMs: Math.max(0, b.expiresAt - now) }))),
+    lootBags: near([...g.bags.values()].map((b) => ({
+      id: b.id, region: b.zone, ...loc({ x: b.x!, y: b.y! }, I), ownerId: b.ownerId, ownerName: b.ownerName, items: toStacks(b.items), expiresInMs: Math.max(0, b.expiresAt - now), youMayLoot: mayLoot(g, b, p.id),
+      ...(b.eligible ? { spoils: true, opensToAllInMs: Math.max(0, (b.opensToAllAt ?? 0) - now) } : {}),
+    }))),
   };
 }
 
@@ -270,6 +276,8 @@ export function observe(g: Game, p: Player): Observation {
     zone: zoneView(g, p),
     unreadDms: unread,
     openTrades,
+    party: partyOf(g, p) ? partyView(g, partyOf(g, p)!) : null,
+    partyInvites: invitesFor(g, p),
   };
 }
 
@@ -588,13 +596,18 @@ function pickAbility(g: Game, p: Player, requested: AbilityId | undefined): Abil
   return attacks[0]?.id ?? 'punch';
 }
 
-function attackDamage(p: Player, ability: AbilityId): { damage: number; skill: SkillId } {
+function weaponSkillOf(p: Player): SkillId {
+  const weapon = p.equipment.weapon ? itemDef(p.equipment.weapon) : undefined;
+  return weapon?.weaponSkill ?? 'unarmed';
+}
+
+function attackDamage(g: Game, p: Player, ability: AbilityId): { damage: number; skill: SkillId } {
   const def = ABILITIES[ability];
   const weapon = p.equipment.weapon ? itemDef(p.equipment.weapon) : undefined;
-  const skill: SkillId = weapon?.weaponSkill ?? 'unarmed';
+  const skill = weaponSkillOf(p);
   const base = def.flatDamage ?? (weapon?.power ?? 0) * gearMultiplier(p, 'weapon') * (def.powerMult ?? 1);
   const bonusLevels = Math.min(skillLevel(p, skill), COMBAT.damageBonusMaxLevel);
-  return { damage: base * (1 + COMBAT.damageBonusPerLevel * bonusLevels) * (1 + affixSum(p, COMBAT_SLOTS, 'damage') / 100), skill };
+  return { damage: base * (1 + COMBAT.damageBonusPerLevel * bonusLevels) * (1 + affixSum(p, COMBAT_SLOTS, 'damage') / 100) * partyDamageMult(g, p), skill };
 }
 
 function combatXp(damage: number): number {
@@ -663,7 +676,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     fail('INVALID_TARGET', `no target ${targetId}`);
   }
 
-  const { damage: raw, skill } = attackDamage(p, ability);
+  const { damage: raw, skill } = attackDamage(g, p, ability);
   addWear(g, p, 'weapon', WEAR.perAttack);
   const weaponWear = p.equipment.weapon ? Math.round(wearOf(p, p.equipment.weapon) * 100) / 100 : undefined;
   if (def.cooldownMs > 0) p.cooldowns[ability] = now + g.ms(def.cooldownMs);
@@ -678,16 +691,27 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     mob.hp = Math.max(0, mob.hp - damage);
     mob.aggro[p.id] = (mob.aggro[p.id] ?? 0) + damage;
     if (!mob.targetId) { mob.targetId = p.id; mob.nextAttackAt = now + g.ms(mdef.attackMs); }
+    if (mdef.boss) {
+      if (mob.engagedAt === undefined) { mob.engagedAt = now; mob.nextAoeAt = now + g.ms(mdef.boss.aoeEveryMs); }
+      mob.contributors = mob.contributors ?? [];
+      if (!mob.contributors.includes(p.id)) mob.contributors.push(p.id);
+    }
     const xp = gainXp(p, skill, combatXp(damage));
     g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: mob.id, targetName: mdef.name, ability, damage, targetHp: mob.hp }, { zone, actor: p });
     let loot: ItemStack[] = [];
     let killed = false;
     let note: string | undefined;
+    let spoilsBagId: string | undefined;
     if (mob.hp <= 0) {
       killed = true;
       loot = rollLoot(g, mob.type, p);
-      addItems(p.inventory, loot);
-      if (MOB_LOOT[mob.type].drops.some((d) => d.skin)) {
+      if (mdef.boss) {
+        // Boss loot goes into a spoils bag that the players who fought it may open first. Any of them can take it all.
+        const bag = dropSpoils(g, mob, loot, now);
+        spoilsBagId = bag.id;
+        note = `${mdef.name} spoils dropped into bag ${bag.id}: only the ${bag.eligible!.length} player(s) who damaged it can loot it for the next ${Math.round(g.ms(PARTY.spoilsReservedMs) / 1000)}s, then anyone can.`;
+      } else addItems(p.inventory, loot);
+      if (!mdef.boss && MOB_LOOT[mob.type].drops.some((d) => d.skin)) {
         if (equippedToolTier(p, 'skinning') >= requiredToolTier(mdef.tier)) {
           addWear(g, p, 'tool', WEAR.perToolUse);
           if (findShard(g, p)) loot = toStacks(Object.fromEntries([...loot, { item: 'orb_shard', qty: 1 }].reduce((m, s) => m.set(s.item, (m.get(s.item) ?? 0) + s.qty), new Map<string, number>())));
@@ -702,17 +726,18 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
       }
       g.store.ledger('created.mobs', silverIn(loot));
       for (const s of loot) if (itemDef(s.item)?.kind === 'orb') g.store.ledger('orbs.created.mobs', s.qty);
+      const contributors = mob.contributors ?? [];
       mob.deadUntil = now + g.ms(mdef.respawnMs);
-      mob.aggro = {};
-      mob.targetId = null;
+      resetMob(mob);
       p.stats.kills++;
       questProgress(g, p, 'kill', mob.type, 1);
-      g.emit('combat.kill', { kind: 'zone', zone }, { killerId: p.id, killerName: p.name, targetId: mob.id, targetType: mob.type, loot }, { zone, actor: p });
+      shareKill(g, p, mob.type, contributors);
+      g.emit('combat.kill', { kind: 'zone', zone }, { killerId: p.id, killerName: p.name, targetId: mob.id, targetType: mob.type, loot, ...(spoilsBagId ? { spoilsBagId } : {}) }, { zone, actor: p });
       g.setLastAction(p, 'combat', `killed ${mdef.name} (loot: ${describe(loot)})`);
     } else {
       g.setLastAction(p, 'combat', `fighting ${mdef.name}`);
     }
-    return { ability, targetId: mob.id, damage, dodged: false, targetHp: mob.hp, killed, loot, xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}), ...(note ? { note } : {}) };
+    return { ability, targetId: mob.id, damage, dodged: false, targetHp: mob.hp, killed, loot: spoilsBagId ? [] : loot, xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}), ...(note ? { note } : {}), ...(spoilsBagId ? { spoilsBagId } : {}) };
   }
 
   const v = victim!;
@@ -721,6 +746,58 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
   g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: v.id, targetName: v.name, ability, damage: res.damage, dodged: res.dodged, targetHpPct: Math.round((v.hp / maxHp(v)) * 100), pvp: true }, { zone, actor: p });
   g.setLastAction(p, 'combat', res.killed ? `killed ${v.name}` : `attacking ${v.name}`);
   return { ability, targetId: v.id, damage: res.damage, dodged: res.dodged, targetHp: res.killed ? 0 : v.hp, killed: res.killed, loot: [], xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}) };
+}
+
+/** Clears a mob's fight state (aggro, target, boss clocks). Callers move it home when needed. */
+function resetMob(m: Mob) {
+  m.aggro = {};
+  m.targetId = null;
+  delete m.engagedAt;
+  delete m.nextAoeAt;
+  delete m.contributors;
+}
+
+function dropSpoils(g: Game, mob: Mob, loot: ItemStack[], now: number): LootBag {
+  const eligible = (mob.contributors ?? []).filter((id) => g.players.has(id));
+  const bag: LootBag = {
+    id: newId('bag'), zone: mob.zone, x: round1(mob.x), y: round1(mob.y), ownerId: mob.id, ownerName: MOB_TYPES[mob.type].name, items: toBag(loot), createdAt: now,
+    expiresAt: now + g.ms(TIMING.lootBagTtlMs), eligible, opensToAllAt: now + g.ms(PARTY.spoilsReservedMs),
+  };
+  g.bags.set(bag.id, bag);
+  g.markBag(bag);
+  g.emit('loot.dropped', { kind: 'zone', zone: mob.zone }, { bagId: bag.id, ownerId: mob.id, ownerName: bag.ownerName, items: loot, spoils: true, eligible: eligible.map((id) => g.players.get(id)!.name) }, { zone: mob.zone });
+  return bag;
+}
+
+/**
+ * Kill credit beyond the killer: party members in the region get the quest credit and a share of XP;
+ * everyone else who damaged a boss gets the quest credit.
+ */
+function shareKill(g: Game, killer: Player, mobType: string, contributors: string[]) {
+  const def = MOB_TYPES[mobType];
+  const credited = new Set<string>([killer.id]);
+  for (const a of alliesInZone(g, killer)) {
+    credited.add(a.id);
+    const skill = weaponSkillOf(a);
+    const xp = gainXp(a, skill, Math.round(def.hp * COMBAT.xpPerDamage * PARTY.killXpShare));
+    questProgress(g, a, 'kill', mobType, 1);
+    g.emit('quest.progress', { kind: 'player', playerId: a.id }, { partyKill: true, killerName: killer.name, mobType, xp, skill }, {});
+    g.markPlayer(a);
+  }
+  if (def.boss) {
+    for (const id of contributors) {
+      if (credited.has(id)) continue;
+      const c = g.players.get(id);
+      if (!c) continue;
+      credited.add(id);
+      questProgress(g, c, 'kill', mobType, 1);
+      g.markPlayer(c);
+    }
+  }
+}
+
+export function mayLoot(g: Game, b: LootBag, playerId: string): boolean {
+  return !b.eligible || (b.opensToAllAt ?? 0) <= g.now() || b.eligible.includes(playerId);
 }
 
 function silverIn(stacks: ItemStack[]): number {
@@ -800,6 +877,11 @@ function loot(g: Game, p: Player, payload: Record<string, any>) {
   const zone = requireArrived(g, p);
   const bag = g.bags.get(bagId);
   if (!bag) fail('NOT_FOUND', `no loot bag ${bagId}`);
+  if (!mayLoot(g, bag!, p.id)) {
+    const wait = bag!.opensToAllAt! - g.now();
+    fail('FORBIDDEN', `these are ${bag!.ownerName} spoils: only the players who damaged it can loot them for another ${Math.ceil(wait / 1000)}s`, wait,
+      `eligible: ${bag!.eligible!.map((id) => g.players.get(id)?.name ?? id).join(', ')}. Wait retryAfterMs, or ask one of them to share.`);
+  }
   requireInRange(g, p, { x: bag!.x!, y: bag!.y! }, bagId, 'loot bag');
   const asked = payload.items === undefined ? toStacks(bag!.items) : stacks(payload.items, 'items', false);
   const want = removeItems(bag!.items, asked);
@@ -951,6 +1033,28 @@ function repair(g: Game, p: Player, payload: Record<string, any>) {
 
 // ---------- tick ----------
 
+/** Boss damage multiplier: enraged once the fight has lasted `enrageAfterMs`. */
+function enrageMult(g: Game, m: Mob, now: number): number {
+  const boss = MOB_TYPES[m.type].boss;
+  return boss && m.engagedAt !== undefined && now - m.engagedAt >= g.ms(boss.enrageAfterMs) ? boss.enrageMult : 1;
+}
+
+/** Boss area attack: hits everyone fighting it within `aoeRadius` tiles. */
+function bossSweep(g: Game, m: Mob, now: number, valid: (id: string) => boolean) {
+  const boss = MOB_TYPES[m.type].boss!;
+  if (m.nextAoeAt === undefined || now < m.nextAoeAt) return;
+  m.nextAoeAt = now + g.ms(boss.aoeEveryMs);
+  const mult = enrageMult(g, m, now);
+  const name = MOB_TYPES[m.type].name;
+  for (const id of Object.keys(m.aggro)) {
+    if (!valid(id)) continue;
+    const target = g.players.get(id)!;
+    if (dist(m, posOf(g, target)) > boss.aoeRadius + 1e-9) continue;
+    const res = damagePlayer(g, target, boss.aoeDamage * mult, { kind: 'mob', id: m.id, name });
+    g.emit('combat.hit', { kind: 'zone', zone: m.zone }, { attackerId: m.id, attackerName: name, targetId: target.id, targetName: target.name, ability: 'sweep', damage: res.damage, dodged: res.dodged, targetHpPct: res.killed ? 0 : Math.round((target.hp / maxHp(target)) * 100), area: true, enraged: mult > 1 }, { zone: m.zone });
+  }
+}
+
 export function worldTick(g: Game, now: number) {
   for (const p of g.players.values()) {
     if (p.travel) walkTick(g, p, now);
@@ -967,26 +1071,28 @@ export function worldTick(g: Game, now: number) {
     const last = m.movedAt ?? now;
     m.movedAt = now;
     if (m.hp <= 0 || m.deadUntil > now) {
-      if (m.deadUntil <= now) { m.hp = def.hp; m.deadUntil = 0; m.aggro = {}; m.targetId = null; m.x = m.home.x; m.y = m.home.y; }
+      if (m.deadUntil <= now) { m.hp = def.hp; m.deadUntil = 0; resetMob(m); m.x = m.home.x; m.y = m.home.y; }
       continue;
     }
-    if (!m.targetId) continue;
+    if (!m.targetId && m.hp >= def.hp && m.engagedAt === undefined && m.x === m.home.x && m.y === m.home.y) continue;
     // A mob keeps chasing an attacker anywhere in its own region; it gives up (healed, back home) when none is left there.
+    // A target that died (or left) hands the fight to the next attacker still here.
     const valid = (id: string) => { const t = g.players.get(id); return !!t && t.zone === m.zone; };
-    if (!valid(m.targetId)) {
-      delete m.aggro[m.targetId];
+    if (!m.targetId || !valid(m.targetId)) {
+      if (m.targetId) delete m.aggro[m.targetId];
       const next = Object.entries(m.aggro).filter(([id]) => valid(id)).sort((a, b) => b[1] - a[1])[0];
       if (next) { m.targetId = next[0]; }
-      else { m.targetId = null; m.aggro = {}; m.hp = def.hp; m.x = m.home.x; m.y = m.home.y; continue; }
+      else { resetMob(m); m.hp = def.hp; m.x = m.home.x; m.y = m.home.y; continue; }
     }
     const target = g.players.get(m.targetId!)!;
     const tpos = posOf(g, target);
     mobStep(g, m, tpos, (now - last) / g.ms(MAP_RULES.mobMsPerTile));
-    if (dist(m, tpos) > MAP_RULES.range.interact + 1e-9) continue;
+    if (def.boss) bossSweep(g, m, now, valid);
+    if (!m.targetId || dist(m, tpos) > MAP_RULES.range.interact + 1e-9) continue;
     if (now >= m.nextAttackAt) {
       m.nextAttackAt = now + g.ms(def.attackMs);
       const zone = m.zone;
-      const res = damagePlayer(g, target, def.damage, { kind: 'mob', id: m.id, name: def.name });
+      const res = damagePlayer(g, target, def.damage * enrageMult(g, m, now), { kind: 'mob', id: m.id, name: def.name });
       g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: m.id, attackerName: def.name, targetId: target.id, targetName: target.name, ability: 'claw', damage: res.damage, dodged: res.dodged, targetHpPct: res.killed ? 0 : Math.round((target.hp / maxHp(target)) * 100) }, { zone });
     }
   }

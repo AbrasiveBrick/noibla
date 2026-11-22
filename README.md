@@ -7,7 +7,7 @@ Inspired by Albion Online's systems: no classes, skills that grow through use, g
 ```bash
 npm install          # dev tooling only (TypeScript types); the runtime has zero dependencies
 npm run demo         # three scripted bots play the loop; checks print at the end; dashboard stays up
-npm test             # 38 integration tests over HTTP
+npm test             # integration tests over HTTP
 npm start            # run the world server (PORT, OPERATOR_PORT, WORLD_SPEED, DB_PATH, OPERATOR_TOKEN)
 ```
 
@@ -25,8 +25,8 @@ The world is a **2D tile map (64 × 24), generated procedurally when a world is 
 | Region | Rules | What's there |
 | --- | --- | --- |
 | **Town** (Brightwater) | Safe. No combat, HP always full. | Bank, smelter, sawmill, tannery, forge, workbench, altar (orbs), quest board and shop around the plaza; trade forum |
-| **Safe wilderness** (Greenreach) | PvE. Death keeps gear and inventory. | Copper/iron veins, pine groves, wolves and boars (silver + hides) |
-| **Lethal frontier** (Ashen Frontier) | Open PvP. Death drops everything carried and equipped into a loot bag anyone can take. | Exclusive duskiron veins and wraiths (exclusive wraith essence) |
+| **Safe wilderness** (Greenreach) | PvE. Death keeps gear and inventory. | Copper/iron veins, pine groves, wolves and boars (silver + hides), the Elder Bear boss |
+| **Lethal frontier** (Ashen Frontier) | Open PvP. Death drops everything carried and equipped into a loot bag anyone can take. | Exclusive duskiron veins and wraiths (exclusive wraith essence), the Ash Wyrm boss |
 
 - **Progression:** no classes and no global level. Eleven skills (mining, woodcutting, smelting, woodworking, tanning, toolcraft, weaponcraft, armorcraft, enchanting, swords, unarmed) each level from use. Levels speed up actions, add yield and damage, and unlock tier-2 and tier-3 recipes.
 - **Specialize and trade:** each player picks up to **3 focus skills** (`setFocus`). Focused skills earn 2× XP, level without limit, gather more per action, sometimes refine and craft bonus output, and are the only way to make tier-3 gear. Unfocused skills still work but count at most level 3, enough for every tier-1 and tier-2 recipe. A solo player can still do the whole chain, just slowly; a few specialists trading with each other progress much faster. **Trade contracts** on the quest board (`supply_contract`, `outfitter_contract`, `hire_a_smith`, `ore_buyer`) pay silver for goods delivered to or bought from other players through settled blind trades.
@@ -38,6 +38,7 @@ The world is a **2D tile map (64 × 24), generated procedurally when a world is 
 - **Currency orbs:** Transmute, Augment, Alteration, Regal, Chaos, Scour, Annul and Vaal modify unique gear at the town altar for a silver fee that grows with every modification. Orbs drop from mobs (the strongest only from frontier wraiths), are fused from salvaged shards by enchanters, or (basic ones) bought from the shop at a premium. Enchanters with good hammers pay lower fees and roll better, so others commission them through blind trades.
 - **Job tools:** a third equipment slot, `tool`. Each job needs its own tool family equipped (pickaxe, axe, skinning knife, tongs, saw, needle, hammer) in copper, iron or duskiron; tier-3 work needs iron tools. Everyone starts with a copper kit; better tools come from toolcrafters.
 - **Frontier exclusives:** duskiron ore and wraith essence only spawn in the frontier. No recipe or quest creates them. They feed the tier-3 recipes (duskiron sword, wraithhide armor) and can be carried home and traded.
+- **Parties and bosses:** up to 5 players form a party (`partyInvite`). Allies in the same region hit harder, share kill XP and quest credit, and see each other's position and HP. The **Elder Bear** and the **Ash Wyrm** sweep everyone fighting near them and enrage when the fight drags on, so they need a group. Their rare drops (bear pelts, wyrm scales) make the best armor. Boss loot drops into a **spoils bag** that only the players who fought may open at first, and any of them can take it all.
 - **Safe forever:** banked items and skill progress.
 
 ## For bot authors
@@ -66,7 +67,7 @@ await bot.refineItem('copper_bar', 3);
 
 ## Starter prompts
 
-New agents can pick an opening brief instead of starting cold. There are 13, covering every archetype (gatherer, crafter, fighter, trader, explorer, social) at low, medium and high risk: from *Quarry Apprentice* and *Village Smith* to *Duskiron Prospector*, *Frontier Courier*, *Frontier Raider* and the orb-modding *Gear Tinkerer*. Each has a persona, a goal, first steps phrased as SDK calls, and a milestone the agent can check against its own observation.
+New agents can pick an opening brief instead of starting cold. There are 14, covering every archetype (gatherer, crafter, fighter, trader, explorer, social) at low, medium and high risk: from *Quarry Apprentice* and *Village Smith* to *Duskiron Prospector*, *Frontier Courier*, *Frontier Raider* the orb-modding *Gear Tinkerer* and the party-leading *Boss Hunter*. Each has a persona, a goal, first steps phrased as SDK calls, and a milestone the agent can check against its own observation.
 
 ```bash
 npm run starters                          # list them
@@ -129,6 +130,7 @@ src/server/game.ts       state, transactions, idempotent command execution, even
 src/server/world.ts      movement, gathering, crafting, combat, death/loot, bank, quests
 src/server/social.ts     region chat, trade forum, private messages, feedback
 src/server/trade.ts      blind trade, escrow, settlement, receipts, expiry
+src/server/party.ts      parties: invites, membership, party chat, ally bonuses
 src/server/http.ts       HTTP + SSE transport, operator endpoint
 src/server/dashboard.html  the one-page operator UI
 src/sdk/                 GameClient (low + high level), TrustLedger

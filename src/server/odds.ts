@@ -12,6 +12,8 @@ export const MOB_LOOT: Record<string, MobLoot> = {
   wolf: { silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1, skin: true }, { item: 'orb_shard', min: 1, max: 1, chance: 0.12 }, { item: 'orb_transmute', min: 1, max: 1, chance: 0.02 }, { item: 'orb_alteration', min: 1, max: 1, chance: 0.015 }] },
   boar: { silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1, skin: true }, { item: 'orb_shard', min: 1, max: 2, chance: 0.15 }, { item: 'orb_augment', min: 1, max: 1, chance: 0.02 }, { item: 'orb_scour', min: 1, max: 1, chance: 0.005 }, { item: 'orb_annul', min: 1, max: 1, chance: 0.004 }] },
   wraith: { silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }, { item: 'orb_shard', min: 1, max: 3, chance: 0.3 }, { item: 'orb_regal', min: 1, max: 1, chance: 0.03 }, { item: 'orb_chaos', min: 1, max: 1, chance: 0.03 }, { item: 'orb_vaal', min: 1, max: 1, chance: 0.02 }] },
+  elder_bear: { silver: [80, 120], drops: [{ item: 'bear_pelt', min: 3, max: 4, chance: 1 }, { item: 'rough_hide', min: 4, max: 6, chance: 1 }, { item: 'orb_shard', min: 2, max: 4, chance: 1 }] },
+  ash_wyrm: { silver: [200, 300], drops: [{ item: 'wyrm_scale', min: 3, max: 5, chance: 1 }, { item: 'wraith_essence', min: 2, max: 4, chance: 1 }, { item: 'orb_shard', min: 4, max: 8, chance: 1 }, { item: 'orb_regal', min: 1, max: 1, chance: 0.15 }, { item: 'orb_chaos', min: 1, max: 1, chance: 0.15 }] },
 };
 
 /** Skill perks that are chances: gathering bonus yield per level (fraction rolls) and focused bonus output per unit. */

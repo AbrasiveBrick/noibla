@@ -218,6 +218,16 @@ export class GameClient {
 
   // ---- feedback ----
   /** Report a suspected bug, confusing API behavior, or a missing feature straight to the operator. */
+  // ---- parties ----
+  /** Invites a player (by id) to your party; creates the party with you as leader if you have none. */
+  partyInvite(playerId: string, opts?: SendOptions) { return this.send('party.invite', { playerId }, opts); }
+  partyAccept(partyId: string, opts?: SendOptions) { return this.send('party.accept', { partyId }, opts); }
+  partyDecline(partyId: string, opts?: SendOptions) { return this.send('party.decline', { partyId }, opts); }
+  partyLeave(opts?: SendOptions) { return this.send('party.leave', {}, opts); }
+  partyKick(playerId: string, opts?: SendOptions) { return this.send('party.kick', { playerId }, opts); }
+  party() { return this.send('party.view', {}); }
+  partySay(text: string, opts?: SendOptions) { return this.send('party.say', { text }, opts); }
+
   reportFeedback(o: { category: FeedbackCategory; summary: string; details?: string; relatedCommandId?: string }, opts?: SendOptions) {
     return this.send('reportFeedback', o, opts);
   }
@@ -648,6 +658,35 @@ export class GameClient {
       if (r.result === 'killed') kills++;
     }
     return loot;
+  }
+
+  /** Waits for a party invitation (from `fromId` if given) and accepts it. Returns the party id. */
+  async acceptPartyInvite(o: { fromId?: string; timeoutMs?: number } = {}): Promise<string> {
+    const inv = await this.waitFor(async () => (await this.observe()).partyInvites.find((i) => !o.fromId || i.fromId === o.fromId), { timeoutMs: o.timeoutMs ?? 60_000, intervalMs: 150, what: 'a party invitation' });
+    await this.partyAccept(inv.partyId);
+    return inv.partyId;
+  }
+
+  /**
+   * Walks to the boss of type `mobType` in your region, waits for it to be alive, fights it until it dies or we die,
+   * then loots its spoils bag if we may (`loot: false` leaves it). Bosses are built for groups: hunt them with a party.
+   */
+  async huntBoss(mobType: string, o: { timeoutMs?: number; waitForSpawnMs?: number; loot?: boolean } = {}): Promise<{ result: FightOutcome['result']; spoilsBagId: string | null; looted: ItemStack[] }> {
+    const start = await this.waitReady();
+    const home = (await this.map()).mobSpawns.find((s) => s.type === mobType && s.region === start.self.zone);
+    if (!home) throw new Error(`no ${mobType} in ${start.self.zone}; ${await this.whereIs('mob', mobType)}`);
+    await this.waitFor(async () => {
+      const ob = await this.observe();
+      const boss = ob.zone.mobs.find((m) => m.id === home.id);
+      if (!boss) { await this.goTo(home.id); return null; }
+      return boss.alive ? boss : null;
+    }, { timeoutMs: o.waitForSpawnMs ?? 60_000, intervalMs: 250, what: `${mobType} to spawn` });
+    const r = await this.fight(home.id, { timeoutMs: o.timeoutMs ?? 180_000 });
+    if (r.result === 'died') return { result: r.result, spoilsBagId: null, looted: [] };
+    const bag = (await this.observe()).zone.lootBags.find((b) => b.ownerId === home.id && b.spoils);
+    if (!bag || o.loot === false || !bag.youMayLoot) return { result: r.result, spoilsBagId: bag?.id ?? null, looted: [] };
+    const res = await this.lootAll(bag.id);
+    return { result: r.result, spoilsBagId: bag.id, looted: res.taken };
   }
 
   /** Walks to a loot bag if needed and takes everything from it. */

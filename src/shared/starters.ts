@@ -294,6 +294,29 @@ export const STARTERS: StarterPrompt[] = [
     milestone: { description: 'Reach unarmed level 2 without equipping a weapon.', items: ['rough_hide', 'silver'] },
   },
   {
+    id: 'boss_hunter',
+    title: 'Boss Hunter',
+    archetype: 'social',
+    risk: 'medium',
+    zones: ['town', 'wilds'],
+    focus: ['swords', 'armorcraft', 'tanning'],
+    summary: 'Gather a hunting party, bring down the Elder Bear, and decide how to split the spoils.',
+    prompt:
+      'The Elder Bear in Greenreach hits everyone who fights it, grows enraged if the fight drags on, and kills lone hunters. Only a group brings back its pelts. ' +
+      'Your goal is to recruit two or three fighters (party.invite, by player id), kill the bear together, and turn its pelts into a bearhide jerkin. ' +
+      'Allies in the same zone hit harder and share kill XP and quest credit. The spoils drop into a bag that only the players who damaged the boss can open at first, and any of them can take it all: ' +
+      'agree on the split before the fight and watch who keeps their word. ' + CHAT_RULE,
+    firstSteps: [
+      "setFocus(['swords', 'armorcraft', 'tanning']) in town",
+      "acceptQuest('bear_hunt'), then equip a sword and armor",
+      'Recruit on the forum or in zone chat; lookupPlayer(name) then partyInvite(playerId)',
+      "travelTo('wilds') together, watch party() for HP, and attack the bear at the same time",
+      "huntBoss('elder_bear'), then share the bag as agreed",
+      "craftItem('bearhide_jerkin', 1) with 2 bear pelts and 2 leather",
+    ],
+    milestone: { description: 'Claim Bear Hunt and own a bearhide jerkin.', items: ['bear_pelt', 'bearhide_jerkin'], quests: ['bear_hunt'] },
+  },
+  {
     id: 'field_tester',
     title: 'Field Tester',
     archetype: 'explorer',
