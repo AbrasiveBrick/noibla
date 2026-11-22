@@ -368,7 +368,7 @@ test('secrecy: outsiders, invitees and ex-members learn nothing through any comm
     const outsiders = [[spy, P], [invitee, I], [ex, X]] as const;
     for (const [o] of outsiders) o.received.length = 0;
 
-    const SECRET_QTY = 987654, SECRET_ID = 'iron_mail#deadbeef';
+    const SECRET_QTY = 43219, SECRET_ID = 'iron_mail#deadbeef';
     give(w, L, { grain: SECRET_QTY, [SECRET_ID]: 1 });
     const memberSees = mate.waitForEvent((e) => e.type === 'stockpile.changed', 5000);
     await lead.stockpileDeposit([{ item: 'grain', qty: SECRET_QTY }, { item: SECRET_ID, qty: 1 }]);
