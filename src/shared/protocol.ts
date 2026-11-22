@@ -137,7 +137,21 @@ export interface SharedWorkView { active: boolean; outputPct: number }
  */
 export interface SharedStockView { ready: ItemStack[]; resting: ItemStack[]; nextReadyInMs?: number }
 export interface PalisadeAlert { ts: number; playerId: string; name: string }
-export interface WatchEntry { id: number; ts: number; playerId: string; name: string; move: 'arrive' | 'depart' }
+/**
+ * One watchtower entry. `at_pilfer`: the tower saw a pilfer and this player stood at the plot then, the thief or not.
+ * Those seen at once share a `ts`.
+ */
+export interface WatchEntry { id: number; ts: number; playerId: string; name: string; move: 'arrive' | 'depart' | 'at_pilfer' }
+/** Something you saw (witness.log, and the data of witness.saw without `ts`). `owner`: whose stash it was. */
+export interface Sighting {
+  ts: number;
+  settlementId: string;
+  settlementName: string;
+  actor: { id: string; name: string };
+  act: 'stockpile.pilfer' | 'stash.pilfer';
+  items: ItemStack[];
+  owner?: { id: string; name: string };
+}
 /** One of your stashes. `member: false`: you left that settlement, and can still take your things out at its plot. */
 export interface StashView { settlementId: string; name: string; plotId: string; member: boolean; items: ItemStack[] }
 /** observe().settlement: the settlement you belong to. `buildings`: the ones working now. */
@@ -145,15 +159,17 @@ export interface SettlementSummary { id: string; name: string; zone: ZoneId; plo
 /** An invitation you received. Join with settlement.join. */
 export interface SettlementInviteView { settlementId: string; name: string; zone: ZoneId; members: number; expiresInMs: number }
 /**
- * One stockpile_log row. Every change to a stockpile is recorded with its actor. `tax`: a member's quest tax.
+ * One stockpile_log row. Every change to a stockpile is recorded, with its actor unless noted. `tax`: a member's quest tax.
  * `abandoned`: the last member left and everything spilled into a loot bag at the plot (no actor).
  * `contribute` / `cancel`: materials went into a project, or back out of a cancelled one into the stockpile (`building` says which).
  * `refine` / `refined`: shared work took this out of the stockpile / put this into it.
  * `upkeep` / `produced` / `income`: taken for upkeep, grown by the farm, paid by the settlement's level (no actor).
+ * `missing`: pilfered (no actor). `traces`: evidence that names who took the items of the `missing` entry logged with it,
+ * not a second loss.
  */
 export interface StockpileEntry {
   id: number; ts: number; actorId: string | null; actorName: string | null;
-  action: 'deposit' | 'withdraw' | 'tax' | 'abandoned' | 'contribute' | 'cancel' | 'refine' | 'refined' | 'upkeep' | 'produced' | 'income';
+  action: 'deposit' | 'withdraw' | 'tax' | 'abandoned' | 'contribute' | 'cancel' | 'refine' | 'refined' | 'upkeep' | 'produced' | 'income' | 'missing' | 'traces';
   items: ItemStack[];
   building?: BuildingId;
 }
@@ -452,13 +468,26 @@ export interface Commands {
   'settlement.build': { payload: { building: BuildingId }; result: { building: BuildingId; work: number; workNeeded: number; built: boolean; xp: number; busyMs: number } };
   /** Leader or steward: frees the slot, and the materials go to the stockpile. */
   'settlement.cancelProject': { payload: { building: BuildingId }; result: { returned: ItemStack[]; settlement: SettlementView } };
-  /** Members at the plot, with working huts. Only you see your stash. */
+  /** Members at the plot, with working huts. Only you see inside your stash (other members can pilfer from it blindly). */
   'stash.deposit': { payload: { items: ItemStack[] }; result: { stash: ItemStack[]; inventory: ItemStack[] } };
   /** The owner at the plot, also after leaving the settlement or while the huts are unpaid. */
   'stash.withdraw': { payload: { items: ItemStack[]; settlementId?: string }; result: { stash: ItemStack[]; inventory: ItemStack[] } };
   /** Your own stashes, from anywhere. */
   'stash.view': { payload: Empty; result: { stashes: StashView[] } };
-  /** Members, anywhere: who walked into and out of the region while the watchtower worked (newest first). */
+  // Pilfering (members at their own plot, any role). Both set busy for catalog.timing.pilferMs.
+  /**
+   * Takes up to catalog.settlement.pilferPct of each item (rounded down), or one single item instead, and never the
+   * last one. Without `items`: the most of everything. Logged as `missing` with no actor, sometimes with `traces`.
+   */
+  'stockpile.pilfer': { payload: { items?: ItemStack[] }; result: { taken: ItemStack[]; inventory: ItemStack[]; busyMs: number } };
+  /**
+   * A blind grab in the stash of `ownerId`, a member or someone who left it behind: catalog.settlement.pilferPct of
+   * one item picked at random, at least one. `taken` is empty when there was nothing.
+   */
+  'stash.pilfer': { payload: { ownerId: string }; result: { taken: ItemStack[]; inventory: ItemStack[]; busyMs: number } };
+  /** Anywhere: what you alone saw others do (newest first). */
+  'witness.log': { payload: { limit?: number }; result: { entries: Sighting[] } };
+  /** Members, anywhere: who walked into and out of the region while the watchtower worked, and who stood at the plot when it saw a pilfer (newest first). */
   'watchtower.log': { payload: { limit?: number; beforeId?: number }; result: { settlementId: string; recording: boolean; entries: WatchEntry[] } };
   // Feedback
   reportFeedback: { payload: { category: FeedbackCategory; summary: string; details?: string; relatedCommandId?: string }; result: { feedbackId: number } };
@@ -507,8 +536,10 @@ export type EventType =
   | 'settlement.project' | 'settlement.building' | 'settlement.alert' | 'stockpile.upkeep'
   // private to a former member whose stash spilled when the settlement was abandoned
   | 'stash.spilled'
+  // private to each player who saw someone pilfer
+  | 'witness.saw'
   // operator only
-  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired' | 'shop' | 'repair' | 'item.modified' | 'item.salvaged' | 'party' | 'stash' | 'eat';
+  | 'player.online' | 'player.offline' | 'bank' | 'quest' | 'dm.sent' | 'trade.activity' | 'trade.closed' | 'command.failed' | 'feedback' | 'loot.expired' | 'shop' | 'repair' | 'item.modified' | 'item.salvaged' | 'party' | 'stash' | 'eat' | 'theft';
 
 export interface GameEvent<D = any> {
   id: number;

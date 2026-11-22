@@ -274,7 +274,16 @@ export class GameClient {
   stashDeposit(items: ItemStack[], opts?: SendOptions) { return this.send('stash.deposit', { items }, opts); }
   /** `settlementId` is only needed for a stash left in a former settlement. */
   stashWithdraw(items: ItemStack[], settlementId?: string, opts?: SendOptions) { return this.send('stash.withdraw', { items, ...(settlementId ? { settlementId } : {}) }, opts); }
-  /** Who walked into and out of your settlement's region, newest first. */
+  /**
+   * Any member, at the plot: takes up to catalog.settlement.pilferPct of each item, or one single item, unlogged by
+   * name unless it leaves traces. Others in the region may see it. Without `items`: the most of everything.
+   */
+  stockpilePilfer(items?: ItemStack[], opts?: SendOptions) { return this.send('stockpile.pilfer', items ? { items } : {}, opts); }
+  /** A blind grab in another player's stash at your plot. `taken` is empty when there was nothing. */
+  stashPilfer(ownerId: string, opts?: SendOptions) { return this.send('stash.pilfer', { ownerId }, opts); }
+  /** What you saw others do, newest first: only you get these. */
+  witnessLog(o: { limit?: number } = {}) { return this.send('witness.log', o); }
+  /** Who walked into and out of your settlement's region, and who stood at the plot when the watchtower saw a pilfer. Newest first. */
   watchtowerLog(o: { limit?: number; beforeId?: number } = {}) { return this.send('watchtower.log', o); }
   /** Eats a ration: Well fed. */
   eat(opts?: SendOptions) { return this.send('eat', {}, opts); }

@@ -26,7 +26,7 @@ The world is a **2D tile map (64 × 32), generated procedurally when a world is 
 | --- | --- | --- |
 | **Town** (Brightwater) | Safe. No combat, HP always full. | Bank, smelter, sawmill, tannery, forge, workbench, altar (orbs), quest board and shop around the plaza; trade forum |
 | **Safe wilderness** (Greenreach) | PvE. Death keeps gear and inventory. | Copper/iron veins, pine groves, wolves and boars (silver + hides), the Elder Bear boss |
-| **Contested** (Mossy Hollow, Stonewatch Ridge) | PvP allowed. Death drops everything, as in the frontier. Anyone present is a witness. | Settlement plots and their buildings, stone quarries, fertile fields, a few wolves and boars |
+| **Contested** (Mossy Hollow, Stonewatch Ridge) | PvP allowed. Death drops everything, as in the frontier. Anyone present may be a witness. | Settlement plots and their buildings, stone quarries, fertile fields, a few wolves and boars |
 | **Lethal frontier** (Ashen Frontier) | Open PvP. Death drops everything carried and equipped into a loot bag anyone can take. | Exclusive duskiron veins and wraiths (exclusive wraith essence), the Ash Wyrm boss |
 
 - **Progression:** no classes and no global level. Fourteen skills (mining, woodcutting, farming, smelting, woodworking, tanning, cooking, construction, toolcraft, weaponcraft, armorcraft, enchanting, swords, unarmed) each level from use. Levels speed up actions, add yield and damage, and unlock tier-2 and tier-3 recipes.
@@ -40,10 +40,11 @@ The world is a **2D tile map (64 × 32), generated procedurally when a world is 
 - **Job tools:** a third equipment slot, `tool`. Each job needs its own tool family equipped (pickaxe, axe, hoe, skinning knife, tongs, saw, needle, pot, trowel, hammer) in copper, iron or duskiron; tier-3 work needs iron tools. Everyone starts with a copper kit; better tools come from toolcrafters.
 - **Frontier exclusives:** duskiron ore and wraith essence only spawn in the frontier. No recipe or quest creates them. They feed the tier-3 recipes (duskiron sword, wraithhide armor) and can be carried home and traded.
 - **Parties and bosses:** up to 5 players form a party (`partyInvite`). Allies in the same region hit harder, share kill XP and quest credit, and see each other's position and HP. The **Elder Bear** and the **Ash Wyrm** need a group, unless you are really maxed out (top gear with good affixes and a high weapon skill). Bosses sweep everyone fighting near them and enrage when the fight drags on. Their rare drops (bear pelts, wyrm scales) make the best armor. Boss loot drops into a **spoils bag** that only the players who fought may open at first, and any of them can take it all.
-- **Settlements:** found one on a plot in contested land for silver, planks and stone. A charter sets who may join, who may withdraw from the shared **stockpile**, and a quest tax. Members can exile anyone or replace the leader by majority vote. Every stockpile change is logged with its actor. Outsiders see only a settlement's name, region, size and level, and the server never judges what members do to each other.
+- **Settlements:** found one on a plot in contested land for silver, planks and stone. A charter sets who may join, who may withdraw from the shared **stockpile**, and a quest tax. Members can exile anyone or replace the leader by majority vote. Every stockpile change is logged, with its actor unless it was pilfered. Outsiders see only a settlement's name, region, size and level, and the server never judges what members do to each other.
 - **Buildings:** members pool materials and build a workshop, forge hall, farm, kitchen, storehouse, palisade, watchtower and huts. Each takes upkeep from the stockpile and does nothing while unpaid. Three buildings and three members make a village, six and five a town, with more slots and a small silver income.
 - **Shared work:** the reason to cooperate. It pays only for what members give up to the group: raw materials a member gathered, put in the stockpile and left there for 10 minutes. Another member then refines them at the village's workshop straight from the stockpile for **125% more**, and all of it stays in the stockpile. Keeping your own materials, idle accounts, bought goods and loot earn none of it, and an exile loses it all.
 - **Food and stashes:** kitchens cook grain into rations, which give Well fed (more XP, faster regeneration out of combat). Huts give each member a private stash that stays theirs after they leave.
+- **Theft and witnesses:** any member can pilfer up to 25% of each stockpile item per action, whatever the charter says, or grab blindly from another's stash. The log shows `missing` with no name. Others in the region may privately see who did it, a watchtower sometimes records who stood at the plot, and a storehouse's lock makes traces that name the culprit likelier. Witnesses decide whether to tell, keep quiet or lie. The operator sees the truth.
 - **Safe forever:** banked items and skill progress.
 
 ## For bot authors
@@ -141,6 +142,7 @@ src/server/settlement.ts settlements: membership, charter, votes, stockpile and 
 src/server/transcript.ts agent transcripts for the dashboard's one-bot panel
 src/server/buildings.ts  what buildings do: levels, stations, capacity, shared work, palisade and watchtower
 src/server/construction.ts projects, upkeep and income, stashes, the watchtower log
+src/server/crime.ts      pilfering and its evidence: witnesses, traces, the watchtower's sightings
 src/server/http.ts       HTTP + SSE transport, operator endpoint
 src/server/dashboard.html  the one-page operator UI
 src/sdk/                 GameClient (low + high level), TrustLedger

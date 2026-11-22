@@ -11,6 +11,7 @@ import type { UniqueItem } from '../shared/protocol.ts';
 import type { CommandDef, LootBag, Mob, Party, Player, ResourceNode, Settlement, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
 import { syncCarried, syncPooled, upgradeSettlement } from './buildings.ts';
 import { constructionCommands, settlementTick } from './construction.ts';
+import { crimeCommands } from './crime.ts';
 import { orbCommands } from './orbs.ts';
 import { partyCommands } from './party.ts';
 import { settlementCommands } from './settlement.ts';
@@ -96,7 +97,7 @@ export class Game {
     this.tickMs = opts.tickMs ?? 25;
     this.lastSnapshotAt = this.store.get<{ ts: number | null }>('SELECT MAX(ts) AS ts FROM snapshots')?.ts ?? -Infinity;
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
-    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands, ...settlementCommands, ...constructionCommands };
+    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands, ...settlementCommands, ...constructionCommands, ...crimeCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     // Procedural map: generated when the world is created; the seed is stored so restarts rebuild the same map.
     let mapSeed = Number(this.store.getMeta('map_seed') ?? NaN);
@@ -291,13 +292,25 @@ export class Game {
 
   // ---------- events ----------
 
-  emit(type: EventType, vis: Visibility, data: unknown, meta: { zone?: ZoneId | null; actor?: Player } = {}) {
+  emit(type: EventType, vis: Visibility, data: unknown, meta: { zone?: ZoneId | null; actor?: Player } = {}): GameEvent {
     const ev: GameEvent = { id: ++this.eventSeq, ts: this.now(), type, data };
     if (meta.zone !== undefined) ev.zone = meta.zone;
     if (meta.actor) { ev.actorId = meta.actor.id; ev.actorName = meta.actor.name; }
     if (operatorCanSee(vis)) this.store.run('INSERT INTO events(id, ts, type, data) VALUES(?, ?, ?, ?)', ev.id, ev.ts, ev.type, JSON.stringify(ev));
     this.outbox.push({ ev, vis });
+    return ev;
   }
+
+  /**
+   * Tells one player their version of `of` under the same id, so however many are told, the ids in everyone's stream
+   * stay the same. The copy carries nothing else of the original, and the operator has the original.
+   */
+  emitCopy(of: GameEvent, type: EventType, playerId: string, data: unknown) {
+    this.outbox.push({ ev: { id: of.id, ts: of.ts, type, zone: of.zone, data }, vis: { kind: 'player', playerId } });
+  }
+
+  /** Spends an id without an event, where whether an event was emitted is itself a secret. */
+  skipEventId() { this.eventSeq++; }
 
   private dispatchOutbox() {
     const items = this.outbox.splice(0);
@@ -560,6 +573,7 @@ export class Game {
     this.pruneCommands(opts.commandsMs);
     this.store.run(`DELETE FROM events WHERE ts < ? AND type IN (${PRUNABLE_EVENTS.map(() => '?').join(', ')})`, now - (opts.eventsMs ?? 24 * 3600_000), ...PRUNABLE_EVENTS);
     this.store.run('DELETE FROM watch_log WHERE ts < ?', now - (opts.watchMs ?? 7 * 24 * 3600_000));
+    this.store.run('DELETE FROM sightings WHERE ts < ?', now - (opts.watchMs ?? 7 * 24 * 3600_000));
     this.store.run('DELETE FROM failures WHERE ts < ?', now - (opts.failuresMs ?? 7 * 24 * 3600_000));
     this.store.run('DELETE FROM snapshots WHERE ts < ?', now - (opts.snapshotsMs ?? 30 * 24 * 3600_000));
   }

@@ -90,7 +90,12 @@ function settle(f: Fake, size: number) {
 test('catalog: buildings promise nothing a later stage owes, and hide their odds', () => {
   assert.deepEqual(Object.keys(BUILDINGS).sort(), ['farm', 'forge_hall', 'huts', 'kitchen', 'palisade', 'storehouse', 'watchtower', 'workshop'], 'the infirmary waits for stage 5');
   for (const b of Object.values(BUILDINGS)) {
-    assert.doesNotMatch(b.description, /downed|witness|lock|raid|steal|theft|ally|allies|revive/i, `${b.id} advertises a later stage`);
+    assert.doesNotMatch(b.description, /downed|raid|ally|allies|revive|\bkeys?\b/i, `${b.id} advertises a later stage`);
+    // Stage 4 ships exactly these three effects, each on its own building.
+    for (const [word, owner] of [[/witness/i, 'watchtower'], [/\block/i, 'storehouse'], [/pilfer|steal|theft/i, null]] as const) {
+      const may = owner ? b.id === owner : ['watchtower', 'storehouse', 'huts'].includes(b.id);
+      if (!may) assert.doesNotMatch(b.description, word, `${b.id} claims an effect it doesn't have`);
+    }
     for (const s of [...b.cost, ...b.upkeep, ...(b.produces ?? [])]) assert.ok(itemDef(s.item), `${b.id}: ${s.item}`);
   }
   assert.ok(BUILDINGS.forge_hall.cost.some((s) => s.item === 'bear_pelt'));

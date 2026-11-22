@@ -1,7 +1,8 @@
 // Settlements: groups that hold a plot in a contested region and share a stockpile kept there.
 // Membership, charter and votes are member business: their events go only to members (Visibility 'settlement').
 // The public list shows a settlement's name, region, size and level (the plot marker in view shows its name), nothing else.
-// The server never judges: it records every stockpile change with its actor (stockpile_log) and leaves the rest to players.
+// The server never judges: it records every stockpile change (stockpile_log), with its actor unless it was pilfered (crime.ts),
+// and leaves the rest to players.
 
 import { BUILDINGS, SETTLEMENT, TIMING, ZONES, type BuildingId, type ItemStack, type RecipeDef } from '../shared/catalog.ts';
 import { MAP_RULES, dist, plotOf, type MapPlot } from '../shared/map.ts';
@@ -147,8 +148,9 @@ export function requireAtPlot(g: Game, p: Player, s: Settlement, what: string) {
 export function audit(g: Game, s: Settlement, actor: Player | null, action: StockpileEntry['action'], items: ItemStack[], building?: BuildingId) {
   if (!items.length) return;
   const ts = g.now();
-  const res = g.store.run('INSERT INTO stockpile_log(settlement_id, ts, actor_id, actor_name, action, items, building) VALUES(?, ?, ?, ?, ?, ?, ?)', s.id, ts, actor?.id ?? null, actor?.name ?? null, action, JSON.stringify(items), building ?? null);
-  const entry: StockpileEntry = { id: Number(res.lastInsertRowid), ts, actorId: actor?.id ?? null, actorName: actor?.name ?? null, action, items, ...(building ? { building } : {}) };
+  const id = g.store.nextEntryId('stockpile_log', s.id);
+  g.store.run('INSERT INTO stockpile_log(settlement_id, ts, actor_id, actor_name, action, items, building, seq) VALUES(?, ?, ?, ?, ?, ?, ?, ?)', s.id, ts, actor?.id ?? null, actor?.name ?? null, action, JSON.stringify(items), building ?? null, id);
+  const entry: StockpileEntry = { id, ts, actorId: actor?.id ?? null, actorName: actor?.name ?? null, action, items, ...(building ? { building } : {}) };
   // The automatic entries get their own event type, which the operator's event log prunes.
   const type = action === 'upkeep' || action === 'produced' || action === 'income' ? 'stockpile.upkeep' : 'stockpile.changed';
   g.emit(type, vis(s), { settlementId: s.id, entry }, actor ? { actor, zone: s.zone } : { zone: s.zone });
@@ -156,7 +158,7 @@ export function audit(g: Game, s: Settlement, actor: Player | null, action: Stoc
 
 function logRows(g: Game, s: Settlement, limit: number, beforeId = Number.MAX_SAFE_INTEGER): StockpileEntry[] {
   return g.store.all<{ id: number; ts: number; actor_id: string | null; actor_name: string | null; action: StockpileEntry['action']; items: string; building: BuildingId | null }>(
-    'SELECT id, ts, actor_id, actor_name, action, items, building FROM stockpile_log WHERE settlement_id = ? AND id < ? ORDER BY id DESC LIMIT ?', s.id, beforeId, limit,
+    'SELECT COALESCE(seq, id) AS id, ts, actor_id, actor_name, action, items, building FROM stockpile_log WHERE settlement_id = ? AND COALESCE(seq, id) < ? ORDER BY stockpile_log.id DESC LIMIT ?', s.id, beforeId, limit,
   ).map((r) => ({ id: r.id, ts: r.ts, actorId: r.actor_id, actorName: r.actor_name, action: r.action, items: JSON.parse(r.items), ...(r.building ? { building: r.building } : {}) }));
 }
 

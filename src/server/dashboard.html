@@ -284,7 +284,7 @@
     party: 'party', 'party.joined': 'party', 'party.left': 'party', 'party.message': 'party',
     'settlement.founded': 'settlement', 'settlement.disbanded': 'settlement', 'settlement.invited': 'settlement', 'settlement.joined': 'settlement', 'settlement.left': 'settlement',
     'settlement.role': 'settlement', 'settlement.charter': 'settlement', 'settlement.vote': 'settlement', 'stockpile.changed': 'settlement',
-    'stockpile.upkeep': 'settlement', 'settlement.project': 'settlement', 'settlement.building': 'settlement', 'settlement.alert': 'settlement', stash: 'settlement', eat: 'bank',
+    'stockpile.upkeep': 'settlement', 'settlement.project': 'settlement', 'settlement.building': 'settlement', 'settlement.alert': 'settlement', stash: 'settlement', theft: 'settlement', eat: 'bank',
   };
   // High-volume activity that is rolled up per bot by default.
   const ROUTINE = new Set(['combat.hit', 'combat.buff', 'combat.kill', 'gather', 'travel.depart', 'travel.arrive', 'bank', 'eat', 'player.online', 'player.offline']);
@@ -346,8 +346,9 @@
 
   function involved(ev) {
     const d = ev.data || {};
-    return [ev.actorId, d.playerId, d.attackerId, d.targetId, d.victimId, d.killerId, d.looterId, d.ownerId,
+    return [ev.actorId, d.playerId, d.attackerId, d.targetId, d.victimId, d.killerId, d.looterId, d.ownerId, d.owner && d.owner.id,
       d.toId, d.founderId, d.fromId, d.byId, d.voterId, d.motion && d.motion.targetId, d.message && d.message.authorId, d.thread && d.thread.authorId, d.post && d.post.authorId,
+      ...(ev.type === 'theft' ? d.witnesses : []).map((w) => w.id),
       ...(d.parties || []).map((p) => p.id)].filter(Boolean);
   }
 
@@ -404,7 +405,10 @@
       case 'settlement.role': return `<b>${esc(d.name)}</b> is now ${esc(d.role)} of ${settlementName(d.settlementId)} <span class="muted">(${esc(d.reason)})</span>`;
       case 'settlement.charter': return `<b>${esc(d.byName)}</b> set the charter of ${settlementName(d.settlementId)}: ${d.charter.open ? 'open' : 'closed'}, ${esc(d.charter.withdrawRole)}+ may withdraw, tax ${Number(d.charter.taxPct)}%`;
       case 'settlement.vote': return `<b>${esc(d.voterName)}</b> voted ${d.yes ? 'for' : 'against'} ${d.motion.kind === 'exile' ? 'exiling' : 'making leader'} <b>${esc(d.motion.targetName)}</b> in ${settlementName(d.settlementId)} (${d.motion.yes}/${d.motion.needed})${d.passed ? ' · <b>passed</b>' : ''}`;
-      case 'stockpile.changed': return `<b>${esc(d.entry.actorName || 'nobody')}</b> stockpile ${esc(d.entry.action)} ${stacks(d.entry.items)} <span class="muted">(${settlementName(d.settlementId)})</span>`;
+      case 'theft': return `<b class="bad">Theft:</b> <b>${esc(d.actor.name)}</b> pilfered ${stacks(d.items)} from ${d.owner ? `<b>${esc(d.owner.name)}</b>'s stash in ` : ''}${esc(d.settlementName)}${d.owner ? '' : "'s stockpile"} <span class="muted">(seen by ${d.witnesses.length ? d.witnesses.map((w) => esc(w.name)).join(', ') : 'nobody'}${d.watched.length ? `; watchtower saw ${d.watched.map((w) => esc(w.name)).join(', ')} at the plot` : ''}${d.traces ? '; left traces' : ''})</span>`;
+      case 'stockpile.changed': return d.entry.action === 'traces'
+        ? `Traces name <b>${esc(d.entry.actorName)}</b> for missing ${stacks(d.entry.items)} <span class="muted">(${settlementName(d.settlementId)})</span>`
+        : `<b>${esc(d.entry.actorName || 'nobody')}</b> stockpile ${esc(d.entry.action)} ${stacks(d.entry.items)} <span class="muted">(${settlementName(d.settlementId)})</span>`;
       case 'stockpile.upkeep': return `${settlementName(d.settlementId)} ${{ upkeep: 'paid upkeep', produced: 'grew', income: 'earned' }[d.entry.action] || esc(d.entry.action)} ${stacks(d.entry.items)}`;
       case 'settlement.project': return d.stage === 'contributed' ? `<b>${esc(d.name)}</b> put ${stacks(d.items)} into ${settlementName(d.settlementId)}'s ${esc(d.project.building)}`
         : d.stage === 'cancelled' ? `<b>${esc(d.name)}</b> cancelled ${settlementName(d.settlementId)}'s ${esc(d.building)} (${stacks(d.items)} back to the stockpile)`

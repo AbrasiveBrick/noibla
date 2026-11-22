@@ -1,6 +1,6 @@
 # Community & betrayal plan: settlements, hunting parties, theft, permadeath
 
-> Staged roadmap. Stages 1 (parties and bosses) and 2 (settlements and stockpiles) have shipped; each later stage is one PR and one session.
+> Staged roadmap. Stages 1-4 (parties and bosses, settlements and stockpiles, buildings and shared work, theft and witnesses) have shipped; each later stage is one PR and one session.
 
 ## Context
 
@@ -108,7 +108,6 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions and deposits stay with the settlement, and what they gathered or gave stops counting for shared work.
 - **Abandonment:** the buildings fall. The stockpile, every stash and the materials of unfinished projects spill into one bag at the plot, and stash owners are told.
 - **Left for later stages, and not advertised until then:**
-  - Stage 4: `stash.pilfer`, the watchtower as a witness, and the storehouse lock.
   - Stage 5: the infirmary (needs `wyrm_scale`, a ninth building and town slot), and watchtower movements in `corpse.examine`. The watchtower logs walking only, so a death leaves an arrival with no departure.
   - Stage 6: allies using stations and not setting off the palisade (`buildingStation` and `noteCrossing` in `buildings.ts`), and the palisade's raid defense.
 - **The theory, to be tested with real agents.** Let *f* be the share of a solo player's income that comes from refining the five shared raw materials, counting what is crafted from them. It ignores upkeep and the time the extra refining takes.
@@ -133,7 +132,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 ## Stage 4: Theft and witnesses
 
 - **Who can steal:**
-  - `stockpile.pilfer` is open to any member, and to outsiders who carry a key.
+  - `stockpile.pilfer` is open to any member, and to outsiders who carry a key (stage 6).
   - `stash.pilfer` targets another member's hut stash, or one a former member left behind.
   - Each takes up to a capped share per action, and the action takes time.
 - **Witnesses:** at the moment of the act, every other player present in the zone (not traveling) has a chance to see it, and so does the watchtower.
@@ -142,6 +141,42 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Shared work:** loot earns no cover and theft needs no hook for it. Take the goods with `removeItems(s.stockpile)` and `markSettlement(s)`: at commit the youngest given units stop counting (`syncPooled`). Putting loot back gives nothing.
 - **Undetected theft:** the audit log shows a `missing` entry with the items and no actor. A storehouse lock (added to the stage 3 storehouse here) raises the chance of a `traces` entry that names the culprit to members.
 - The operator feed gets `theft` events with the true culprit.
+- **As built:**
+  - **Cap** (`SETTLEMENT.pilferPct`, 25): up to that share of each item, rounded down, or one single item instead, never the last one. It is per item so that one action can't pick out the whole upkeep reserve.
+  - **Stash:** a blind grab of one random kind of item, that share of it or at least one. Any player can be named and an empty grab costs the same, so there is no free way to probe stashes. It writes no audit entry.
+  - **Timed action** (`TIMING.pilferMs`, 10 s): like gathering it takes effect at once and then keeps the thief busy at the plot. Damage does not interrupt it. A killer gets what the thief still carries.
+  - **Witnesses** can read their sightings later (`witness.log`, kept 7 days), because agents are rarely streaming events. Everyone standing in the region counts, connected or not.
+  - **Watchtower, a partial witness:** when it sees a pilfer it records everyone standing at the plot, not which of them did it.
+  - **Log numbers:** audit and watchtower entry ids count per settlement (`Store.nextEntryId`). As world-wide row ids they told a neighbour about another settlement's thefts and evidence.
+  - **Odds** are in `odds.ts` and nowhere else. Their rolls don't use the world's random stream, which play could reveal.
+- **What may be inferred, on purpose:**
+  - Members learn when and what went `missing`, can compare that with who they saw at the plot or who just came online, and see the shared work counts drop. The drop is the same whoever took it.
+  - An `at_pilfer` with no `missing` at the same moment tells members that someone went for a stash.
+  - A witness learns that the thief is a member, since only members can pilfer.
+  - Stolen uniques keep their ids, so they can be recognized when worn, inspected or dropped.
+  - A stash thief learns the kind and amount they took, and from that the size of that one pile. A stash owner sees their stash hold less.
+  - Event ids are global, so a gap says that something hidden happened somewhere. A pilfer spends a fixed number of them (one for a stash, three for a stockpile), whatever the witnesses, watchtower and traces came to.
+  - A gap of three can also be an upkeep tick, a trade or several commands, so it confirms no theft. The audit and watchtower logs number their entries per settlement, so they have no gaps to read.
+- **The theory, to be tested with real agents.** In solo-hours, at *M* = 1.5, four members, a share *s* = 25% and a stockpile holding *H* member-hours. As in stage 3, a theft's gain leaves out the thief's own quarter of the pile. An hour of honest work in the village pays *M* = 1.5. Being exiled costs *M* - 1 = 0.5 per hour from then on, so when a theft leads to exile with probability *d*, loyalty overtakes it after gain / (0.5 *d*) hours. The column below takes *d* = 1. The less likely exile is, the later it comes.
+
+  | Theft | Takes | Gain | Against an honest hour | Loyalty overtakes after |
+  | --- | --- | --- | --- | --- |
+  | One action, full pile (*H* = 2-4) | 25% | 0.56-1.13 | 0.4-0.75 of one, in 10 seconds | 1.1-2.3 hours |
+  | Two actions | 44% | 1.0-2.0 | 0.7-1.3 | 2-3.9 hours |
+  | Four actions | 68% | 1.5-3.1 | 1-2.1 | 3.1-6.2 hours |
+  | One action, a village that withdraws every output (*H* = 0.3-0.75) | 25% | 0.08-0.21 | 0.06-0.14 | 0.2-0.4 hours |
+
+  - So one theft is the better move for someone who won't be around for another hour or two, or who expects not to be blamed. A group that stays together for a few hours is better off without it. Repeating pays more and is seen more: each action rolls the evidence again.
+  - **The double hit:** a reserve of *R* intervals of upkeep pays the next one after *k* actions if *R* x 0.75^*k* >= 1: 1.34 intervals stand one action, 1.8 two and 2.4 three. Below that, buildings close at the next interval. Each interval closed costs all four members together up to 0.33 more, which the thief doesn't get and, while they stay, shares in.
+  - **Why 25%:** at 10% one action gains 0.23-0.45 and loyalty overtakes it within an hour, too little to tempt. At 50% it gains 1.1-2.3 and closes any village with under two intervals of upkeep in reserve.
+- **What repeated actions and alt accounts allow:**
+  - One member alone takes 68% in 40 seconds and 94% in 100. A full 25,000-item pile of one kind is down to a single item in under 6 minutes. There is no cooldown beyond being busy: the limit is the evidence.
+  - Accomplices act in parallel: four members at once take 68%, a full twelve take 97%. A closed settlement has to invite each of them.
+  - An open charter lets anyone join, pilfer and leave again. Members see the join and the leave with a name.
+  - Alts parked in the region are extra witnesses for their owner. Alts parked at the plot thin out what the watchtower tells.
+  - Loot can go into the thief's own stash or back into the stockpile while busy, out of a killer's reach.
+  - Small piles and single uniques go one per action.
+- **What an agent run should show:** how full stockpiles are when robbed, in member-hours; actions and gain per thief, and how long they had left to play; how often a theft was seen, left traces, was told of, lied about or punished (the operator's `theft` events against chat and the audit log); whether members pilfer what they would have been given; buildings closed by theft; whether members stop pooling afterwards, which would lower *H* and the income of everyone.
 - Tests: `test/theft.test.ts` covers no-witness theft leaving `missing` without an actor, a witness getting the private event, and non-witnesses learning nothing through any command or event.
 
 ## Stage 5: Downed, permanent death, murder mysteries
