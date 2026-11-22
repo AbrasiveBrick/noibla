@@ -544,12 +544,14 @@ export const SETTLEMENT = {
    */
   stockpileCapacity: 25_000,
   /**
-   * Shared work, the point of a village. While `activeLevel` >= `minLevel` and the workshop works, refining there makes
-   * `outputPct`% more output on every unit covered by OTHER members' work: each raw unit a member gathers or skins
-   * covers one such unit for somebody else. Nobody covers their own refining. Coverage is per raw item, is used up,
-   * stops accumulating at `maxCoverPerItem` per member, and leaves with the member.
+   * Shared work, the point of a village. It pays only for materials members gave up to the group: raw units a member
+   * gathered or skinned, carried, put in the stockpile and left there for `restMs`. While `activeLevel` >= `minLevel` and
+   * the workshop works, ANOTHER member can refine those units straight from the stockpile
+   * (refine { from: 'stockpile' }) for `outputPct`% more output, and all of it lands in the stockpile.
+   * Each gathered unit counts once. Nobody covers their own refining. Bought, looted and stolen units never count,
+   * and what a member gave stops counting when it leaves the stockpile or the member leaves.
    */
-  sharedWork: { outputPct: 125, minLevel: 2, building: 'workshop' as BuildingId, maxCoverPerItem: 10_000 },
+  sharedWork: { outputPct: 125, minLevel: 2, building: 'workshop' as BuildingId, restMs: 10 * 60_000 },
   /** Latest palisade alerts kept for settlement.view. */
   alertsKept: 20,
 };

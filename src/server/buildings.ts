@@ -1,19 +1,24 @@
 // What a settlement's buildings do: levels, capacity, stations, shared work, palisade and watchtower.
 // State helpers only, so both world.ts and settlement.ts can use them. The commands and the tick are in construction.ts.
 
-import { BUILDINGS, ITEMS, RECIPES, SETTLEMENT, type BuildingDef, type BuildingId, type RecipeDef, type StationId, type ZoneId } from '../shared/catalog.ts';
+import { BUILDINGS, ITEMS, RECIPES, SETTLEMENT, type BuildingDef, type BuildingId, type ItemStack, type RecipeDef, type StationId, type ZoneId } from '../shared/catalog.ts';
 import { MAP_RULES, dist, plotOf } from '../shared/map.ts';
-import type { BuildingView, ProjectView, SharedWorkView } from '../shared/protocol.ts';
+import type { BuildingView, ProjectView, SharedStockView, SharedWorkView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
-import type { Player, Settlement } from './types.ts';
+import type { Player, Settlement, SharedWork } from './types.ts';
 import { toBag, toStacks, type Bag } from './util.ts';
 
-/** Settlements saved before buildings existed have none of the stage 3 fields. Used on load and after a rollback. */
+/**
+ * Settlements saved before buildings existed have none of the stage 3 fields. Used on load and after a rollback.
+ * Saves from before shared work needed pooling counted `cover` at the moment of gathering: that was never given to the
+ * group, so it is dropped. The carried fractions were earned and stay.
+ */
 export function upgradeSettlement(s: Settlement): Settlement {
   s.buildings ??= [];
   s.projects ??= {};
   s.stashes ??= {};
   s.work ??= {};
+  for (const [id, w] of Object.entries(s.work)) s.work[id] = { gathered: w.gathered ?? {}, given: w.given ?? {}, carry: w.carry ?? {} };
   s.alerts ??= [];
   return s;
 }
@@ -61,27 +66,124 @@ export function buildingStation(g: Game, p: Player, station: StationId): { s: Se
 }
 
 // ---------- shared work ----------
+//
+// gather (recordWork) -> deposit (giveWork) -> rest in the stockpile -> another member refines from the stockpile
+// (takeShared). The game syncs the books at every commit (syncCarried, syncPooled), so no way out of an inventory or a
+// stockpile has to know about them: whatever left stops counting, and nothing that arrives ever starts to.
 
-/** Raw items whose gathering covers other members' refining: the raw inputs of the workshop's recipes. */
+/** Raw items that shared work pays on: the raw inputs of the workshop's recipes. */
 export const SHARED_ITEMS: ReadonlySet<string> = new Set(Object.values(RECIPES)
   .filter((r) => r.kind === 'refine' && BUILDINGS[SETTLEMENT.sharedWork.building].stations!.includes(r.station))
   .flatMap((r) => r.inputs.map((i) => i.item))
   .filter((item) => ITEMS[item].kind === 'resource'));
 
-/** A member gathered or skinned `qty` of `item`: that covers as many units of someone else's refining. */
+function workOf(s: Settlement, id: string): SharedWork {
+  return (s.work[id] ??= { gathered: {}, given: {}, carry: {} });
+}
+
+/** A member gathered or skinned `qty` of `item`, already in their inventory: they may give it to the group. */
 export function recordWork(g: Game, p: Player, item: string, qty: number) {
   if (!p.settlementId || qty <= 0 || !SHARED_ITEMS.has(item)) return;
   const s = g.settlements.get(p.settlementId);
   if (!s) return;
   g.markSettlement(s);
-  const cover = (s.work[p.id] ??= { cover: {}, carry: {} }).cover;
-  cover[item] = Math.min(SETTLEMENT.sharedWork.maxCoverPerItem, (cover[item] ?? 0) + qty);
+  const { gathered } = workOf(s, p.id);
+  gathered[item] = { qty: (gathered[item]?.qty ?? 0) + qty, had: p.inventory[item] ?? 0 };
 }
 
-function coverFromOthers(s: Settlement, playerId: string, item: string): number {
-  let n = 0;
-  for (const [id, w] of Object.entries(s.work)) if (id !== playerId && s.members[id]) n += w.cover[item] ?? 0;
-  return n;
+/** A deposit, already out of the inventory: the gathered units in it start to rest. Returns them. */
+export function giveWork(g: Game, s: Settlement, p: Player, items: ItemStack[]): ItemStack[] {
+  const given: Bag = {};
+  for (const { item, qty } of items) {
+    const carried = s.work[p.id]?.gathered[item];
+    if (!carried) continue;
+    g.markSettlement(s);
+    const { gathered, given: lots } = s.work[p.id];
+    const giving = Math.min(qty, carried.qty);
+    if (giving === carried.qty) delete gathered[item];
+    else gathered[item] = { qty: carried.qty - giving, had: p.inventory[item] ?? 0 };
+    addLot(g, (lots[item] ??= []), giving);
+    given[item] = giving;
+  }
+  return toStacks(given);
+}
+
+/** Adds a lot. Ready lots merge, and times round up, so an item has a bounded number of lots. */
+function addLot(g: Game, lots: SharedWork['given'][string], qty: number) {
+  const now = g.now();
+  const rest = g.ms(SETTLEMENT.sharedWork.restMs);
+  const slot = Math.max(1, Math.round(rest / 60));
+  const readyAt = Math.ceil((now + rest) / slot) * slot;
+  while (lots.length > 1 && lots[1].readyAt <= now) lots[1].qty += lots.shift()!.qty;
+  const last = lots.at(-1);
+  if (last?.readyAt === readyAt) last.qty += qty;
+  else lots.push({ qty, readyAt });
+  lots.sort((a, b) => a.readyAt - b.readyAt);
+}
+
+/** Takes up to `qty` off a member's lots of an item, youngest first. Returns how many. */
+function dropYoungest(w: SharedWork, item: string, qty: number): number {
+  const lots = w.given[item];
+  let dropped = 0;
+  while (lots?.length && dropped < qty) {
+    const last = lots.at(-1)!;
+    const n = Math.min(last.qty, qty - dropped);
+    last.qty -= n;
+    dropped += n;
+    if (!last.qty) lots.pop();
+  }
+  if (lots && !lots.length) delete w.given[item];
+  return dropped;
+}
+
+/** A withdrawal takes back what the member gave first. */
+export function takeBack(g: Game, s: Settlement, p: Player, items: ItemStack[]) {
+  const w = s.work[p.id];
+  if (!w) return;
+  g.markSettlement(s);
+  for (const { item, qty } of items) dropYoungest(w, item, qty);
+}
+
+/** At commit, for each changed player: what left their inventory takes gathered units first. */
+export function syncCarried(g: Game, p: Player) {
+  const s = p.settlementId ? g.settlements.get(p.settlementId) : undefined;
+  const gathered = s?.work[p.id]?.gathered;
+  if (!gathered) return;
+  for (const [item, { qty, had }] of Object.entries(gathered)) {
+    const have = p.inventory[item] ?? 0;
+    if (have === had) continue;
+    g.markSettlement(s!);
+    const left = qty - Math.max(0, had - have);
+    if (left > 0) gathered[item] = { qty: left, had: have };
+    else delete gathered[item];
+  }
+}
+
+/** At commit, for each changed settlement: what left the stockpile stops counting, youngest lots first. */
+export function syncPooled(s: Settlement) {
+  for (const item of SHARED_ITEMS) {
+    const lots = Object.values(s.work).flatMap((w) => (w.given[item] ?? []).map((lot) => ({ w, lot })));
+    let over = lots.reduce((n, x) => n + x.lot.qty, 0) - (s.stockpile[item] ?? 0);
+    if (over <= 0) continue;
+    for (const { w, lot } of lots.sort((a, b) => b.lot.readyAt - a.lot.readyAt)) {
+      over -= dropYoungest(w, item, Math.min(over, lot.qty));
+      if (over <= 0) break;
+    }
+  }
+}
+
+/** Other members' units of `item` in the stockpile that have rested by `now`, and the ones still resting. */
+function pooledByOthers(s: Settlement, viewer: string, item: string, now: number) {
+  let ready = 0, resting = 0, nextReadyAt = Infinity;
+  for (const [id, w] of Object.entries(s.work)) {
+    if (id === viewer || !s.members[id]) continue;
+    for (const lot of w.given[item] ?? []) {
+      if (lot.readyAt <= now) { ready += lot.qty; continue; }
+      resting += lot.qty;
+      nextReadyAt = Math.min(nextReadyAt, lot.readyAt);
+    }
+  }
+  return { ready, resting, nextReadyAt };
 }
 
 export function sharedWorkActive(s: Settlement): boolean {
@@ -89,35 +191,46 @@ export function sharedWorkActive(s: Settlement): boolean {
   return works(s, building) && activeLevelOf(s).level >= minLevel;
 }
 
+/** The raw item that keeps `p` from refining `count` units of `r` with shared work, if one does. */
+export function sharedShortfall(g: Game, s: Settlement, p: Player, r: RecipeDef, count: number) {
+  for (const i of r.inputs) {
+    if (!SHARED_ITEMS.has(i.item)) continue;
+    const pooled = pooledByOthers(s, p.id, i.item, g.now());
+    if (pooled.ready < i.qty * count) return { item: i.item, need: i.qty * count, ...pooled };
+  }
+  return undefined;
+}
+
 /**
- * Uses up other members' cover for `count` units of `r` refined by `p`. `made` is what the batch made otherwise.
- * The extra output is exact: the fraction left over carries to the player's next batch of the same recipe.
+ * Uses up what others gave for `count` units of `r`, oldest first, and returns the extra output. `made` is what the
+ * batch makes otherwise. The extra is exact: the fraction left over carries to the player's next batch of that recipe.
  */
-export function useSharedWork(g: Game, s: Settlement, p: Player, r: RecipeDef, count: number, made: number): { units: number; output: number } | undefined {
-  if (!sharedWorkActive(s)) return undefined;
-  const raw = r.inputs.filter((i) => SHARED_ITEMS.has(i.item));
-  if (!raw.length) return undefined;
-  const covered = Math.min(count, ...raw.map((i) => Math.floor(coverFromOthers(s, p.id, i.item) / i.qty)));
-  if (covered <= 0) return undefined;
+export function takeShared(g: Game, s: Settlement, p: Player, r: RecipeDef, count: number, made: number): number {
+  const now = g.now();
   g.markSettlement(s);
-  for (const i of raw) {
-    let left = covered * i.qty;
-    const givers = Object.entries(s.work)
-      .filter(([id, w]) => id !== p.id && s.members[id] && (w.cover[i.item] ?? 0) > 0)
-      .sort(([, a], [, b]) => b.cover[i.item] - a.cover[i.item]);
-    for (const [, w] of givers) {
-      const take = Math.min(left, w.cover[i.item]);
-      w.cover[i.item] -= take;
-      if (!w.cover[i.item]) delete w.cover[i.item];
+  for (const i of r.inputs) {
+    if (!SHARED_ITEMS.has(i.item)) continue;
+    let left = count * i.qty;
+    const ready = Object.entries(s.work)
+      .filter(([id]) => id !== p.id && s.members[id])
+      .flatMap(([, w]) => (w.given[i.item] ?? []).filter((lot) => lot.readyAt <= now).map((lot) => ({ w, lot })))
+      .sort((a, b) => a.lot.readyAt - b.lot.readyAt);
+    for (const { w, lot } of ready) {
+      const take = Math.min(left, lot.qty);
+      lot.qty -= take;
       left -= take;
+      if (!lot.qty) {
+        w.given[i.item] = w.given[i.item].filter((l) => l.qty > 0);
+        if (!w.given[i.item].length) delete w.given[i.item];
+      }
       if (!left) break;
     }
   }
-  const carry = (s.work[p.id] ??= { cover: {}, carry: {} }).carry;
-  const exact = (carry[r.id] ?? 0) + (made * covered / count) * (SETTLEMENT.sharedWork.outputPct / 100);
+  const { carry } = workOf(s, p.id);
+  const exact = (carry[r.id] ?? 0) + made * (SETTLEMENT.sharedWork.outputPct / 100);
   const output = Math.floor(exact + 1e-9);
   carry[r.id] = Math.max(0, exact - output);
-  return { units: covered, output };
+  return output;
 }
 
 // ---------- palisade & watchtower ----------
@@ -166,12 +279,22 @@ export function stillNeeded(def: BuildingDef, materials: Bag): Bag {
   return left;
 }
 
-/** `covered`: raw units of other members' work waiting to cover the viewer's refining. */
-export function sharedWorkView(s: Settlement, viewer: string): SharedWorkView {
-  const covered: Bag = {};
+/** For members anywhere. What the stockpile holds is not in it. */
+export function sharedWorkView(s: Settlement): SharedWorkView {
+  return { active: sharedWorkActive(s), outputPct: SETTLEMENT.sharedWork.outputPct };
+}
+
+/** For a member reading the stockpile at the plot: what others gave that the viewer may refine, now or soon. */
+export function sharedStockView(g: Game, s: Settlement, viewer: string): SharedStockView {
+  const ready: Bag = {};
+  const resting: Bag = {};
+  const now = g.now();
+  let next = Infinity;
   for (const item of SHARED_ITEMS) {
-    const n = coverFromOthers(s, viewer, item);
-    if (n > 0) covered[item] = n;
+    const pooled = pooledByOthers(s, viewer, item, now);
+    if (pooled.ready) ready[item] = pooled.ready;
+    if (pooled.resting) resting[item] = pooled.resting;
+    next = Math.min(next, pooled.nextReadyAt);
   }
-  return { active: sharedWorkActive(s), outputPct: SETTLEMENT.sharedWork.outputPct, covered: toStacks(covered) };
+  return { ready: toStacks(ready), resting: toStacks(resting), ...(next < Infinity ? { nextReadyInMs: next - now } : {}) };
 }

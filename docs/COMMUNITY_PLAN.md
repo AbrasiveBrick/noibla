@@ -79,9 +79,11 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 ## Stage 3: Buildings, upkeep, new roles
 
 - **Why cooperation pays: shared work** (decided with the user, because the buildings alone did not reach the 1.5x target).
-  - In a village with a working workshop, refining there makes **+125% output** on each unit covered by *other* members' work.
-  - Each raw unit a member gathers or skins covers one unit of that same item in someone else's refining. It never covers their own, is used up, and leaves with them.
+  - Shared work pays only for materials given up to the group: raw units a member gathered or skinned, carried, deposited and left in the stockpile for 10 minutes.
+  - In a village with a working workshop, *another* member refines those units straight from the stockpile (`refine { from: 'stockpile' }`) for **+125% output**. All of it lands in the stockpile, so refining needs no withdraw right and whoever may withdraw is who has to be trusted.
+  - Each gathered unit counts once. It stops counting when it leaves the giver's inventory by any other way, when it leaves the stockpile (a withdrawal takes back the withdrawer's own first, anything else the youngest first), or when the giver leaves.
   - Idle alt accounts therefore add nothing. Working alts count as members: the server cannot tell identities apart.
+  - The first version granted cover at the moment of gathering. Members could then keep their own materials and still get the bonus (1.51-2.22x solo without pooling), so it was replaced before stage 4.
 - **`BUILDINGS` catalog** (`src/shared/catalog.ts`), effects for members:
 
   | Building | Effect |
@@ -103,18 +105,30 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Stockpile capacity:** 25,000 items (100,000 with a storehouse), silver excluded. A full one is the theft prize.
 - **New skills:** `construction`, `farming` and `cooking`, with trowel, hoe and pot families, recipes and affix pools. `fertile_field` is reaped with farming and a hoe. Existing players got the three copper tools once (`KIT_VERSION`).
 - **Stations:** `makeItem` and `repair` accept the member's own building at the plot. Repairing outside town never heals.
-- **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions stay with the settlement, and their shared-work cover disappears.
+- **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions and deposits stay with the settlement, and what they gathered or gave stops counting for shared work.
 - **Abandonment:** the buildings fall. The stockpile, every stash and the materials of unfinished projects spill into one bag at the plot, and stash owners are told.
 - **Left for later stages, and not advertised until then:**
   - Stage 4: `stash.pilfer`, the watchtower as a witness, and the storehouse lock.
   - Stage 5: the infirmary (needs `wyrm_scale`, a ninth building and town slot), and watchtower movements in `corpse.examine`. The watchtower logs walking only, so a death leaves an arrival with no departure.
   - Stage 6: allies using stations and not setting off the palisade (`buildingStation` and `noteCrossing` in `buildings.ts`), and the palisade's raid defense.
-- **Measured** (`test/village-sim.ts`, 27 cases: items valued at cost, at quest pay and at half shop prices; newcomer, veteran and perfectly geared players; 3 maps; searched strategies on every side):
-  - A village earns **1.66-3.94x** the best solo play per member-hour (median 2.25x). The solo side may found alone, recruit idle accounts and solo every boss respawn.
-  - An exiled member loses **32-73%** (median 57%).
-  - A full stockpile is worth **2.1-3.6 member-hours** at cost and at quest pay. At half shop prices it is 1.0-3.1: crafted gear dominates that valuation, so veteran and maxed villages fall short of 2.
-  - Without shared work only 4 of the 27 cases reach 1.5x.
-- Tests: `test/buildings.test.ts` covers projects, upkeep, bonuses, shared work, food, stashes, secrecy, old saves and the boss bar with the new buffs. `test/economy.test.ts` checks the targets by playing the real rules (`test/village-sim.ts`).
+- **The theory, to be tested with real agents.** Let *f* be the share of a solo player's income that comes from refining the five shared raw materials, counting what is crafted from them. It ignores upkeep and the time the extra refining takes.
+
+  | Question | Prediction |
+  | --- | --- |
+  | A village that pools everything | *M* = 1 + 1.25 *f* times solo, so 1.5x needs *f* ≥ 0.40 |
+  | The same over the first two hours from nothing | the first 10 minutes earn no bonus, so 1.5x needs *f* ≥ 0.44 (over one hour: 0.48) |
+  | A village where everyone keeps their own | 1x: no unit is ever covered |
+  | Exile | loses 1 - 1/*M*: 33% at 1.5x, and 30% needs *M* ≥ 1.43 |
+  | A free rider who gives nothing and takes an equal share of what three others pool | 1 + 0.75 *M* until thrown out: 2.1x solo at *M* = 1.5, while each of the three drops to 1.1x |
+  | A raid on a stockpile holding *H* member-hours | 0.75 *H M* solo-hours at once. Staying earns that back in 0.75 *H M* / (*M* - 1) hours: 4.5-9 hours at *M* = 1.5, *H* = 2-4 |
+
+  So betrayal pays in the short term and a stable group wins after a few hours, as long as *f* is high enough. *f* is what an agent run has to show.
+- **What an agent run should show:** income per member-hour against a solo player of the same model; whether members find `refineFromStockpile`; `deposit`, `refine`, `refined` and `withdraw` in the audit log by member; what the stockpile holds; who defects, when, and what it earned them.
+- **Known limits, none of them measured with agents:**
+  - A village that takes every output out at once still gets the bonus. Only the 10 minutes of resting materials are then exposed, 0.3-0.75 member-hours in four unsearched simulated cases. The 2-4 member-hour stockpile rests on villages choosing to keep their output pooled.
+  - An idle alt gets nothing, but an alt that only stands at the plot and refines what its owner gives is a working member to the server.
+  - The scripted check plays three cases only, with strategies that were not searched under this rule.
+- Tests: `test/buildings.test.ts` covers projects, upkeep, bonuses, shared work, food, stashes, secrecy, old saves and the boss bar with the new buffs. `test/economy.test.ts` is a smoke check on three played cases (`test/village-sim.ts`): pooling pays, and keeping your own gets no shared work.
 
 ## Stage 4: Theft and witnesses
 
@@ -125,7 +139,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Witnesses:** at the moment of the act, every other player present in the zone (not traveling) has a chance to see it, and so does the watchtower.
   - Each witness gets a private event, `witness.saw { actor, act, items }`.
   - Nothing is broadcast. A witness decides whether to tell, keep quiet, or lie.
-- **Shared work:** stolen raw materials refine like any others, and only gathering and skinning give cover.
+- **Shared work:** loot earns no cover and theft needs no hook for it. Take the goods with `removeItems(s.stockpile)` and `markSettlement(s)`: at commit the youngest given units stop counting (`syncPooled`). Putting loot back gives nothing.
 - **Undetected theft:** the audit log shows a `missing` entry with the items and no actor. A storehouse lock (added to the stage 3 storehouse here) raises the chance of a `traces` entry that names the culprit to members.
 - The operator feed gets `theft` events with the true culprit.
 - Tests: `test/theft.test.ts` covers no-witness theft leaving `missing` without an actor, a witness getting the private event, and non-witnesses learning nothing through any command or event.
@@ -138,7 +152,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Any player can `revive` them (a 5 s channel that damage interrupts), bringing them back at 30% HP.
   - In PvP zones, any player can `attack` a downed player to finish them.
   - **Field bandage:** a craftable item that allows one self-revive. It is a trade good and stops solo deaths from wiping out every bot.
-- **Settlement membership of the dead:** remove them as `removeMember` does, so their shared-work cover goes too. Decide who gets their stash.
+- **Settlement membership of the dead:** remove them as `removeMember` does, so what they gathered and gave stops counting too. Decide who gets their stash.
 - **Permanent death:**
   - **Character state:** `Player.dead = { at, zone }`. Commands return a `DEAD` error with a hint to register a new character, and `observe` still works. The name stays reserved.
   - **Loot:** everything carried and equipped drops into a corpse bag.
@@ -193,7 +207,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 
 - `npm test`: the existing tests stay green, and the stage's new test file covers its rules and above all its **secrecy**. Each secret gets a negative test from a non-entitled player, checked through every command and the event stream, the way `test/trade.test.ts` and `test/chat.test.ts` already check secrecy.
 - `npm run demo -- --exit` passes. From stage 7 on it runs the community scenario.
-- Stage 3 adds a numeric economy check (group versus solo) to `test/economy.test.ts` against the ≥1.5× target.
+- Stage 3 adds a quick group-versus-solo smoke check to `test/economy.test.ts`. Runs with real agents decide whether the ≥1.5× target holds.
 - After stages 5 and 7, run a sandboxed agent session (`sandbox/run-agent.sh`) and watch the dashboard for these signals:
   - Do settlements form?
   - Do thefts and murders happen, and are they caught?

@@ -372,94 +372,477 @@ test('workshop: sometimes extra output, only there', () => {
   assert.ok(Math.abs(home - 1000 * (1 + BUILDING_ODDS.workshopOutput)) < 50, `${home}`);
 });
 
-test('shared work: exact extra output on what other members gathered, and never on your own', () => {
+// ---------- shared work ----------
+
+const REST = SETTLEMENT.sharedWork.restMs * 1.1;
+
+/** A village of `size` with the buildings paid, and the steps of shared work through the real commands. */
+function pooling(f: Fake, size = 3) {
+  const v = settle(f, size);
+  v.raise('workshop', 'forge_hall', 'farm');
+  v.stock({ stone: 1000, pine_plank: 1000, iron_bar: 100 });
+  f.g.mutate(() => f.g.markSettlement(v.s()));
+  const home = (id: string) => f.put(id, v.plot);
+  /** Gathers at least `qty` of copper ore, and returns exactly how much. */
+  const mine = (id: string, qty: number) => {
+    const vein = [...f.g.nodes.values()].find((n) => n.type === 'copper_vein')!;
+    f.put(id, vein);
+    f.hold(id, 'copper_pickaxe');
+    let got = 0;
+    while (got < qty) { vein.charges = 10; got += f.ok(id, 'gather', { nodeId: vein.id }).qty; f.p(id).wear = {}; }
+    home(id);
+    return got;
+  };
+  const ore = (qty: number) => ({ items: [{ item: 'copper_ore', qty }] });
+  const give = (id: string, qty: number) => {
+    home(id);
+    return bag(f.ok(id, 'stockpile.deposit', ore(qty)).given).copper_ore ?? 0;
+  };
+  const take = (id: string, qty: number) => { home(id); return f.ok(id, 'stockpile.withdraw', ore(qty)); };
+  const ready = (id: string, item = 'copper_ore') => { home(id); return bag(f.ok(id, 'stockpile.view').sharedWork.ready)[item] ?? 0; };
+  const resting = (id: string) => { home(id); return bag(f.ok(id, 'stockpile.view').sharedWork.resting).copper_ore ?? 0; };
+  const smelter = (id: string) => { home(id); f.hold(id, 'copper_tongs'); f.p(id).wear = {}; };
+  const smelt = (id: string, count = 1) => { smelter(id); return f.ok(id, 'refine', { recipeId: 'copper_bar', count, from: 'stockpile' }); };
+  const noSmelt = (id: string, count = 1) => { smelter(id); return f.no(id, 'refine', { recipeId: 'copper_bar', count, from: 'stockpile' }); };
+  const ownSmelt = (id: string, count = 1) => { smelter(id); return f.ok(id, 'refine', { recipeId: 'copper_bar', count }); };
+  const rest = () => { f.pass(REST); for (const id of v.ids) if (v.s().members[id]) home(id); };
+  /** Everybody may withdraw. */
+  const trusting = () => f.ok(v.ids[0], 'settlement.setCharter', { withdrawRole: 'member' });
+  /** Ore from outside, saved as any real transfer is. */
+  const handed = (id: string, qty: number) => { f.give(id, { copper_ore: qty }); f.save(id); };
+  return { ...v, home, mine, ore, give, take, ready, resting, smelt, noSmelt, ownSmelt, rest, trusting, handed };
+}
+
+test('shared work: what another member gave and left to rest pays the exact percentage, into the stockpile', () => {
   const f = fake();
   const odds = BUILDING_ODDS.workshopOutput;
   BUILDING_ODDS.workshopOutput = 0;
   try {
-    const { ids: [A, B, C], sid, s, raise, stock, plot } = settle(f, 3);
-    raise('workshop', 'forge_hall', 'farm');
-    stock({ stone: 1000, pine_plank: 1000, iron_bar: 100 });
+    const { ids: [A, B], s, mine, give, ready, resting, smelt, noSmelt, rest } = pooling(f);
     const pct = SETTLEMENT.sharedWork.outputPct / 100;
-    const copper = [...f.g.nodes.values()].find((n) => n.type === 'copper_vein')!;
-    const mine = (id: string) => {
-      copper.charges = 10;
-      f.put(id, copper);
-      f.hold(id, 'copper_pickaxe');
-      return f.ok(id, 'gather', { nodeId: copper.id }).qty as number;
-    };
-    const smelt = (id: string, count: number) => {
-      f.put(id, plot);
-      f.hold(id, 'copper_tongs');
-      return f.ok(id, 'refine', { recipeId: 'copper_bar', count });
-    };
-    const covered = (id: string) => bag(f.ok(id, 'settlement.view').settlement.sharedWork.covered).copper_ore ?? 0;
+    const qty = mine(A, 80);
+    assert.equal(ready(B), 0, 'gathering alone gives nothing');
+    assert.equal(resting(B), 0);
+    assert.equal(give(A, qty), qty);
+    assert.equal(resting(B), qty);
+    assert.equal(resting(A), 0, 'not your own');
+    const early = noSmelt(B);
+    assert.equal(early.code, 'NOT_ENOUGH_ITEMS');
+    assert.ok(early.retryAfterMs >= SETTLEMENT.sharedWork.restMs - 1000, 'it says how long the rest takes');
 
-    let gathered = 0;
-    while (gathered < 12) gathered += mine(A);
-    assert.equal(covered(A), 0, 'your own work never covers you');
-    assert.equal(covered(B), gathered);
-    const own = smelt(A, 2);
-    assert.equal(own.shared, undefined);
-    assert.equal(own.output.qty, 2);
+    f.pass(SETTLEMENT.sharedWork.restMs - 5000);
+    assert.equal(ready(B), 0, 'not a moment early');
+    rest();
+    assert.equal(ready(B), qty);
+    assert.equal(ready(A), 0);
+    assert.equal(noSmelt(A).code, 'NOT_ENOUGH_ITEMS', 'your own work never covers you');
 
-    // Another member, with ore from anywhere: covered as far as A's work goes.
-    f.give(B, { copper_ore: 40 });
-    const units = Math.floor(gathered / 2);
-    const other = smelt(B, 10);
-    assert.deepEqual(other.shared, { units: Math.min(10, units), output: Math.floor(Math.min(10, units) * pct) });
-    assert.equal(other.output.qty, 10 + other.shared.output);
-    assert.equal(covered(B), gathered - 2 * Math.min(10, units), 'used up');
-
-    // Over many one-unit batches the fractions add up to the exact percentage.
-    s().work[A] = { cover: { copper_ore: 80 }, carry: {} };
-    s().work[B] = { cover: {}, carry: {} };
-    f.give(B, { copper_ore: 80 });
+    assert.equal(s().charter.withdrawRole, 'steward');
+    assert.equal(s().members[B].role, 'member', 'it needs no right to withdraw');
+    const carried = { ...f.p(B).inventory };
+    const barsBefore = s().stockpile.copper_bar ?? 0;
+    const units = Math.floor(qty / 2);
     let made = 0;
-    for (let i = 0; i < 40; i++) made += smelt(B, 1).output.qty;
-    assert.equal(made, 40 + 40 * pct);
-    assert.equal(smelt(B, 1).shared, undefined, 'nothing left to cover it');
-
-    // Each raw item covers only itself.
-    s().work[A].cover = { pine_log: 100 };
-    f.give(B, { copper_ore: 2 });
-    assert.equal(smelt(B, 1).shared, undefined);
-
-    // Not in town, and not while the settlement is no village.
-    s().work[A].cover = { copper_ore: 100 };
-    f.give(B, { copper_ore: 20 });
-    f.put(B, f.g.map.places.find((x) => x.id === 'smelter')!);
-    f.hold(B, 'copper_tongs');
-    assert.equal(f.ok(B, 'refine', { recipeId: 'copper_bar' }).shared, undefined, 'town');
-    s().buildings.find((b) => b.id === 'farm')!.unpaid = true;
-    assert.equal(smelt(B, 1).shared, undefined, 'two paid buildings are no village');
-    delete s().buildings.find((b) => b.id === 'farm')!.unpaid;
-    assert.ok(smelt(B, 1).shared);
-    f.ok(C, 'settlement.leave');
-    assert.equal(smelt(B, 1).shared, undefined, 'two members are no village');
-
-    // Leaving takes your cover along: an exile's work stops helping.
-    f.ok(A, 'settlement.invite', { playerId: C });
-    f.ok(C, 'settlement.join', { settlementId: sid });
-    assert.ok(smelt(B, 1).shared);
-    f.ok(A, 'settlement.setRole', { playerId: B, role: 'leader' });
-    f.ok(B, 'settlement.expel', { playerId: A });
-    assert.equal(covered(B), 0);
-    assert.equal(s().work[A], undefined);
-    assert.equal(s().members[A], undefined);
+    let left = units;
+    // Batches of every size: the fractions add up to the exact percentage.
+    for (let count = 1; left; count = count === 1 ? 3 : 1) {
+      const n = Math.min(count, left);
+      const r = smelt(B, n);
+      assert.equal(r.shared.units, n);
+      assert.equal(r.output.qty, n + r.shared.output + (r.bonus ?? 0));
+      made += r.output.qty - (r.bonus ?? 0);
+      left -= n;
+    }
+    assert.equal(made, Math.floor(units * (1 + pct)));
+    assert.equal(s().stockpile.copper_bar - barsBefore, made, 'the group has the output');
+    assert.equal(s().stockpile.copper_ore ?? 0, qty - 2 * units, 'and paid the inputs');
+    assert.equal(f.p(B).inventory.copper_ore, carried.copper_ore);
+    assert.equal(f.p(B).inventory.copper_bar, carried.copper_bar, 'the refiner pockets none of it');
+    assert.equal(noSmelt(B).code, 'NOT_ENOUGH_ITEMS', 'used up');
+    const log = f.ok(A, 'stockpile.log').entries;
+    const logged = (action: string, item: string) => log
+      .filter((e: any) => e.action === action && e.actorId === B).flatMap((e: any) => e.items)
+      .reduce((n: number, i: ItemStack) => n + (i.item === item ? i.qty : 0), 0);
+    assert.equal(logged('refine', 'copper_ore'), 2 * units);
+    assert.equal(logged('refined', 'copper_bar'), made);
   } finally {
     BUILDING_ODDS.workshopOutput = odds;
     f.g.close();
   }
 });
 
-test('shared work: skinning covers tanning, cover is capped, and idle members add nothing', () => {
+test('shared work: only a working village workshop pays it, only on request, and the stockpile bounds it', () => {
   const f = fake();
   try {
-    const { ids: [A, B, C], s, raise } = settle(f, 3);
-    raise('workshop', 'forge_hall', 'farm');
-    assert.deepEqual(f.ok(A, 'settlement.view').settlement.sharedWork.covered, [], 'nobody has worked');
+    const { ids: [A, B, C], sid, s, stock, plot, mine, give, smelt, noSmelt, ownSmelt, rest, handed } = pooling(f);
+    const qty = mine(A, 40);
+    give(A, qty);
+    rest();
+    handed(B, 20);
+    assert.equal(ownSmelt(B).shared, undefined, 'your inventory never gets it, whatever others gave');
+    const refuse = (payload: object, code: string, type = 'refine') => assert.equal(f.no(B, type, payload).code, code);
+    refuse({ recipeId: 'copper_bar', from: 'inventory' }, 'BAD_REQUEST');
+    refuse({ recipeId: 'copper_sword', from: 'stockpile' }, 'BAD_REQUEST', 'craft');
+    refuse({ recipeId: 'ration', from: 'stockpile' }, 'BAD_REQUEST');
+    f.put(B, f.g.map.places.find((x) => x.id === 'smelter')!);
+    refuse({ recipeId: 'copper_bar', from: 'stockpile' }, 'OUT_OF_RANGE');
+    f.put(B, plot);
 
+    const farm = () => s().buildings.find((b) => b.id === 'farm')!;
+    farm().unpaid = true;
+    assert.equal(noSmelt(B).code, 'SETTLEMENT_STATE', 'two paid buildings are no village');
+    delete farm().unpaid;
+    s().buildings.find((b) => b.id === 'workshop')!.unpaid = true;
+    assert.equal(noSmelt(B).code, 'NO_STATION', 'a closed workshop');
+    delete s().buildings.find((b) => b.id === 'workshop')!.unpaid;
+    f.ok(C, 'settlement.leave');
+    assert.equal(noSmelt(B).code, 'SETTLEMENT_STATE', 'two members are no village');
+    f.ok(A, 'settlement.invite', { playerId: C });
+    f.ok(C, 'settlement.join', { settlementId: sid });
+
+    // One batch may go over a full stockpile, never a second.
+    const held = Object.entries(s().stockpile).reduce((n, [item, q]) => n + (item === 'silver' ? 0 : q), 0);
+    stock({ grain: SETTLEMENT.stockpileCapacity - held + 1 });
+    assert.equal(noSmelt(B).code, 'SETTLEMENT_STATE', 'no refining into an overfull stockpile');
+    s().stockpile.grain -= 100;
+    assert.ok(smelt(B).shared);
+  } finally { f.g.close(); }
+});
+
+test('shared work attack: depositing and taking back, and cycling the same units', () => {
+  const f = fake();
+  try {
+    const { ids: [A, B, C], s, stock, mine, give, take, ready, resting, smelt, rest, trusting } = pooling(f);
+    trusting();
+    const qty = mine(A, 20);
+    assert.equal(give(A, qty), qty);
+    take(A, qty);
+    assert.equal(resting(B), 0, 'taken back at once');
+    assert.equal(give(A, qty), 0, 'the same units a second time');
+    rest();
+    assert.equal(ready(B), 0);
+
+    // Other ore lying in the stockpile does not keep alive what its giver takes back.
+    take(A, qty);
+    stock({ copper_ore: 100 });
+    const more = mine(A, 20);
+    give(A, more);
+    take(A, more);
+    assert.equal(resting(B), 0);
+
+    // Through a partner's hands.
+    s().stockpile.copper_ore = 0;
+    const third = mine(A, 20);
+    give(A, third);
+    take(B, third);
+    assert.equal(resting(C), 0, 'taken out by someone else');
+    assert.equal(give(B, third), 0, 'and put back by them');
+    rest();
+    assert.equal(ready(C), 0);
+
+    // Taken out just before it is ready, or after: gone either way.
+    const fourth = mine(A, 20);
+    give(A, fourth);
+    rest();
+    assert.equal(ready(C), fourth);
+    take(B, third + fourth);
+    assert.equal(ready(C), 0, 'withdrawn after the rest');
+    assert.equal(give(B, third + fourth), 0);
+
+    // Once used, the inputs a tool saves go back as plain ore.
+    s().stockpile.copper_ore = 0;
+    const fifth = mine(A, 20);
+    give(A, fifth);
+    rest();
+    const tool = `copper_tongs${UNIQUE_SEP}5a4ed000`;
+    f.g.uniques.set(tool, { id: tool, base: 'copper_tongs', ilvl: 60, rarity: 'magic', affixes: [{ id: 'save_inputs', tier: 3, value: 100 }], mods: 1, corrupted: false, craftedBy: 'test', craftedAt: f.now() });
+    f.give(B, { [tool]: 1 });
+    f.ok(B, 'equip', { item: tool });
+    const r = f.ok(B, 'refine', { recipeId: 'copper_bar', count: 5, from: 'stockpile' });
+    assert.equal(r.inputsSaved, 5);
+    assert.equal(s().stockpile.copper_ore, fifth);
+    assert.equal(ready(B), fifth - 10, 'saved units never cover again');
+    assert.equal(ready(C), fifth - 10);
+    assert.ok(smelt(C).shared);
+  } finally { f.g.close(); }
+});
+
+test('shared work attack: two members swap while each keeps their own materials', () => {
+  const f = fake();
+  try {
+    const { ids: [A, B, C], mine, give, take, ready, resting, noSmelt, ownSmelt, rest, trusting } = pooling(f);
+    trusting();
+    // Both gather and keep: the other's work covers nothing.
+    mine(A, 20);
+    mine(B, 20);
+    rest();
+    assert.equal(ready(A) + ready(B), 0);
+    assert.equal(noSmelt(A).code, 'NOT_ENOUGH_ITEMS');
+    assert.equal(noSmelt(B).code, 'NOT_ENOUGH_ITEMS');
+    assert.equal(ownSmelt(A, 5).shared, undefined);
+
+    // Both deposit and each takes as much back at once, so each still holds what they gathered.
+    const a = mine(A, 20);
+    const b = mine(B, 20);
+    give(A, a);
+    give(B, b);
+    take(A, a);
+    take(B, b);
+    assert.equal(resting(C), 0);
+
+    // Or each takes the other's: the pile is empty again, so nothing was given to the group.
+    const n = Math.min(mine(A, 20), mine(B, 20));
+    give(A, n);
+    take(B, n);
+    give(B, n);
+    take(A, n);
+    assert.equal(resting(C), 0);
+    rest();
+    assert.equal(ready(A) + ready(B) + ready(C), 0);
+    assert.equal(ownSmelt(B, 5).shared, undefined);
+  } finally { f.g.close(); }
+});
+
+test('shared work attack: idle alts, bought ore and ore handed over by outsiders', () => {
+  const f = fake();
+  try {
+    const { ids: [A, B, C], mine, give, ready, resting, noSmelt, rest, handed, home } = pooling(f);
+    assert.deepEqual(f.ok(A, 'stockpile.view').sharedWork, { ready: [], resting: [] }, 'nobody has worked');
+    assert.equal(noSmelt(A).code, 'NOT_ENOUGH_ITEMS');
+    handed(C, 50);
+    assert.equal(give(C, 50), 0, 'an idle member depositing what was handed to them');
+
+    // A real sale: a worker outside the settlement sells what they mined.
+    const seller = f.g.register('Seller').playerId;
+    const square = f.g.map.anchors.town;
+    const sold = mine(seller, 20);
+    const trade = (from: string, to: string, qty: number) => {
+      f.put(from, square);
+      f.put(to, square);
+      const { trade: t } = f.ok(from, 'trade.propose', { to, give: [{ item: 'copper_ore', qty }], receive: [] });
+      f.ok(to, 'trade.accept', { tradeId: t.id });
+      f.ok(from, 'trade.lock', { tradeId: t.id, items: [{ item: 'copper_ore', qty }] });
+      f.ok(to, 'trade.lock', { tradeId: t.id, items: [] });
+      home(to);
+    };
+    trade(seller, B, sold);
+    assert.equal(give(B, sold), 0, 'bought');
+
+    // A member's work does not travel to an alt, and does not stay with the member who sold it.
+    const work = mine(A, 20);
+    trade(A, C, work);
+    assert.equal(give(C, work), 0, 'handed to an alt');
+    handed(A, work);
+    assert.equal(give(A, work), 0, 'bought back after selling');
+
+    // Nor can it be spent and then replaced by bought ore.
+    const spent = mine(A, 20);
+    f.g.mutate(() => { delete f.p(A).inventory.copper_ore; f.g.markPlayer(f.p(A)); });
+    handed(A, spent);
+    assert.equal(give(A, spent), 0, 'replaced by bought ore');
+
+    // Carrying both, only as much as was gathered counts.
+    handed(A, 30);
+    const own = mine(A, 10);
+    assert.equal(give(A, own + 30), own);
+    assert.equal(resting(B), own);
+    rest();
+    assert.equal(ready(B), own);
+  } finally { f.g.close(); }
+});
+
+test('shared work attack: what left the inventory, by bank, refining or death, is no longer gathered work', () => {
+  const f = fake();
+  try {
+    const { ids: [A], mine, give, ownSmelt, handed, home } = pooling(f);
+    const banked = mine(A, 10);
+    f.put(A, f.g.map.places.find((x) => x.id === 'bank')!);
+    f.ok(A, 'bank.deposit', { items: [{ item: 'copper_ore', qty: banked }] });
+    f.ok(A, 'bank.withdraw', { items: [{ item: 'copper_ore', qty: banked }] });
+    assert.equal(give(A, banked), 0, 'banked');
+
+    const refined = mine(A, 10);
+    ownSmelt(A, Math.floor(refined / 2));
+    handed(A, refined);
+    assert.equal(give(A, refined), refined % 2, 'refined');
+
+    const dropped = mine(A, 10);
+    f.g.mutate(() => killPlayer(f.g, f.p(A), { kind: 'mob', id: 'wolf', name: 'Wolf' }));
+    handed(A, dropped);
+    home(A);
+    assert.equal(give(A, dropped), 0, 'died, then got as much back');
+  } finally { f.g.close(); }
+});
+
+test('shared work attack: leaving, rejoining, expulsion and exile', () => {
+  const f = fake();
+  try {
+    const { ids: [A, B, C, D], sid, s, mine, give, ready, resting, rest } = pooling(f, 4);
+    const rejoin = (id: string) => {
+      f.ok(A, 'settlement.invite', { playerId: id });
+      f.ok(id, 'settlement.join', { settlementId: sid });
+    };
+    const given = mine(B, 20);
+    give(B, given);
+    const carried = mine(B, 20);
+    f.ok(B, 'settlement.leave');
+    assert.equal(s().work[B], undefined);
+    assert.equal(resting(C), 0, 'what they gave stops counting, though it stays in the stockpile');
+    assert.equal(s().stockpile.copper_ore, given);
+    const outside = mine(B, 20);
+    rejoin(B);
+    assert.equal(give(B, carried + outside), 0, 'neither work from before leaving nor work from outside');
+    rest();
+    assert.equal(ready(C), 0, 'rejoining brings nothing back');
+    assert.equal(ready(B), 0, 'and does not make your old ore someone else\'s');
+
+    const fresh = mine(B, 20);
+    give(B, fresh);
+    rest();
+    assert.equal(ready(C), fresh);
+    f.ok(A, 'settlement.expel', { playerId: B });
+    assert.equal(ready(C), 0, 'expelled');
+
+    const last = mine(D, 20);
+    give(D, last);
+    rest();
+    assert.equal(ready(C), last);
+    f.ok(A, 'settlement.vote', { kind: 'exile', targetId: D });
+    f.ok(C, 'settlement.vote', { kind: 'exile', targetId: D });
+    assert.equal(s().members[D], undefined);
+    assert.equal(ready(C), 0, 'exiled');
+    assert.equal(s().work[D], undefined);
+  } finally { f.g.close(); }
+});
+
+test('shared work attack: loot earns and launders no cover', () => {
+  const f = fake();
+  try {
+    const { ids: [A, B, C], s, mine, give, ready, resting, rest } = pooling(f);
+    /** What stage 4's theft will do: goods move out of the stockpile, and nothing here tells shared work. */
+    const steal = (who: string, qty: number) => f.g.mutate(() => {
+      f.g.markSettlement(s());
+      f.g.markPlayer(f.p(who));
+      s().stockpile.copper_ore -= qty;
+      f.p(who).inventory.copper_ore = (f.p(who).inventory.copper_ore ?? 0) + qty;
+    });
+    const old = mine(A, 20);
+    give(A, old);
+    rest();
+    const young = mine(B, 20);
+    give(B, young);
+    steal(C, young);
+    assert.equal(resting(A), 0, 'the youngest stops counting first');
+    assert.equal(ready(C), old);
+    assert.equal(give(C, young), 0, 'loot put back');
+    assert.equal(resting(A), 0);
+
+    steal(A, young + old);
+    assert.equal(ready(C), 0, 'stolen by its own giver');
+    assert.equal(give(A, young + old), 0);
+
+    const spy = f.g.register('Thief').playerId;
+    steal(spy, young + old);
+    f.ok(A, 'settlement.invite', { playerId: spy });
+    f.ok(spy, 'settlement.join', { settlementId: s().id });
+    assert.equal(give(spy, young + old), 0, 'a thief who joins');
+    rest();
+    assert.equal(ready(B) + ready(C), 0);
+
+    const own = mine(C, 10);
+    steal(C, 30);
+    assert.equal(give(C, own + 30), own, 'mixed with loot, only their own work counts');
+  } finally { f.g.close(); }
+});
+
+test('shared work attack: a rolled-back command changes nothing, and a restart keeps the books', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'noibla-shared-'));
+  let f = fake({ dbPath: join(dir, 'world.db'), log: () => {} });
+  try {
+    const { ids: [A, B], sid, s, plot, mine, give, rest, trusting } = pooling(f);
+    trusting();
+    f.save(A);
+    f.save(B);
+    /** Runs a command whose commit fails after the command and the sync both changed things. */
+    const failing = (id: string, type: string, payload: object) => {
+      f.save(id);
+      const before = { work: structuredClone(s().work), stockpile: { ...s().stockpile }, inventory: { ...f.p(id).inventory } };
+      const run = f.g.store.run.bind(f.g.store);
+      f.g.store.run = ((sql: string, ...args: any[]) => {
+        if (sql.startsWith('INSERT INTO settlements')) throw new Error('disk full');
+        return run(sql, ...args);
+      }) as typeof f.g.store.run;
+      try {
+        assert.equal(f.run(id, type, payload).error.code, 'INTERNAL');
+      } finally { f.g.store.run = run; }
+      assert.deepEqual({ work: s().work, stockpile: { ...s().stockpile }, inventory: { ...f.p(id).inventory } }, before, type);
+    };
+    const qty = mine(A, 20);
+    const vein = [...f.g.nodes.values()].find((n) => n.type === 'copper_vein')!;
+    vein.charges = 10;
+    f.put(A, vein);
+    failing(A, 'gather', { nodeId: vein.id });
+    f.put(A, plot);
+    failing(A, 'stockpile.deposit', { items: [{ item: 'copper_ore', qty }] });
+    assert.equal(give(A, qty), qty, 'still theirs to give');
+    failing(A, 'stockpile.withdraw', { items: [{ item: 'copper_ore', qty }] });
+    rest();
+    f.put(B, plot);
+    f.hold(B, 'copper_tongs');
+    failing(B, 'refine', { recipeId: 'copper_bar', count: 3, from: 'stockpile' });
+
+    f.g.mutate(() => f.g.markSettlement(s()));
+    const work = structuredClone(s().work);
+    const clock = f.now();
+    f.g.close();
+    f = fake({ dbPath: join(dir, 'world.db') });
+    f.pass(clock - f.now());
+    assert.deepEqual(f.g.settlements.get(sid)!.work, work);
+    f.put(B, plot);
+    f.hold(B, 'copper_tongs');
+    assert.ok(f.ok(B, 'refine', { recipeId: 'copper_bar', count: 3, from: 'stockpile' }).shared);
+  } finally {
+    f.g.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('shared work: saves from the gather-time rule load, keep their carry and lose the unearned cover', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'noibla-shared-'));
+  const dbPath = join(dir, 'world.db');
+  let f = fake({ dbPath });
+  try {
+    const { ids: [A, B], sid, s, plot, stock } = pooling(f);
+    stock({ copper_ore: 100 });
+    f.g.mutate(() => f.g.markSettlement(s()));
+    // Written as 8dd6ee7 saved it.
+    f.g.store.run('UPDATE settlements SET data = ? WHERE id = ?', JSON.stringify({
+      ...s(),
+      work: { [A]: { cover: { copper_ore: 80, rough_hide: 4 }, carry: { copper_bar: 0.75 } }, [B]: { cover: {}, carry: {} } },
+    }), sid);
+    f.give(A, { copper_ore: 80 });
+    f.save(A);
+    f.g.close();
+    f = fake({ dbPath });
+    const loaded = f.g.settlements.get(sid)!;
+    assert.deepEqual(loaded.work, { [A]: { gathered: {}, given: {}, carry: { copper_bar: 0.75 } }, [B]: { gathered: {}, given: {}, carry: {} } });
+    assert.equal(loaded.stockpile.copper_ore, 100);
+    f.put(A, plot);
+    f.put(B, plot);
+    assert.deepEqual(f.ok(B, 'stockpile.view').sharedWork, { ready: [], resting: [] });
+    f.hold(B, 'copper_tongs');
+    assert.equal(f.no(B, 'refine', { recipeId: 'copper_bar', from: 'stockpile' }).code, 'NOT_ENOUGH_ITEMS');
+    assert.deepEqual(f.ok(A, 'stockpile.deposit', { items: [{ item: 'copper_ore', qty: 80 }] }).given, []);
+  } finally {
+    f.g.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('shared work: skinning counts, stone does not, and the lots stay few', () => {
+  const f = fake();
+  try {
+    const { ids: [A, B], s, plot, rest, ready, handed } = pooling(f);
     const wolf = [...f.g.mobs.values()].find((m) => m.type === 'wolf')!;
     f.put(B, wolf);
     f.give(B, { copper_sword: 1 });
@@ -468,20 +851,129 @@ test('shared work: skinning covers tanning, cover is capped, and idle members ad
     wolf.hp = 1;
     const hides = bag(f.ok(B, 'attack', { targetId: wolf.id }).loot).rough_hide;
     assert.ok(hides > 0);
-    assert.deepEqual(f.ok(C, 'settlement.view').settlement.sharedWork.covered, [{ item: 'rough_hide', qty: hides }]);
-
-    const vein = [...f.g.nodes.values()].find((n) => n.type === 'iron_vein')!;
-    const max = SETTLEMENT.sharedWork.maxCoverPerItem;
-    s().work[B].cover.iron_ore = max;
-    f.put(B, vein);
-    f.hold(B, 'copper_pickaxe');
-    f.ok(B, 'gather', { nodeId: vein.id });
-    assert.equal(s().work[B].cover.iron_ore, max);
+    f.put(B, plot);
+    assert.deepEqual(f.ok(B, 'stockpile.deposit', { items: [{ item: 'rough_hide', qty: hides }] }).given, [{ item: 'rough_hide', qty: hides }]);
+    rest();
+    assert.equal(ready(A, 'rough_hide'), hides);
 
     const quarry = [...f.g.nodes.values()].find((n) => n.type === 'stone_quarry')!;
     f.put(B, quarry);
-    f.ok(B, 'gather', { nodeId: quarry.id });
-    assert.equal(s().work[B].cover.stone, undefined, 'only what a workshop refines counts');
+    f.hold(B, 'copper_pickaxe');
+    const stone = f.ok(B, 'gather', { nodeId: quarry.id }).qty;
+    f.put(B, plot);
+    assert.deepEqual(f.ok(B, 'stockpile.deposit', { items: [{ item: 'stone', qty: stone }] }).given, []);
+
+    // A deposit every two seconds for half an hour.
+    handed(A, 900);
+    for (let i = 0; i < 900; i++) {
+      s().work[A] ??= { gathered: {}, given: {}, carry: {} };
+      s().work[A].gathered.copper_ore = { qty: 1, had: f.p(A).inventory.copper_ore };
+      f.ok(A, 'stockpile.deposit', { items: [{ item: 'copper_ore', qty: 1 }] });
+      f.pass(2000);
+      f.put(A, plot);
+    }
+    const lots = s().work[A].given.copper_ore;
+    assert.ok(lots.length <= 63, `${lots.length} lots`);
+    assert.equal(lots.reduce((n, l) => n + l.qty, 0), 900);
+  } finally { f.g.close(); }
+});
+
+test('shared work: random play never covers more than was gathered, more than the stockpile holds, or too early', () => {
+  for (let seed = 1; seed <= 12; seed++) {
+    const f = fake({ seed });
+    try {
+      const { ids, s, mine, give, take, smelt, ready, trusting, handed, home } = pooling(f, 4);
+      trusting();
+      let z = seed * 7919;
+      const rnd = () => { z = (z * 1664525 + 1013904223) % 4294967296; return z / 4294967296; };
+      const gatheredAt: [number, number][] = [];
+      let used = 0;
+      for (let step = 0; step < 300; step++) {
+        const id = ids[Math.floor(rnd() * ids.length)];
+        Object.assign(s().stockpile, { stone: 1000, pine_plank: 1000, iron_bar: 100 });
+        home(id);
+        const have = f.p(id).inventory.copper_ore ?? 0;
+        const held = s().stockpile.copper_ore ?? 0;
+        const x = rnd();
+        if (x < 0.2) gatheredAt.push([f.now(), mine(id, 5)]);
+        else if (x < 0.26) handed(id, 10);
+        else if (x < 0.48 && have) give(id, 1 + Math.floor(rnd() * have));
+        else if (x < 0.56 && held) take(id, 1 + Math.floor(rnd() * held));
+        else if (x < 0.8) {
+          const count = Math.min(10, Math.floor(ready(id) / 2));
+          if (count) { used += 2 * smelt(id, count).shared.units; }
+        } else f.pass(rnd() * SETTLEMENT.sharedWork.restMs * 0.5);
+        const old = gatheredAt.reduce((n, [at, q]) => n + (at <= f.now() - SETTLEMENT.sharedWork.restMs ? q : 0), 0);
+        assert.ok(used <= old, `seed ${seed}, step ${step}: ${used} covered, only ${old} gathered long enough ago`);
+        const lots = Object.values(s().work).flatMap((w) => w.given.copper_ore ?? []).reduce((n, l) => n + l.qty, 0);
+        assert.ok(lots <= (s().stockpile.copper_ore ?? 0), `seed ${seed}, step ${step}: more cover than ore`);
+      }
+      assert.ok(used > 0, `seed ${seed}: never refined`);
+    } finally { f.g.close(); }
+  }
+});
+
+test('secrecy: shared work shows only to members, and the pile only at the plot', () => {
+  const f = fake();
+  try {
+    const { ids: [A, B, C], sid, plot, mine, give, smelt, rest, home, handed, ownSmelt } = pooling(f);
+    const spy = f.g.register('Spy').playerId;
+    const former = f.g.register('Former').playerId;
+    f.ok(A, 'settlement.invite', { playerId: former });
+    f.ok(former, 'settlement.join', { settlementId: sid });
+    f.ok(former, 'settlement.leave');
+    const outsiders = [spy, former];
+    const seen = new Map<string, any[]>(outsiders.map((id) => [id, []]));
+    for (const id of outsiders) { f.put(id, plot); f.g.subscribe({ kind: 'player', playerId: id, send: (e: any) => seen.get(id)!.push(e) } as any); }
+    const mate: any[] = [];
+    f.g.subscribe({ kind: 'player', playerId: C, send: (e: any) => mate.push(e) } as any);
+
+    give(A, mine(A, 30));
+    rest();
+    const later = mine(B, 20);
+    give(B, later);
+    for (const id of outsiders) f.put(id, plot);
+    smelt(C, 2);
+
+    const keys = ['"ready"', '"resting"', '"nextReadyInMs"', '"given"', '"gathered"', '"readyAt"', '"refined"', '"outputPct":125,"covered"', '"action":"refine"'];
+    const leaks = (what: string, data: unknown) => { for (const k of keys) assert.ok(!(JSON.stringify(data) ?? '').includes(k), `${what} leaks ${k}`); };
+    for (const id of outsiders) {
+      for (const type of Object.keys(f.g.commands)) {
+        if (type === 'settlement.join' || type === 'settlement.decline') continue;
+        f.put(id, plot);
+        f.pass(1000);
+        f.put(id, plot);
+        leaks(type, f.run(id, type, { settlementId: sid, id: sid, playerId: A, to: A, recipeId: 'copper_bar', from: 'stockpile', items: [{ item: 'copper_ore', qty: 1 }], plotId: plot.id }));
+      }
+      f.put(id, plot);
+      f.pass(1000);
+      f.put(id, plot);
+      assert.equal(f.no(id, 'refine', { recipeId: 'copper_bar', from: 'stockpile' }).code, 'SETTLEMENT_STATE', 'refused before the stockpile is looked at');
+      leaks(`events of ${id}`, seen.get(id));
+      assert.ok(!seen.get(id)!.some((e) => e.type.startsWith('stockpile.')));
+    }
+    assert.ok(mate.some((e) => e.type === 'stockpile.changed' && e.data.entry.action === 'refined'));
+
+    // A bystander sees the same refine event whether the materials were the group's or the refiner's own.
+    seen.get(spy)!.length = 0;
+    f.put(spy, plot);
+    smelt(C);
+    handed(C, 2);
+    ownSmelt(C);
+    const refines = seen.get(spy)!.filter((e) => e.type === 'refine');
+    assert.equal(refines.length, 2);
+    assert.deepEqual(Object.keys(refines[0].data).sort(), Object.keys(refines[1].data).sort());
+
+    // A member away from the plot learns nothing of what lies in the pile.
+    f.put(C, f.g.map.anchors.town);
+    assert.deepEqual(f.ok(C, 'settlement.view').settlement.sharedWork, { active: true, outputPct: SETTLEMENT.sharedWork.outputPct });
+    leaks('observe away from the plot', f.ok(C, 'observe'));
+    assert.equal(f.no(C, 'stockpile.view').code, 'OUT_OF_RANGE');
+    const away = f.no(C, 'refine', { recipeId: 'copper_bar', count: 10, from: 'stockpile' });
+    assert.equal(away.code, 'OUT_OF_RANGE');
+    assert.doesNotMatch(JSON.stringify(away), /resting|ready/, 'no counts from afar');
+    home(C);
+    assert.ok(f.ok(C, 'stockpile.view').sharedWork.ready.length);
   } finally { f.g.close(); }
 });
 
@@ -875,7 +1367,7 @@ test('secrecy: stashes, projects, upkeep, alerts and the watch log reach nobody 
     });
     await wait(150);
 
-    const always = [SECRET_ID, ALERTED, WATCHED, '"upkeepInMs"', '"readyToBuild"', '"covered"', '"working":false', 'upkeep is unpaid'];
+    const always = [SECRET_ID, ALERTED, WATCHED, '"upkeepInMs"', '"readyToBuild"', '"resting"', '"nextReadyInMs"', '"working":false', 'upkeep is unpaid'];
     const leaks = (what: string, data: unknown) => {
       const text = JSON.stringify(data) ?? '';
       for (const secret of always) assert.ok(!text.includes(secret), `${what} leaks ${secret}`);
@@ -979,4 +1471,45 @@ test('SDK: helpers build, refine and cook at the settlement, and survive a resta
     assert.deepEqual(s.buildings.map((b) => b.id), ['workshop', 'kitchen', 'watchtower']);
     assert.ok((await again.observe()).self.effects.wellFedMs > 0);
   } finally { await w2.close(); }
+});
+
+test('SDK: give to the stockpile, see it rest, refine it from there', async () => {
+  const w = await world();
+  try {
+    const g = w.server.game;
+    const bots = [await w.bot('Giver'), await w.bot('Smelter'), await w.bot('Third')];
+    const ids = await Promise.all(bots.map(async (b) => (await b.whoami()).playerId));
+    const plot = g.map.plots.find((pl) => pl.region === 'hollow')!;
+    const vein = [...g.nodes.values()].find((n) => n.type === 'copper_vein')!;
+    const put = (id: string, at: Pos) => Object.assign(g.players.get(id)!, { pos: { x: at.x, y: at.y }, zone: regionAt(g.map, at), travel: null, busyUntil: 0 });
+    for (const id of ids) put(id, plot);
+    g.players.get(ids[0])!.inventory = sum([g.players.get(ids[0])!.inventory, bag(SETTLEMENT.foundCost)]);
+    const { settlement } = await bots[0].settlementFound('Shared Hold', plot.id);
+    for (const i of [1, 2]) { await bots[0].settlementInvite(ids[i]); await bots[i].settlementJoin(settlement.id); }
+    g.mutate(() => {
+      const s = g.settlements.get(settlement.id)!;
+      g.markSettlement(s);
+      for (const id of ['workshop', 'forge_hall', 'farm'] as const) s.buildings.push({ id, builtAt: g.now(), paidUntil: g.now() + 3600_000 });
+    });
+    await bots[0].equip('copper_pickaxe');
+    put(ids[0], vein);
+    let qty = 0;
+    while (qty < 2) { qty += (await bots[0].sendWhenReady('gather', { nodeId: vein.id })).qty; }
+    put(ids[0], plot);
+    assert.deepEqual((await bots[0].stockpileDeposit([{ item: 'copper_ore', qty }])).given, [{ item: 'copper_ore', qty }]);
+    put(ids[1], plot);
+    const resting = (await bots[1].stockpile()).sharedWork;
+    assert.deepEqual([resting.ready, resting.resting], [[], [{ item: 'copper_ore', qty }]]);
+    assert.ok(resting.nextReadyInMs! > 0);
+    assert.equal(await code(bots[1].refineFromStockpile('copper_bar')), 'NOT_ENOUGH_ITEMS');
+    g.mutate(() => {
+      const s = g.settlements.get(settlement.id)!;
+      g.markSettlement(s);
+      for (const lot of s.work[ids[0]].given.copper_ore) lot.readyAt = g.now();
+    });
+    await bots[1].equip('copper_tongs');
+    assert.equal((await bots[1].refineFromStockpile('copper_bar')).shared!.units, 1);
+    assert.ok((await bots[1].stockpile()).items.some((i) => i.item === 'copper_bar'));
+    assert.equal(await bots[1].count('copper_bar'), 0);
+  } finally { await w.close(); }
 });

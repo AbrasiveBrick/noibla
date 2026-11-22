@@ -95,11 +95,26 @@ export interface Settlement {
   projects: Partial<Record<BuildingId, SettlementProject>>;
   /** Owner id -> stash. It stays the owner's after they leave. */
   stashes: Record<string, Bag>;
-  /** Shared work by member: raw units that cover others' refining, and the member's fraction of output carried per recipe. */
-  work: Record<string, { cover: Bag; carry: Record<string, number> }>;
+  /** Shared work by member. Deleted when they leave. */
+  work: Record<string, SharedWork>;
   /** Latest palisade alerts, oldest first. */
   alerts: PalisadeAlert[];
   nextIncomeAt?: number;
+}
+
+export interface SharedWork {
+  /**
+   * Raw units the member gathered as a member and still carries. `had`: how many of the item they carried at the last
+   * commit. Whatever leaves the inventory uses up gathered units first.
+   */
+  gathered: Record<string, { qty: number; had: number }>;
+  /**
+   * Gathered units the member deposited, by item and the time from which others may refine them with shared work.
+   * All members' lots of an item never add up to more than the stockpile holds of it.
+   */
+  given: Record<string, { qty: number; readyAt: number }[]>;
+  /** The member's fraction of shared output, carried per recipe. */
+  carry: Record<string, number>;
 }
 
 /** A finished building. `unpaid`: the stockpile could not pay its upkeep, so it does nothing. */

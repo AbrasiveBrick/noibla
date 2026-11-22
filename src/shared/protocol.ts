@@ -129,8 +129,13 @@ export interface SettlementView {
 export interface BuildingView { id: BuildingId; working: boolean; upkeep: ItemStack[]; upkeepInMs: number }
 /** A building under construction. `readyToBuild`: the materials are all in, so settlement.build works. */
 export interface ProjectView { building: BuildingId; contributed: ItemStack[]; needs: ItemStack[]; work: number; workNeeded: number; readyToBuild: boolean }
-/** `covered`: raw units other members gathered that will cover your refining at the workshop (catalog.settlement.sharedWork). */
-export interface SharedWorkView { active: boolean; outputPct: number; covered: ItemStack[] }
+/** Shared work (catalog.settlement.sharedWork). What there is to refine is in stockpile.view, at the plot. */
+export interface SharedWorkView { active: boolean; outputPct: number }
+/**
+ * Raw units other members gave that you may refine from the stockpile (`ready`), or may once they have rested
+ * (`resting`; the first of them in `nextReadyInMs`). What you gave yourself is in neither.
+ */
+export interface SharedStockView { ready: ItemStack[]; resting: ItemStack[]; nextReadyInMs?: number }
 export interface PalisadeAlert { ts: number; playerId: string; name: string }
 export interface WatchEntry { id: number; ts: number; playerId: string; name: string; move: 'arrive' | 'depart' }
 /** One of your stashes. `member: false`: you left that settlement, and can still take your things out at its plot. */
@@ -143,11 +148,12 @@ export interface SettlementInviteView { settlementId: string; name: string; zone
  * One stockpile_log row. Every change to a stockpile is recorded with its actor. `tax`: a member's quest tax.
  * `abandoned`: the last member left and everything spilled into a loot bag at the plot (no actor).
  * `contribute` / `cancel`: materials went into a project, or back out of a cancelled one into the stockpile (`building` says which).
+ * `refine` / `refined`: shared work took this out of the stockpile / put this into it.
  * `upkeep` / `produced` / `income`: taken for upkeep, grown by the farm, paid by the settlement's level (no actor).
  */
 export interface StockpileEntry {
   id: number; ts: number; actorId: string | null; actorName: string | null;
-  action: 'deposit' | 'withdraw' | 'tax' | 'abandoned' | 'contribute' | 'cancel' | 'upkeep' | 'produced' | 'income';
+  action: 'deposit' | 'withdraw' | 'tax' | 'abandoned' | 'contribute' | 'cancel' | 'refine' | 'refined' | 'upkeep' | 'produced' | 'income';
   items: ItemStack[];
   building?: BuildingId;
 }
@@ -342,8 +348,11 @@ export interface Commands {
   /** `shards`: orb shards found by a shard_find tool. */
   gather: { payload: { nodeId: string }; result: { item: string; qty: number; xp: number; skill: string; level: number; busyMs: number; shards?: number } };
   /** `bonus`: extra outputs from focused specialization (already included in `output.qty`). */
-  /** `shared`: shared work at your village's workshop: the units other members' gathering covered, and the extra output (already in `output.qty`). */
-  refine: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; inputsSaved?: number; shared?: { units: number; output: number } } };
+  /**
+   * `from: 'stockpile'`: shared work at your village's workshop, on raw materials other members gave and that have
+   * rested. Inputs and output are the stockpile's. `shared`: the units refined so, and the extra output (already in `output.qty`).
+   */
+  refine: { payload: { recipeId: string; count?: number; from?: 'stockpile' }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; inputsSaved?: number; shared?: { units: number; output: number } } };
   /** Gear recipes create unique items, listed in `items` (their ids are in your inventory). */
   craft: { payload: { recipeId: string; count?: number }; result: { output: ItemStack; consumed: ItemStack[]; xp: number; level: number; busyMs: number; bonus?: number; items?: UniqueItem[] } };
   'focus.set': { payload: { skills: string[] }; result: FocusView };
@@ -429,11 +438,11 @@ export interface Commands {
   /** Public: every settlement's id, name, region, member count and level. Nothing else. */
   'settlement.list': { payload: Empty; result: { settlements: SettlementPublicView[] } };
   /** Members at the plot. Recorded in the audit log. */
-  'stockpile.deposit': { payload: { items: ItemStack[] }; result: { stockpile: ItemStack[]; inventory: ItemStack[] } };
+  'stockpile.deposit': { payload: { items: ItemStack[] }; result: { stockpile: ItemStack[]; inventory: ItemStack[]; given: ItemStack[] } };
   /** Members at the plot whose role the charter allows (withdrawRole). Recorded in the audit log. */
   'stockpile.withdraw': { payload: { items: ItemStack[] }; result: { stockpile: ItemStack[]; inventory: ItemStack[] } };
   /** Members at the plot: contents plus the latest audit entries (newest first). */
-  'stockpile.view': { payload: Empty; result: { settlementId: string; items: ItemStack[]; used: number; capacity: number; log: StockpileEntry[] } };
+  'stockpile.view': { payload: Empty; result: { settlementId: string; items: ItemStack[]; used: number; capacity: number; sharedWork: SharedStockView; log: StockpileEntry[] } };
   /** Members, anywhere: page through the audit log (newest first). */
   'stockpile.log': { payload: { limit?: number; beforeId?: number }; result: { settlementId: string; entries: StockpileEntry[] } };
   // Buildings (members at the plot)

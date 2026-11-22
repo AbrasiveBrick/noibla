@@ -9,12 +9,12 @@ import {
 import type { AffixRoll, MobView, UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
 import { MAP_RULES, dist, findPath, inBounds, nearestWalkable, pathLength, placeOf, plotOf, pointAlong, regionAt, walkable, type PlaceId, type Pos } from '../shared/map.ts';
 import type { Game } from './game.ts';
-import { buildingStation, noteCrossing, recordWork, useSharedWork } from './buildings.ts';
+import { buildingStation, noteCrossing, recordWork, takeShared } from './buildings.ts';
 import { BUILDING_ODDS, MOB_LOOT, SKILL_ODDS } from './odds.ts';
 import type { CommandDef, LootBag, Mob, Player, Walk } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
 import { alliesInZone, invitesFor, partyDamageMult, partyOf, partyView } from './party.ts';
-import { settlementInvitesFor, settlementSummary, taxQuestReward } from './settlement.ts';
+import { audit, requireSharedWork, settlementInvitesFor, settlementSummary, taxQuestReward } from './settlement.ts';
 
 // ---------- affixes ----------
 
@@ -470,7 +470,10 @@ function makeItem(kind: 'refine' | 'craft') {
     const r = RECIPES[recipeId];
     if (!r) fail('BAD_REQUEST', `unknown recipe "${recipeId}"`);
     if (r!.kind !== kind) fail('BAD_REQUEST', `${recipeId} is a ${r!.kind} recipe; use the "${r!.kind}" command`);
+    const fromPool = payload.from !== undefined;
+    if (fromPool && (kind !== 'refine' || payload.from !== 'stockpile')) fail('BAD_REQUEST', "from can only be 'stockpile', and only for refine", undefined, 'leave from out to use your inventory');
     const zone = requireArrived(g, p);
+    const pool = fromPool ? requireSharedWork(g, p, r!, count) : undefined;
     const home = requireStation(g, p, r!.station, recipeId);
     requireReady(g, p);
     const level = skillLevel(p, r!.skill);
@@ -483,8 +486,10 @@ function makeItem(kind: 'refine' | 'craft') {
     }
     if (level < r!.minLevel) fail('SKILL_TOO_LOW', `${recipeId} needs ${r!.skill} level ${r!.minLevel}; you are level ${level}`);
     const slow = requireTool(g, p, r!.skill, r!.tier, `${recipeId} (tier ${r!.tier})`);
-    if (!hasItems(p.inventory, r!.inputs, count)) fail('NOT_ENOUGH_ITEMS', `missing ${missing(p.inventory, r!.inputs, count)}`);
-    removeItems(p.inventory, r!.inputs, count);
+    const source = pool ? pool.stockpile : p.inventory;
+    if (!hasItems(source, r!.inputs, count)) fail('NOT_ENOUGH_ITEMS', `missing ${missing(source, r!.inputs, count)}`);
+    if (pool) g.markSettlement(pool);
+    removeItems(source, r!.inputs, count);
     let bonus = 0;
     const toolOutput = kind === 'refine' ? affixSum(p, ['tool'], 'refine_output') / 100 : 0;
     const workshopOutput = kind === 'refine' && home?.def.id === 'workshop' ? BUILDING_ODDS.workshopOutput : 0;
@@ -493,15 +498,20 @@ function makeItem(kind: 'refine' | 'craft') {
     // Refining tools with save_inputs: each unit may hand its inputs back.
     let saved = 0;
     const save = kind === 'refine' ? affixSum(p, ['tool'], 'save_inputs') : 0;
-    if (save > 0) { for (let i = 0; i < count; i++) if (g.rng() < save / 100) saved++; if (saved) addItems(p.inventory, r!.inputs, saved); }
+    if (save > 0) { for (let i = 0; i < count; i++) if (g.rng() < save / 100) saved++; if (saved) addItems(source, r!.inputs, saved); }
     const output: ItemStack = { item: r!.output.item, qty: r!.output.qty * count + bonus };
-    // Shared work: the village's workshop adds output on the units other members' gathering covers.
-    const shared = kind === 'refine' && home?.def.id === 'workshop' ? useSharedWork(g, home.s, p, r!, count, output.qty) : undefined;
+    // Shared work: more output on what other members gave to the group, and all of it is the group's.
+    const shared = pool ? { units: count, output: takeShared(g, pool, p, r!, count, output.qty) } : undefined;
     if (shared) output.qty += shared.output;
     const made = isGearKind(output.item)
       ? createUniques(g, p, output.item, output.qty, itemLevel(r!.tier, level) + affixSum(p, ['tool'], 'craft_ilvl') + (home?.def.ilvlBonus ?? 0))
       : null;
-    addItems(p.inventory, made ? made.map((u) => ({ item: u.id, qty: 1 })) : [output]);
+    addItems(source, made ? made.map((u) => ({ item: u.id, qty: 1 })) : [output]);
+    const consumed = r!.inputs.map((s) => ({ item: s.item, qty: s.qty * (count - saved) })).filter((s) => s.qty > 0);
+    if (pool) {
+      audit(g, pool, p, 'refine', consumed);
+      audit(g, pool, p, 'refined', [output]);
+    }
     const xp = gainXp(g, p, r!.skill, XP[kind](r!.tier) * count);
     const base = kind === 'refine' ? TIMING.refineMs : TIMING.craftMs;
     const speed = kind === 'refine' ? pct(affixSum(p, ['tool'], 'refine_speed')) : 0;
@@ -513,7 +523,7 @@ function makeItem(kind: 'refine' | 'craft') {
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
     g.markPlayer(p);
-    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * (count - saved) })).filter((s) => s.qty > 0), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(saved ? { inputsSaved: saved } : {}), ...(shared ? { shared } : {}), ...(made ? { items: made.map(publicUnique) } : {}) };
+    return { output, consumed, xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(saved ? { inputsSaved: saved } : {}), ...(shared ? { shared } : {}), ...(made ? { items: made.map(publicUnique) } : {}) };
   };
 }
 

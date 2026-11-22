@@ -3,15 +3,18 @@
 // The public list shows a settlement's name, region, size and level (the plot marker in view shows its name), nothing else.
 // The server never judges: it records every stockpile change with its actor (stockpile_log) and leaves the rest to players.
 
-import { SETTLEMENT, TIMING, ZONES, type BuildingId, type ItemStack } from '../shared/catalog.ts';
+import { BUILDINGS, SETTLEMENT, TIMING, ZONES, type BuildingId, type ItemStack, type RecipeDef } from '../shared/catalog.ts';
 import { MAP_RULES, dist, plotOf, type MapPlot } from '../shared/map.ts';
-import { activeLevelOf, atPlot, buildingViews, capacityOf, levelOf, projectViews, sharedWorkView, units } from './buildings.ts';
+import {
+  activeLevelOf, atPlot, buildingViews, capacityOf, giveWork, levelOf, projectViews, sharedShortfall, sharedStockView, sharedWorkActive,
+  sharedWorkView, takeBack, units, works,
+} from './buildings.ts';
 import type {
   SettlementInviteView, SettlementMotionView, SettlementPublicView, SettlementSummary, SettlementView, StockpileEntry,
 } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Player, Settlement, SettlementMotion, SettlementRole } from './types.ts';
-import { addItems, describe, fail, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks, type Bag } from './util.ts';
+import { addItems, describe, fail, hasItems, missing, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks, type Bag } from './util.ts';
 
 const ROLES: SettlementRole[] = ['member', 'steward', 'leader'];
 const RANK: Record<SettlementRole, number> = { member: 0, steward: 1, leader: 2 };
@@ -77,7 +80,7 @@ export function settlementView(g: Game, s: Settlement, viewer: string): Settleme
     slots: { used: s.buildings.length + Object.keys(s.projects).length, max: levelOf(s).slots },
     buildings: buildingViews(g, s),
     projects: projectViews(s),
-    sharedWork: sharedWorkView(s, viewer),
+    sharedWork: sharedWorkView(s),
     alerts: [...s.alerts].reverse(),
   };
 }
@@ -177,7 +180,7 @@ function removeMember(g: Game, s: Settlement, who: Player, reason: 'leave' | 'ex
   g.markSettlement(s);
   g.markPlayer(who);
   delete s.members[who.id];
-  // Their work stops covering anyone. Their stash stays theirs: stash.withdraw at the plot still works.
+  // What they gathered and gave stops counting for shared work. Their stash stays theirs: stash.withdraw at the plot still works.
   delete s.work[who.id];
   s.level = levelOf(s).level;
   delete who.settlementId;
@@ -429,11 +432,12 @@ function deposit(g: Game, p: Player, payload: Record<string, any>) {
   if (adding && adding > room) fail('SETTLEMENT_STATE', `the stockpile has room for ${Math.max(0, room)} more items`, undefined, 'a storehouse holds much more; silver takes no room');
   const items = removeItems(p.inventory, asked);
   addItems(s.stockpile, items);
+  const given = giveWork(g, s, p, items);
   g.markSettlement(s);
   g.markPlayer(p);
   audit(g, s, p, 'deposit', items);
   g.setLastAction(p, 'stockpile', `deposited ${describe(items)} in ${s.name}'s stockpile`);
-  return { stockpile: toStacks(s.stockpile), inventory: toStacks(p.inventory) };
+  return { stockpile: toStacks(s.stockpile), inventory: toStacks(p.inventory), given };
 }
 
 function withdraw(g: Game, p: Player, payload: Record<string, any>) {
@@ -442,6 +446,7 @@ function withdraw(g: Game, p: Player, payload: Record<string, any>) {
   if (RANK[role] < RANK[s.charter.withdrawRole]) fail('FORBIDDEN', `${s.name}'s charter lets only a ${s.charter.withdrawRole}${s.charter.withdrawRole === 'leader' ? '' : ' or higher'} withdraw; you are a ${role}`, undefined, 'ask someone who may, or the leader to change the charter');
   requireAtPlot(g, p, s, 'the stockpile');
   const items = removeItems(s.stockpile, stacks(payload.items, 'items', false));
+  takeBack(g, s, p, items);
   addItems(p.inventory, items);
   g.markSettlement(s);
   g.markPlayer(p);
@@ -453,7 +458,7 @@ function withdraw(g: Game, p: Player, payload: Record<string, any>) {
 function stockpileView(g: Game, p: Player) {
   const s = requireMember(g, p);
   requireAtPlot(g, p, s, 'reading the stockpile');
-  return { settlementId: s.id, items: toStacks(s.stockpile), used: units(s.stockpile), capacity: capacityOf(s), log: logRows(g, s, SETTLEMENT.logPage) };
+  return { settlementId: s.id, items: toStacks(s.stockpile), used: units(s.stockpile), capacity: capacityOf(s), sharedWork: sharedStockView(g, s, p.id), log: logRows(g, s, SETTLEMENT.logPage) };
 }
 
 function stockpileLog(g: Game, p: Player, payload: Record<string, any>) {
@@ -461,6 +466,33 @@ function stockpileLog(g: Game, p: Player, payload: Record<string, any>) {
   const limit = optInt(payload, 'limit', 1, 200, SETTLEMENT.logPage);
   const beforeId = optInt(payload, 'beforeId', 1, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
   return { settlementId: s.id, entries: logRows(g, s, limit, beforeId) };
+}
+
+/**
+ * refine { from: 'stockpile' }: shared work on what other members gave. It needs no withdraw right, because everything
+ * made goes back into the stockpile.
+ */
+export function requireSharedWork(g: Game, p: Player, r: RecipeDef, count: number): Settlement {
+  const { building } = SETTLEMENT.sharedWork;
+  const def = BUILDINGS[building];
+  if (!def.stations!.includes(r.station)) fail('BAD_REQUEST', `${r.id} is not refined at a ${def.name}, so there is no shared work in it`, undefined, 'withdraw what it needs and refine from your inventory');
+  const s = requireMember(g, p);
+  requireAtPlot(g, p, s, 'refining from the stockpile');
+  if (!works(s, building)) fail('NO_STATION', `${s.name} has no working ${def.name}`, undefined, `build one, or put ${describe(def.upkeep)} in the stockpile if it is closed`);
+  if (!sharedWorkActive(s)) {
+    const need = SETTLEMENT.levels.find((l) => l.level === SETTLEMENT.sharedWork.minLevel)!;
+    fail('SETTLEMENT_STATE', `shared work needs an active ${need.name}: ${need.buildings} paid-up buildings and ${need.members} members`, undefined, 'settlement.view shows activeLevel and which buildings work');
+  }
+  const short = sharedShortfall(g, s, p, r, count);
+  if (short) {
+    const wait = short.resting && short.ready + short.resting >= short.need ? short.nextReadyAt - g.now() : undefined;
+    fail('NOT_ENOUGH_ITEMS', `${r.id} ×${count} from the stockpile needs ${short.need} ${short.item} that other members gave and that have rested; ${short.ready} are ready and ${short.resting} are resting`, wait,
+      'shared work takes only raw materials another member gathered and deposited, after they rested in the stockpile (catalog.settlement.sharedWork.restMs). stockpile.view shows them in sharedWork. Your own materials: refine them from your inventory, without the bonus');
+  }
+  if (!hasItems(s.stockpile, r.inputs, count)) fail('NOT_ENOUGH_ITEMS', `the stockpile is missing ${missing(s.stockpile, r.inputs, count)}`);
+  // The output may take a full stockpile one batch over its limit, never further.
+  if (units(s.stockpile) > capacityOf(s)) fail('SETTLEMENT_STATE', 'the stockpile is over its limit', undefined, 'someone who may withdraw has to make room, or build a storehouse');
+  return s;
 }
 
 /** Quest tax: moves the charter's share of a member's quest silver from their inventory into the stockpile. Returns the amount. */

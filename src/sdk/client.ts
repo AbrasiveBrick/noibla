@@ -150,6 +150,8 @@ export class GameClient {
   move(to: string | Pos, opts?: SendOptions) { return this.send('move', typeof to === 'string' ? { to } : { x: to.x, y: to.y }, opts); }
   gather(nodeId: string, opts?: SendOptions) { return this.send('gather', { nodeId }, opts); }
   refine(recipeId: string, count = 1, opts?: SendOptions) { return this.send('refine', { recipeId, count }, opts); }
+  /** Shared work, at your village's plot: refines what other members gave, and the output stays in the stockpile. */
+  refineFromStockpile(recipeId: string, count = 1, opts?: SendOptions) { return this.send('refine', { recipeId, count, from: 'stockpile' }, opts); }
   craft(recipeId: string, count = 1, opts?: SendOptions) { return this.send('craft', { recipeId, count }, opts); }
 
   // ---- gear & combat ----

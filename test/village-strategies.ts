@@ -1,5 +1,6 @@
-// The best strategy an offline search found for each side in each case of the economy test (values, build, map),
-// replayed by economy.test.ts. The search was a hill climb over every player's focus skills, where they look for work,
+// The best strategy an offline search found for each side in each case (values, build, map), under the first shared
+// work rule, which paid at the moment of gathering. Not searched again under the pooling rule, so no proof of the
+// economy: economy.test.ts replays a few of them as a smoke check. The search was a hill climb over every player's focus skills, where they look for work,
 // how often they go home and what they refine, started from what every other case found. For the exile, the three who
 // stay re-planned for their own income and the exile answered, three rounds in a row.
 // Change a rule that moves the economy and these may stop being the best: search again before trusting a pass.
@@ -11,8 +12,9 @@ import type { BuildId, Roam, Side, Strategy, ValueId } from './village-sim.ts';
 interface Found { focus: string; trip: number; gain: number; outlook?: number; roam?: string; buildings?: string; exiled?: [number, number, number] }
 
 export const MAPS = [11, 23, 42];
+type Searched = Exclude<Side, 'separate'>;
 
-const FOUND: Record<string, Record<Side, Found>> = {
+const FOUND: Record<string, Record<Searched, Found>> = {
   'cost fresh 11': {
     solo: { focus: 'armorcraft swords woodworking / mining woodcutting smelting / tanning enchanting swords / mining woodcutting toolcraft', trip: 75, gain: 14, roam: 'frontier any frontier near' },
     founders: { focus: 'mining smelting weaponcraft / mining woodcutting woodworking / mining smelting weaponcraft / mining smelting weaponcraft', trip: 120, gain: 8, roam: 'near any any any', buildings: 'workshop' },
@@ -223,7 +225,7 @@ function parse(f: Found): Strategy {
   };
 }
 
-export function strategiesFor(values: ValueId, build: BuildId, map: number): Record<Side | 'stock', Strategy> {
+export function strategiesFor(values: ValueId, build: BuildId, map: number): Record<Searched | 'stock', Strategy> {
   const found = FOUND[`${values} ${build} ${map}`];
   if (!found) throw new Error(`no strategy searched for ${values} ${build} on map ${map}`);
   return {
