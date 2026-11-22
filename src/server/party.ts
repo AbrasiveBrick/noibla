@@ -15,6 +15,14 @@ export function partyOf(g: Game, p: Player): Party | undefined {
   return p.partyId ? g.parties.get(p.partyId) : undefined;
 }
 
+/**
+ * Inviting creates a party of one right away, and a party can shrink back to one. Being alone in a party never blocks
+ * being invited or joining another: only sharing a party with someone does.
+ */
+function hasPartymates(g: Game, p: Player): boolean {
+  return (partyOf(g, p)?.members.length ?? 0) > 1;
+}
+
 /** Other party members in the same region as `p` (walking or not). */
 export function alliesInZone(g: Game, p: Player): Player[] {
   const pt = partyOf(g, p);
@@ -76,7 +84,7 @@ function invite(g: Game, p: Player, payload: Record<string, any>) {
   if (targetId === p.id) fail('BAD_REQUEST', 'cannot invite yourself');
   let pt = partyOf(g, p);
   if (pt && pt.leaderId !== p.id) fail('FORBIDDEN', `only the party leader (${g.players.get(pt.leaderId)?.name}) can invite`);
-  if (target!.partyId) fail('PARTY_STATE', `${target!.name} is already in a party`, undefined, 'they must party.leave first');
+  if (hasPartymates(g, target!)) fail('PARTY_STATE', `${target!.name} is already in a party`, undefined, 'they must party.leave first');
   if (pt && pt.members.length + liveInvites(g, pt).filter(([id]) => id !== targetId).length >= PARTY.maxSize) {
     fail('PARTY_STATE', `a party holds at most ${PARTY.maxSize} players, counting pending invites`);
   }
@@ -103,8 +111,14 @@ function accept(g: Game, p: Player, payload: Record<string, any>) {
   const exp = pt?.invites[p.id];
   if (!pt || exp === undefined) fail('NOT_FOUND', `no invitation to party ${partyId}`, undefined, 'observe().partyInvites lists your invitations');
   if (exp! <= g.now()) fail('PARTY_STATE', 'that invitation expired', undefined, 'ask the leader to invite you again');
-  if (p.partyId) fail('PARTY_STATE', 'you are already in a party', undefined, 'party.leave first');
+  if (hasPartymates(g, p)) fail('PARTY_STATE', 'you are already in a party', undefined, 'party.leave first');
   if (pt!.members.length >= PARTY.maxSize) fail('PARTY_STATE', `the party is full (${PARTY.maxSize})`);
+  const own = partyOf(g, p);
+  if (own) {
+    // A party of one gives way to the one being joined; invitations it sent lapse with it.
+    removeMember(g, own, p, 'leave');
+    opLog(g, p, own, 'leave');
+  }
   delete pt!.invites[p.id];
   pt!.members.push(p.id);
   p.partyId = pt!.id;
