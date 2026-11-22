@@ -802,6 +802,8 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
   let victim: Player | undefined;
   if (mob) {
     if (!mobAlive(g, mob)) fail('TARGET_DEAD', `${targetId} is dead`);
+    // A mob only fights players in its own region (see worldTick), so only attack it from there: across a border it would never hit back.
+    if (mob.zone !== zone) fail('WRONG_ZONE', `${MOB_TYPES[mob.type].name} ${mob.id} is in ${mob.zone} and you are in ${zone}; you can only attack a mob from inside its region`, undefined, `travelTo('${mob.zone}') (move { to: '${mob.zone}' }) first`);
     requireInRange(g, p, mob, mob.id, MOB_TYPES[mob.type].name);
   } else {
     if (targetId === p.id || targetId === p.hood?.as) fail('INVALID_TARGET', 'cannot attack yourself');

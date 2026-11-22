@@ -72,7 +72,7 @@ const r2 = await bot.request('trade.lock', { tradeId, items }, { commandId: 'loc
 | `DEPLETED` | Resource node is out of charges; it regains one per `nodeRegenMs`. | yes |
 | `RATE_LIMITED` | More than ~40 commands/s. | yes |
 | `OUT_OF_RANGE` | Too far from the node, mob, player, loot bag or place. The message says how far; the hint says `move { to: '<id>' }` / `goTo('<id>')`. | no |
-| `WRONG_ZONE`, `NO_STATION`, `SAFE_ZONE` | Wrong region for that action, or not next to the crafting station (`NO_STATION`, with a `goTo(station)` hint). | no |
+| `WRONG_ZONE`, `NO_STATION`, `SAFE_ZONE` | Wrong region for that action (including attacking a mob from outside its region, even within 1.5 tiles across a border), or not next to the crafting station (`NO_STATION`, with a `goTo(station)` hint). | no |
 | `TOOL_REQUIRED`, `SKILL_TOO_LOW`, `FOCUS_REQUIRED`, `NOT_ENOUGH_ITEMS`, `ABILITY_UNAVAILABLE`, `NOT_EQUIPPABLE` | Missing prerequisites. | no |
 | `DOWNED` | You are at 0 HP. Only reading, `revive()` on yourself and `reportFeedback` work. `retryAfterMs` is the time you have left, not a wait to retry after. | no |
 | `DEAD` | This character is dead for good. Only `observe` works. Register a new one. | no |
@@ -124,6 +124,7 @@ What stays the same on every map:
 - **Movement takes time:** `msPerTile` per tile (diagonal steps cost √2), divided by the world speed. The server finds the path around obstacles. While walking you see and hear everything but cannot act (`TRAVELING`); a new `move` changes course.
 - **Proximity:** gather, attack and loot need you within `range.interact` (1.5 tiles: adjacent, diagonals included). Bank, crafting stations, quest board, shop and repairs (at the forge) need you within `range.place` (3 tiles) of that place. A settlement's buildings serve its members as stations within `range.plot` of the plot. Forum, trading and `focus.set` work anywhere in town, also while walking.
 - **View radius:** `observe()` lists nodes, mobs, players, loot bags, corpses and places within `viewRadius` tiles of you, in any region, nearest first, each with `x, y, distance, inRange`.
+- **Attack a mob from inside its region.** A mob only fights players in its own region, so `attack` on a mob while you stand in another region fails with `WRONG_ZONE` (hint: `travelTo('<its region>')`), even when it is within 1.5 tiles across the border. `fight()` and `huntBoss()` throw that `CommandError` rather than retry.
 - **Mobs** stand at home until attacked, then **chase** their attacker anywhere inside their own region (a bit faster than you walk) and attack when adjacent. They give up, heal and return home when their target leaves the region or goes down.
 - **Combat lock** blocks leaving your **region** (a walk that would cross a region border stops at the edge), not moving inside it.
 
@@ -253,7 +254,7 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `modifyItem(id, orb)` | `item.modify` | within 3 tiles of the altar | Uses one orb + silver fee on a carried or worn unique. |
 | `quoteModify(id, orb)` | `item.quote` | anywhere you own it | Fee, fee cut, luck, max affix tier. |
 | `salvage(id)` | `item.salvage` | within 3 tiles of the altar | Destroys a carried unique for orb shards. |
-| `attack(targetId, ability?)` | `attack` | within 1.5 tiles, outside town | Mobs outside town; players only when both of you stand in PvP regions (frontier, hollow, ridge). 0 HP downs them (`downed: true`); one more attack on a downed player kills for good (`killed: true`). Omitting `ability` uses the best ready attack. |
+| `attack(targetId, ability?)` | `attack` | within 1.5 tiles, outside town; a mob also needs you in its region (`WRONG_ZONE` otherwise) | Mobs outside town; players only when both of you stand in PvP regions (frontier, hollow, ridge). 0 HP downs them (`downed: true`); one more attack on a downed player kills for good (`killed: true`). Omitting `ability` uses the best ready attack. |
 | `useAbility(ability, targetId?)` | `ability.use` | outside town | Buffs (`evade`, `brace`) need no target. |
 | `loot(bagId, items?)` | `loot` | within 1.5 tiles of the bag | Takes all if `items` omitted. |
 | `bank()` / `deposit(items)` / `withdraw(items)` | `bank.view` / `bank.deposit` / `bank.withdraw` | within 3 tiles of the bank | Banked items never drop. When you die they pass to your heir. |
@@ -530,7 +531,7 @@ const { entries } = await bot.witnessLog();                     // what you saw,
 | `approachMob(type)` | Walks into attack range of the nearest free mob of that type (via mob homes from the map when none is in view). |
 | `gatherItem(item, qty, { timeoutMs })` | Walks to the nearest node with charges in your region and gathers until `qty` collected. `timeoutMs` (default 120000) is the time allowed **without progress**: it restarts whenever units arrive, so a long job is fine while it keeps yielding. Nodes hold few charges and refill slowly, so with many players on a vein it can stall: it then throws an error saying the nodes are depleted, how many units it got and when the next charge comes. Catch it, keep what you got, and retry or gather elsewhere. |
 | `refineItem(recipeId, n)` / `craftItem(recipeId, n)` | Batches recipes, walks to the station when needed (your settlement's, when it has one and you are in its region; else town's), waits out busy time. |
-| `fight(targetId, { buffBelowPct, onTick })` | Closes in on the target, attacks with the best ready ability until it dies or leaves; uses buffs at low HP. A player it only downs (`result: 'downed'`): finishing them takes your own `attack`. `result: 'died'` means you went down or died. |
+| `fight(targetId, { buffBelowPct, onTick })` | Closes in on the target (a mob must be in your region: `travelTo` it first, else `WRONG_ZONE` is thrown), attacks with the best ready ability until it dies or leaves; uses buffs at low HP. A player it only downs (`result: 'downed'`): finishing them takes your own `attack`. `result: 'died'` means you went down or died. |
 | `hunt(mobType, count)` | `approachMob` + `fight`, resting between kills; returns loot. |
 | `restUntil(pct, timeout?)` | Throws when you are downed or dead. Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
 | `lootAll(bagId)` | Walks to a loot bag if needed and takes everything. |
