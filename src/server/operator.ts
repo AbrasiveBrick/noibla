@@ -3,10 +3,11 @@
 // (Their transcripts are served by transcript.ts, with credentials hidden.)
 // Includes private messages, pending trade submissions and lock state.
 
-import { ITEMS, QUESTS, SKILLS, ZONES, levelFor, type SkillId } from '../shared/catalog.ts';
+import { HOOD, ITEMS, QUESTS, SKILLS, ZONES, levelFor, type SkillId } from '../shared/catalog.ts';
 import type { GameEvent } from '../shared/protocol.ts';
 import { REPEAT_THRESHOLD, type Game } from './game.ts';
 import type { Store } from './store.ts';
+import { isAlias } from './identity.ts';
 import { gearView, maxHp, posOf } from './world.ts';
 import { activeLevelOf, projectViews } from './buildings.ts';
 import { MOB_TYPES, NODE_TYPES } from '../shared/catalog.ts';
@@ -16,7 +17,7 @@ import { toStacks } from './util.ts';
 
 /** Commands and failures counted for the per-bot failure rate. */
 const RATE_WINDOW_MS = 10 * 60_000;
-const LEDGER_KINDS = { created: ['mobs', 'quests', 'settlements'], destroyed: ['death', 'repair', 'shop', 'tradeFee', 'orbFee', 'settlement'] } as const;
+const LEDGER_KINDS = { created: ['mobs', 'quests', 'settlements'], destroyed: ['death', 'repair', 'shop', 'tradeFee', 'orbFee', 'settlement', 'estate'] } as const;
 
 const silverOf = (stacks: { item: string; qty: number }[] | undefined) => (stacks ?? []).reduce((n, s) => n + (s.item === 'silver' ? s.qty : 0), 0);
 
@@ -45,7 +46,8 @@ export function backfillEconomyLedger(store: Store) {
 }
 
 function economy(g: Game, circulation: { carried: number; banked: number }) {
-  let stockpiled = 0, stashed = 0;
+  let stockpiled = 0, stashed = 0, escrowed = 0;
+  for (const b of g.bounties.values()) if (!b.paidTo) escrowed += b.amount;
   for (const s of g.settlements.values()) {
     stockpiled += s.stockpile.silver ?? 0;
     for (const stash of Object.values(s.stashes)) stashed += stash.silver ?? 0;
@@ -56,7 +58,7 @@ function economy(g: Game, circulation: { carried: number; banked: number }) {
     since: Number(g.store.getMeta('economy_since') ?? 0),
     created: side('created') as Record<(typeof LEDGER_KINDS)['created'][number], number>,
     destroyed: side('destroyed') as Record<(typeof LEDGER_KINDS)['destroyed'][number], number>,
-    circulation: { ...circulation, stockpiled, stashed, total: circulation.carried + circulation.banked + stockpiled + stashed },
+    circulation: { ...circulation, stockpiled, stashed, bounties: escrowed, total: circulation.carried + circulation.banked + stockpiled + stashed + escrowed },
     /** Orb and shard flows (counts of items, not silver). */
     orbs: {
       created: { mobs: rows.get('orbs.created.mobs') ?? 0, crafted: rows.get('orbs.created.crafted') ?? 0, shop: rows.get('orbs.created.shop') ?? 0 },
@@ -138,6 +140,9 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
     quests: Object.entries(p.quests).filter(([, q]) => q.status !== 'claimed').map(([questId, q]) => ({ questId, name: QUESTS[questId]?.name ?? questId, status: q.status, progress: Math.min(q.progress, QUESTS[questId]?.objective.count ?? q.progress), goal: QUESTS[questId]?.objective.count ?? 0 })),
     combatLockUntil: p.combatLockUntil,
     wellFedUntil: p.wellFedUntil ?? 0,
+    downedUntil: p.downed?.until ?? 0,
+    dead: p.dead ? { at: p.dead.at, zone: p.dead.zone, known: !!p.dead.settled } : null,
+    hoodUntil: p.hood?.until ?? 0,
   }));
   const circulation = bots.reduce((c, b) => ({ carried: c.carried + b.silver.carried, banked: c.banked + b.silver.banked }), { carried: 0, banked: 0 });
   const closed = g.store.all<{ data: string }>("SELECT data FROM events WHERE type = 'trade.closed' ORDER BY id DESC LIMIT 200").map((r) => (JSON.parse(r.data) as GameEvent).data);
@@ -197,7 +202,7 @@ export function operatorState(g: Game, sinceEventId: number, sinceSnapshotId = 0
     failures,
     failureSummary: failureSummary(g),
     forumAds: g.store.all<any>('SELECT id, author_id, title, created_at FROM forum_threads ORDER BY id DESC LIMIT 30').map((t) => ({
-      id: t.id, authorId: t.author_id, authorName: g.players.get(t.author_id)?.name ?? '?', title: t.title, createdAt: t.created_at,
+      id: t.id, authorId: t.author_id, authorName: g.players.get(t.author_id)?.name ?? (isAlias(t.author_id) ? HOOD.name : '?'), title: t.title, createdAt: t.created_at,
     })),
     economy: economy(g, circulation),
     feedback,

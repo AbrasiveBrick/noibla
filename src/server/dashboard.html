@@ -189,7 +189,7 @@
       <h2>World map <span class="count muted" id="mapMeta"></span></h2>
       <div class="body mapwrap"><canvas id="mapCanvas" aria-label="Live world map: regions, players, mobs, resource nodes, places and loot bags"></canvas></div>
       <div class="maplegend"><span class="key"><i class="p-town"></i>town (safe)</span><span class="key"><i class="p-wilds"></i>wilds (PvE)</span><span class="key"><i class="p-frontier"></i>frontier (lethal PvP)</span><span class="key"><i class="p-hollow"></i>hollow (contested PvP)</span><span class="key"><i class="p-ridge"></i>ridge (contested PvP)</span>
-        <span class="key">● bot</span><span class="key" style="color:var(--bad)">● mob</span><span class="key">◆ resource node</span><span class="key">▢ place (B bank, Q quests, $ shop, Sm/Sw/Ta/Fo/Wb stations)</span><span class="key">⌂ settlement plot (filled when founded)</span><span class="key" style="color:#9b6b2f">■ loot bag</span>
+        <span class="key">● bot (red fill: downed)</span><span class="key" style="color:var(--bad)">✕ dead bot</span><span class="key" style="color:var(--bad)">● mob</span><span class="key">◆ resource node</span><span class="key">▢ place (B bank, Q quests, $ shop, Sm/Sw/Ta/Fo/Wb stations)</span><span class="key">⌂ settlement plot (filled when founded)</span><span class="key" style="color:#9b6b2f">■ loot bag</span>
         <span class="muted mono" id="mapTip">hover the map</span></div>
     </section>
     <section>
@@ -275,7 +275,8 @@
     'travel.depart': 'travel', 'travel.arrive': 'travel',
     gather: 'gathering', refine: 'crafting', craft: 'crafting',
     'combat.hit': 'combat', 'combat.buff': 'combat', 'combat.kill': 'combat',
-    'player.death': 'deaths', 'player.respawn': 'deaths',
+    'player.death': 'deaths', 'player.respawn': 'deaths', 'player.downed': 'deaths', 'player.reviving': 'deaths', 'player.revived': 'deaths',
+    'death.report': 'deaths', estate: 'deaths', will: 'deaths', bounty: 'deaths', hood: 'deaths',
     'loot.dropped': 'looting', 'loot.taken': 'looting', 'loot.expired': 'looting',
     'forum.thread': 'forum', 'forum.reply': 'forum', 'chat.message': 'chat',
     'trade.closed': 'trade', 'trade.activity': 'trade', bank: 'bank', quest: 'bank', shop: 'bank', repair: 'bank',
@@ -347,9 +348,15 @@
   function involved(ev) {
     const d = ev.data || {};
     return [ev.actorId, d.playerId, d.attackerId, d.targetId, d.victimId, d.killerId, d.looterId, d.ownerId, d.owner && d.owner.id,
-      d.toId, d.founderId, d.fromId, d.byId, d.voterId, d.motion && d.motion.targetId, d.message && d.message.authorId, d.thread && d.thread.authorId, d.post && d.post.authorId,
-      ...(ev.type === 'theft' ? d.witnesses : []).map((w) => w.id),
+      d.toId, d.founderId, d.fromId, d.byId, d.voterId, d.motion && d.motion.targetId, d.message && d.message.authorId, d.reporter && d.reporter.id, d.accuse && d.accuse.id, d.victim && d.victim.id, d.target && d.target.id, d.to && d.to.id, d.thread && d.thread.authorId, d.post && d.post.authorId,
+      ...(ev.type === 'theft' || ev.type === 'player.death' ? d.witnesses || [] : []).map((w) => w.id),
       ...(d.parties || []).map((p) => p.id)].filter(Boolean);
+  }
+
+  /** The truth next to what a report claims. */
+  function killerOf(corpseId) {
+    const death = events.find((e) => e.type === 'player.death' && e.data.corpseId === corpseId);
+    return death ? ` <span class="muted">(truth: ${esc(death.data.killerName)})</span>` : '';
   }
 
   function describe(ev) {
@@ -363,7 +370,20 @@
       case 'combat.hit': return `<b>${esc(d.attackerName)}</b> hit ${esc(d.targetName)} with ${esc(d.ability)} for ${d.damage}${d.dodged ? ' (dodged)' : ''}${d.pvp ? ' · <b>PvP</b>' : ''}`;
       case 'combat.buff': return `<b>${esc(d.name)}</b> used ${esc(d.ability)}`;
       case 'combat.kill': return `<b>${esc(d.killerName)}</b> killed a ${esc(d.targetType)} · loot ${stacks(d.loot)}${d.spoilsBagId ? ' <b>(boss spoils bag)</b>' : ''}`;
-      case 'player.death': return `<b>${esc(d.victimName)}</b> was killed by ${esc(d.killerName)} in ${zoneTag(d.zone)} — ${d.fullLoot ? `dropped ${stacks(d.dropped)}` : 'kept their items (safe zone)'}${d.silverLost ? ` · ${d.silverLost} silver destroyed` : ''}`;
+      case 'player.death': {
+        const lost = d.silverLost ? ` · ${d.silverLost} silver destroyed` : '';
+        // Events from before death was permanent.
+        if (d.fullLoot !== undefined) return `<b>${esc(d.victimName)}</b> was killed by ${esc(d.killerName)} in ${zoneTag(d.zone)} — ${d.fullLoot ? `dropped ${stacks(d.dropped)}` : 'kept their items (safe zone)'}${lost}`;
+        return `<b style="color:var(--bad)">Death:</b> <b>${esc(d.victimName)}</b> ${d.bledOut ? 'bled out, downed by' : 'was finished off by'} <b>${esc(d.killerName)}</b> in ${zoneTag(d.zone)} · dropped ${stacks(d.dropped)}${lost}${d.bounty ? ` · ${fmt(d.bounty)} bounty paid` : ''} <span class="muted">(present: ${d.witnesses && d.witnesses.length ? d.witnesses.map((w) => esc(w.name)).join(', ') : 'nobody'})</span>`;
+      }
+      case 'player.downed': return `<b>${esc(d.victimName)}</b> was downed by <b>${esc(d.byName)}</b> in ${zoneTag(d.zone)}`;
+      case 'player.reviving': return d.playerId === d.targetId ? `<b>${esc(d.name)}</b> is bandaging themself` : `<b>${esc(d.name)}</b> is reviving <b>${esc(d.targetName)}</b>`;
+      case 'player.revived': return `<b>${esc(d.name)}</b> is back up, revived by <b>${esc(d.byName)}</b>`;
+      case 'death.report': return `<b>${esc(d.reporter.name)}</b> reported <b>${esc(d.victim.name)}</b>'s death${d.first ? ' (first)' : ''}${d.accuse ? `, accusing <b>${esc(d.accuse.name)}</b>` : ''} <span class="quote">“${esc(d.text)}”</span>${killerOf(d.corpseId)}`;
+      case 'estate': return `<b>${esc(d.victim.name)}</b>'s death became known${d.reported ? ' by report' : ', unreported'}: the estate (${stacks(d.items)}) ${d.to ? `went to <b>${esc(d.to.name)}</b>` : 'was destroyed'}`;
+      case 'will': return d.heir ? `<b>${esc(d.name)}</b> named <b>${esc(d.heir.name)}</b> heir` : `<b>${esc(d.name)}</b> cleared their will`;
+      case 'bounty': return d.stage === 'closed' ? `${Number(d.bounties) || 'No'} ${Number(d.bounties) === 1 ? 'bounty' : 'bounties'} closed on <b>${esc(d.target.name)}</b>` : `<b>${esc(d.name)}</b> put ${fmt(d.amount)} silver on <b>${esc(d.target.name)}</b>'s head`;
+      case 'hood': return `<b>${esc(d.name)}</b> pulled up a hood`;
       case 'player.respawn': return `<b>${esc(d.name)}</b> respawned in town`;
       case 'loot.dropped': return d.spoils
         ? `<b>${esc(d.ownerName)}</b> spoils on the ground, reserved for ${d.eligible.map(esc).join(', ')}: ${stacks(d.items)}`
@@ -391,7 +411,7 @@
       case 'command.failed': return `<b>${esc(d.name)}</b> ${esc(d.type)} failed: ${esc(d.code)}`;
       case 'party': return `<b>${esc(d.name)}</b> party ${esc(d.action)}${d.targetName ? ` ${esc(d.targetName)}` : ''} <span class="muted">(${(d.members || []).map(esc).join(', ')})</span>`;
       case 'party.joined': return `<b>${esc(d.name)}</b> joined a party`;
-      case 'party.left': return `<b>${esc(d.name)}</b> ${d.kicked ? 'was kicked from' : 'left'} a party`;
+      case 'party.left': return `<b>${esc(d.name)}</b> ${d.died ? 'died and is out of' : d.kicked ? 'was kicked from' : 'left'} a party`;
       case 'party.message': return `<b>${esc(d.message.authorName)}</b> <span class="muted">[party]</span> <span class="quote">“${esc(d.message.text)}”</span>`;
       case 'settlement.founded': return `<b>${esc(d.founderName)}</b> founded <b>${esc(d.name)}</b> in ${zoneTag(d.zone)} at ${esc(d.plotId)}`;
       case 'settlement.disbanded': return `Settlement <b>${esc(d.name)}</b> was abandoned${d.bagId ? ': its stockpile spilled into a loot bag' : ''}`;
@@ -399,7 +419,9 @@
         ? `<b>${esc(d.playerName)}</b> declined an invitation to ${settlementName(d.settlementId)}`
         : `<b>${esc(d.fromName)}</b> invited <b>${esc(d.playerName)}</b> to ${esc(d.name)}`;
       case 'settlement.joined': return `<b>${esc(d.name)}</b> joined ${settlementName(d.settlementId)}${d.invited ? '' : ' (open membership)'}`;
-      case 'settlement.left': return d.reason === 'leave'
+      case 'settlement.left': return d.reason === 'death'
+        ? `<b>${esc(d.name)}</b>'s membership of ${settlementName(d.settlementId)} ended with their death`
+        : d.reason === 'leave'
         ? `<b>${esc(d.name)}</b> left ${settlementName(d.settlementId)}`
         : `<b>${esc(d.name)}</b> was ${d.reason === 'exile' ? 'exiled by vote' : `expelled by <b>${esc(d.byName)}</b>`} from ${settlementName(d.settlementId)}`;
       case 'settlement.role': return `<b>${esc(d.name)}</b> is now ${esc(d.role)} of ${settlementName(d.settlementId)} <span class="muted">(${esc(d.reason)})</span>`;
@@ -424,6 +446,10 @@
     }
   }
 
+  const hoodNote = (ev) => ev.hooded ? ` <span class="chip warn" title="players saw a hooded figure instead">hooded: ${ev.hooded.map(esc).join(', ')}</span>` : '';
+  const fate = (b) => (b.dead ? `<span class="chip bad" title="${b.dead.known ? 'the estate has passed' : 'not yet known to settlement, party or heir'}">dead${b.dead.known ? '' : ' · secret'}</span>` : b.downedUntil ? '<span class="chip warn">downed</span>' : '')
+    + (b.hoodUntil ? '<span class="chip warn" title="others see a hooded figure">hooded</span>' : '');
+
   function render() {
     const s = state;
     // stats
@@ -443,7 +469,7 @@
       const chip = fr.failures ? `<span class="chip ${fr.failures >= 3 && rate >= 0.5 ? 'bad' : fr.failures >= 3 && rate >= 0.2 ? 'warn' : ''}" title="${fr.failures} failed of ${fr.attempts} write attempts in the last ${Math.round(fr.windowMs / 60000)} min">${Math.round(rate * 100)}% fail</span>` : '';
       const gear = [b.equipment.weapon, b.equipment.armor, b.equipment.tool].filter(Boolean).map(nm).map(esc).join(', ') || '<span class="muted">none</span>';
       const open = picked === b.id;
-      return `<tr class="bot ${open ? 'open' : ''}" data-bot="${esc(b.id)}" title="See what it thinks and does"><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b>${chip}<div class="mono muted">${esc(b.id)}</div></td>
+      return `<tr class="bot ${open ? 'open' : ''}" data-bot="${esc(b.id)}" title="See what it thinks and does"><td><span class="dot ${b.online ? 'on' : ''}" title="${b.online ? 'online' : 'offline'}"></span><b>${esc(b.name)}</b>${fate(b)}${chip}<div class="mono muted">${esc(b.id)}</div></td>
         <td>${where}</td><td>${b.hp}/${b.maxHp}<div class="hp ${pct < 35 ? 'low' : ''}"><i style="width:${pct}%"></i></div></td>
         <td>${gear}</td><td>${b.kills}/${b.deaths}</td>
         <td>${b.lastAction ? `${esc(b.lastAction.summary)}<div class="muted">${ago(b.lastAction.at)}</div>` : ''}</td></tr>`;
@@ -618,8 +644,14 @@
     for (const b of s.bots) {
       if (!b.pos) continue;
       if (b.travel) { g.strokeStyle = col.ink; g.globalAlpha = 0.5; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(cx(b.pos.x), cy(b.pos.y)); g.lineTo(cx(b.travel.dest.x), cy(b.travel.dest.y)); g.stroke(); g.setLineDash([]); g.globalAlpha = 1; }
+      if (b.dead) {
+        const x = cx(b.pos.x), y = cy(b.pos.y), r = cell * 0.35;
+        g.strokeStyle = col.bad; g.lineWidth = 2; g.beginPath(); g.moveTo(x - r, y - r); g.lineTo(x + r, y + r); g.moveTo(x + r, y - r); g.lineTo(x - r, y + r); g.stroke();
+        hit(b.pos.x, b.pos.y, `${b.name} · dead${b.dead.known ? '' : ' (secret)'} · ${b.zone} (${b.pos.x}, ${b.pos.y})`);
+        continue;
+      }
       g.beginPath(); g.arc(cx(b.pos.x), cy(b.pos.y), cell * 0.42, 0, Math.PI * 2);
-      g.fillStyle = b.online ? col.ink : col.panel; g.fill(); g.strokeStyle = col.ink; g.lineWidth = 2; g.stroke();
+      g.fillStyle = b.downedUntil ? col.bad : b.online ? col.ink : col.panel; g.fill(); g.strokeStyle = col.ink; g.lineWidth = 2; g.stroke();
       g.fillStyle = col.ink; g.fillText(b.name, cx(b.pos.x) + cell * 0.5, cy(b.pos.y) - cell * 0.3);
       hit(b.pos.x, b.pos.y, `${b.name} · ${b.hp}/${b.maxHp} hp · ${b.zone} (${b.pos.x}, ${b.pos.y})${b.travel ? ` → ${b.travel.target || `(${b.travel.dest.x}, ${b.travel.dest.y})`}` : ''}${b.online ? '' : ' · offline'}`);
     }
@@ -688,10 +720,10 @@
   function renderEconomy(s) {
     const e = s.economy, c = e.circulation;
     const created = e.created.mobs + e.created.quests + (e.created.settlements || 0);
-    const destroyed = e.destroyed.death + e.destroyed.repair + e.destroyed.shop + e.destroyed.tradeFee + (e.destroyed.orbFee || 0) + e.destroyed.settlement;
+    const destroyed = e.destroyed.death + e.destroyed.repair + e.destroyed.shop + e.destroyed.tradeFee + (e.destroyed.orbFee || 0) + e.destroyed.settlement + (e.destroyed.estate || 0);
     $('ecoSince').textContent = e.since ? `ledger since ${new Date(e.since).toLocaleString([], { hour12: false })}` : '';
     $('ecoKpis').innerHTML = [
-      ['Silver in circulation', fmt(c.total), ''], ['Carried', fmt(c.carried), ''], ['Banked', fmt(c.banked), ''], ['In stockpiles', fmt(c.stockpiled), ''], ['In stashes', fmt(c.stashed || 0), ''],
+      ['Silver in circulation', fmt(c.total), ''], ['Carried', fmt(c.carried), ''], ['Banked', fmt(c.banked), ''], ['In stockpiles', fmt(c.stockpiled), ''], ['In stashes', fmt(c.stashed || 0), ''], ['In bounties', fmt(c.bounties || 0), ''],
       ['Created', fmt(created), ''], ['Destroyed', fmt(destroyed), ''], ['Net', `${created - destroyed >= 0 ? '+' : '−'}${fmt(Math.abs(created - destroyed))}`, created >= destroyed ? 'good' : 'bad'],
     ].map(([l, v, cls]) => `<div class="kpi"><div class="v ${cls}">${v}</div><div class="l">${l}</div></div>`).join('');
     const bots = [...s.bots].sort((a, b) => (b.silver.carried + b.silver.banked) - (a.silver.carried + a.silver.banked));
@@ -699,7 +731,7 @@
       + `<tr><td class="muted">Total</td><td class="num">${fmt(c.carried)}</td><td class="num">${fmt(c.banked)}</td><td class="num"><b>${fmt(c.carried + c.banked)}</b></td></tr>`;
     const row = (label, v, sign) => `<tr><td>${label}</td><td class="num">${v ? sign : ""}${fmt(v)}</td></tr>`;
     $('ecoFlows').innerHTML = `<tr><td colspan="2" class="muted">Created</td></tr>${row('Mob loot', e.created.mobs, '+')}${row('Quest rewards', e.created.quests, '+')}${row('Settlement income', e.created.settlements || 0, '+')}
-      <tr><td colspan="2" class="muted">Destroyed</td></tr>${row('Death (carried silver lost)', e.destroyed.death, '−')}${row('Repairs', e.destroyed.repair, '−')}${row('Shop', e.destroyed.shop, '−')}${row('Trade fees', e.destroyed.tradeFee, '−')}${row('Orb fees (altar)', e.destroyed.orbFee || 0, '−')}${row('Settlement founding', e.destroyed.settlement, '−')}
+      <tr><td colspan="2" class="muted">Destroyed</td></tr>${row('Death (carried silver lost)', e.destroyed.death, '−')}${row('Repairs', e.destroyed.repair, '−')}${row('Shop', e.destroyed.shop, '−')}${row('Trade fees', e.destroyed.tradeFee, '−')}${row('Orb fees (altar)', e.destroyed.orbFee || 0, '−')}${row('Settlement founding', e.destroyed.settlement, '−')}${row('Estates without heirs', e.destroyed.estate || 0, '−')}
       <tr><td colspan="2" class="muted">Orbs (items) · created</td></tr>${row('Mob drops', e.orbs.created.mobs, '+')}${row('Enchanted', e.orbs.created.crafted, '+')}${row('Shop', e.orbs.created.shop, '+')}
       <tr><td colspan="2" class="muted">Orbs used</td></tr>${Object.entries(e.orbs.used).map(([k, v]) => row(esc(k), v, '−')).join('') || '<tr><td class="muted" colspan="2">none yet</td></tr>'}
       <tr><td colspan="2" class="muted">Orb shards</td></tr>${row('Salvaged', e.orbs.shards.salvage, '+')}${row('Found by tools', e.orbs.shards.found, '+')}`;
@@ -799,7 +831,7 @@
       }
       const ev = r.ev, cat = CATEGORY[ev.type] || 'system';
       const cls = cat === 'deaths' && ev.type === 'player.death' ? 'death' : cat === 'forum' ? 'forum' : cat === 'dm' ? 'dm' : '';
-      return `<div class="ev ${cls}"><time>${t(ev.ts)}</time><span class="tag">${ev.zone ? esc(ev.zone) : esc(cat)}</span><span>${describe(ev)}</span></div>`;
+      return `<div class="ev ${cls}"><time>${t(ev.ts)}</time><span class="tag">${ev.zone ? esc(ev.zone) : esc(cat)}</span><span>${describe(ev)}${hoodNote(ev)}</span></div>`;
     }).join('') || '<div class="empty" style="padding:10px 14px">No matching activity.</div>';
   }
 

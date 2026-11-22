@@ -2,9 +2,10 @@
 // and feedback reports. Access is enforced here for history and in
 // Game.canSee for live events. Chat never carries system or trade-state messages.
 
-import { ZONES, type ZoneId } from '../shared/catalog.ts';
+import { HOOD, ZONES, type ZoneId } from '../shared/catalog.ts';
 import type { ChatMessage, ConversationSummary, DirectMessage, FeedbackCategory, ForumPost, ForumThreadSummary } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
+import { isAlias, seenAs } from './identity.ts';
 import type { CommandDef, Player } from './types.ts';
 import { cleanText, fail, optInt, optStr, reqInt, reqStr } from './util.ts';
 import { requireZone } from './world.ts';
@@ -23,7 +24,8 @@ function participantsOf(convId: string): [string, string] | null {
   return m ? [m[1], m[2]] : null;
 }
 
-function nameOf(g: Game, id: string) { return g.players.get(id)?.name ?? 'unknown'; }
+/** Of an author as stored: a hooded one is stored as the figure. */
+function nameOf(g: Game, id: string) { return g.players.get(id)?.name ?? (isAlias(id) ? HOOD.name : 'unknown'); }
 
 /** Region chat: you hear and speak in the region you are in, also while walking. */
 function requireInZone(_g: Game, p: Player): ZoneId {
@@ -41,8 +43,9 @@ function chatSay(g: Game, p: Player, payload: Record<string, any>) {
   const text = cleanText(payload, 'text', MAX_CHAT);
   const channel = `zone:${zone}`;
   const ts = g.now();
-  const res = g.store.run('INSERT INTO chat_messages(channel, author_id, text, ts) VALUES(?, ?, ?, ?)', channel, p.id, text, ts);
-  const message = chatRow(g, { id: Number(res.lastInsertRowid), channel, author_id: p.id, text, ts });
+  const author = seenAs(p).id;
+  const res = g.store.run('INSERT INTO chat_messages(channel, author_id, text, ts) VALUES(?, ?, ?, ?)', channel, author, text, ts);
+  const message = chatRow(g, { id: Number(res.lastInsertRowid), channel, author_id: author, text, ts });
   g.emit('chat.message', { kind: 'zone', zone }, { message }, { zone, actor: p });
   g.setLastAction(p, 'chat', `spoke in ${channel}`);
   return { message };
@@ -79,7 +82,7 @@ function createThread(g: Game, p: Player, payload: Record<string, any>) {
   const tags = payload.tags === undefined ? [] : payload.tags;
   if (!Array.isArray(tags) || tags.length > 5 || !tags.every((t) => typeof t === 'string' && TAG_RE.test(t))) fail('BAD_REQUEST', 'tags must be up to 5 strings matching [a-z0-9_-]{1,24}');
   const ts = g.now();
-  const res = g.store.run('INSERT INTO forum_threads(author_id, title, body, tags, created_at, last_post_at) VALUES(?, ?, ?, ?, ?, ?)', p.id, title, body, JSON.stringify(tags), ts, ts);
+  const res = g.store.run('INSERT INTO forum_threads(author_id, title, body, tags, created_at, last_post_at) VALUES(?, ?, ?, ?, ?, ?)', seenAs(p).id, title, body, JSON.stringify(tags), ts, ts);
   const thread = threadRow(g, g.store.get('SELECT * FROM forum_threads WHERE id = ?', Number(res.lastInsertRowid)));
   g.emit('forum.thread', { kind: 'forum' }, { thread, body }, { zone: 'town', actor: p });
   g.setLastAction(p, 'forum', `posted trade thread "${title}"`);
@@ -93,9 +96,9 @@ function reply(g: Game, p: Player, payload: Record<string, any>) {
   const t = g.store.get<any>('SELECT * FROM forum_threads WHERE id = ?', threadId);
   if (!t) fail('NOT_FOUND', `no thread ${threadId}`);
   const ts = g.now();
-  const res = g.store.run('INSERT INTO forum_posts(thread_id, author_id, body, ts) VALUES(?, ?, ?, ?)', threadId, p.id, body, ts);
+  const res = g.store.run('INSERT INTO forum_posts(thread_id, author_id, body, ts) VALUES(?, ?, ?, ?)', threadId, seenAs(p).id, body, ts);
   g.store.run('UPDATE forum_threads SET last_post_at = ?, reply_count = reply_count + 1 WHERE id = ?', ts, threadId);
-  const post = postRow(g, { id: Number(res.lastInsertRowid), thread_id: threadId, author_id: p.id, body, ts });
+  const post = postRow(g, { id: Number(res.lastInsertRowid), thread_id: threadId, author_id: seenAs(p).id, body, ts });
   g.emit('forum.reply', { kind: 'forum' }, { post, threadTitle: t.title }, { zone: 'town', actor: p });
   g.setLastAction(p, 'forum', `replied to "${t.title}"`);
   return { post };

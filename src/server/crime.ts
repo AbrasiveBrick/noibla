@@ -6,7 +6,7 @@
 //   members       stockpile: `missing` with the items and no actor, and sometimes `traces` with the actor.
 //                 watchtower: sometimes who stood at the plot (the thief among them), not who did it or what.
 //   stash owner   only that their stash holds less.
-//   the operator  a `theft` event with all of it.
+//   the operator  a `theft` event with all of it, the face under a hood included.
 //   anyone else   nothing. A pilfer spends the same number of event ids whatever the evidence came to, and the logs
 //                 number their entries per settlement, so no gaps in ids tell what it came to.
 // Nor may the clock tell: a pilfer writes, queues and sends the same whether or not anyone saw it, so do the same work
@@ -15,9 +15,10 @@
 
 import { randomInt } from 'node:crypto';
 import { SETTLEMENT, TIMING, baseOf, type ItemStack } from '../shared/catalog.ts';
-import type { Sighting } from '../shared/protocol.ts';
+import type { PilferSighting, Sighting } from '../shared/protocol.ts';
 import { atPlot, hasBuilding, logWatch, works } from './buildings.ts';
 import type { Game } from './game.ts';
+import { bySeenId, seenAs } from './identity.ts';
 import { CRIME_ODDS } from './odds.ts';
 import { audit, requireAtPlot, requireMember } from './settlement.ts';
 import type { CommandDef, Player, Settlement } from './types.ts';
@@ -111,29 +112,30 @@ function stashPilfer(g: Game, p: Player, payload: Record<string, any>) {
  * The act, all at once: the goods, then the evidence. Like gathering it takes effect immediately and then keeps the
  * thief busy, so damage interrupts nothing. Whoever kills them meanwhile gets what they still carry.
  */
-function carryOff(g: Game, p: Player, s: Settlement, act: Sighting['act'], taken: ItemStack[], owner?: Player) {
+function carryOff(g: Game, p: Player, s: Settlement, act: PilferSighting['act'], taken: ItemStack[], owner?: Player) {
   const now = g.now();
   g.markPlayer(p);
   addItems(p.inventory, taken);
   const busyMs = g.ms(TIMING.pilferMs);
   p.busyUntil = now + busyMs;
 
-  const everyone = [...g.players.values()];
+  const everyone = [...g.players.values()].filter((o) => !o.dead);
+  // The downed still see; the dead don't, and the tower doesn't count bodies.
   const bystanders = everyone.filter((o) => o.id !== p.id && o.zone === s.zone && !o.travel).map((o) => ({ o, saw: happens(CRIME_ODDS.witness) }));
   const witnesses = bystanders.filter((b) => b.saw).map((b) => b.o);
   // Kept in the operator's event too, so that its row is as long either way.
   const missed = bystanders.filter((b) => !b.saw).map((b) => b.o);
-  // The tower makes out who is at the plot, not whose hand it is. Listed in the world's order, not the thief first.
-  const watched = works(s, 'watchtower') && happens(CRIME_ODDS.watchtower) ? everyone.filter((o) => atPlot(g, o, s)) : [];
+  // The tower makes out who is at the plot, not whose hand it is. Listed by the ids shown, not the thief first.
+  const watched = works(s, 'watchtower') && happens(CRIME_ODDS.watchtower) ? bySeenId(everyone).filter((o) => atPlot(g, o, s)) : [];
   const stockpile = act === 'stockpile.pilfer';
   const traces = stockpile && happens(works(s, 'storehouse') ? CRIME_ODDS.tracesLocked : CRIME_ODDS.traces);
 
-  const saw: Omit<Sighting, 'ts'> = {
-    settlementId: s.id, settlementName: s.name, actor: { id: p.id, name: p.name }, act, items: taken,
+  const saw: Omit<PilferSighting, 'ts'> = {
+    settlementId: s.id, settlementName: s.name, actor: seenAs(p), act, items: taken,
     ...(owner ? { owner: { id: owner.id, name: owner.name } } : {}),
   };
   const theft = g.emit('theft', { kind: 'operator' }, {
-    ...saw, witnesses: witnesses.map((o) => ({ id: o.id, name: o.name })), missed: missed.map((o) => ({ id: o.id, name: o.name })), watched: watched.map((o) => ({ id: o.id, name: o.name })), traces,
+    ...saw, actor: { id: p.id, name: p.name }, ...(p.hood ? { hooded: true } : {}), witnesses: witnesses.map((o) => ({ id: o.id, name: o.name })), missed: missed.map((o) => ({ id: o.id, name: o.name })), watched: watched.map((o) => ({ id: o.id, name: o.name })), traces,
   }, { zone: s.zone, actor: p });
   for (const b of bystanders) {
     // Under their own id either way: a stand-in id would touch fewer index pages, and the commit would be quicker.

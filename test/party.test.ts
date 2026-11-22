@@ -32,10 +32,16 @@ test('parties: invite, accept, member view, party chat only for members, kick an
     assert.equal((await err(mate.partyInvite(O.playerId))).code, 'FORBIDDEN', 'only the leader invites');
     assert.equal((await err(lead.partyInvite(M.playerId))).code, 'PARTY_STATE', 'already in a party');
 
-    // Members see each other's zone and HP, even in different zones.
+    // Nothing from afar: partners see each other's zone and HP only in the same region.
     await mate.travelTo('wilds');
     raw(w, M.playerId).hp = 37;
-    const seen = (await lead.party()).party!.members.find((m) => m.id === M.playerId)!;
+    const mateSeen = async () => (await lead.party()).party!.members.find((m) => m.id === M.playerId)!;
+    let seen = await mateSeen();
+    assert.deepEqual([seen.name, seen.zone, seen.pos, seen.walking, seen.hp, seen.maxHp], [raw(w, M.playerId).name, null, null, null, null, null]);
+    await lead.travelTo('wilds');
+    // In combat, so no tick heals it before the read.
+    Object.assign(raw(w, M.playerId), { hp: 37, lastCombatAt: Date.now() + 60_000 });
+    seen = await mateSeen();
     assert.equal(seen.zone, 'wilds');
     assert.equal(seen.hp, 37);
 
@@ -57,7 +63,7 @@ test('parties: invite, accept, member view, party chat only for members, kick an
   } finally { await w.close(); }
 });
 
-test('allies in the zone add attack damage and share kill XP and quest credit', async () => {
+test('allies beside you add attack damage and share kill XP and quest credit', async () => {
   const w = await world();
   try {
     const a = await w.bot('Striker');
@@ -71,7 +77,7 @@ test('allies in the zone add attack damage and share kill XP and quest credit', 
     await a.equip('iron_sword');
     await Promise.all([a.travelTo('wilds'), b.travelTo('wilds'), c.travelTo('wilds')]);
     const wolf = [...w.server.game.mobs.values()].find((m) => m.type === 'wolf' && m.zone === 'wilds')!;
-    await a.goTo(wolf.id);
+    await Promise.all([a.goTo(wolf.id), b.goTo(wolf.id), c.goTo(wolf.id)]);
     wolf.hp = 13;
     const r = await a.attack(wolf.id, 'slash');
     assert.equal(r.damage, 13, 'iron sword 12 × (1 + 2 allies × 5%)');
@@ -83,7 +89,7 @@ test('allies in the zone add attack damage and share kill XP and quest credit', 
     await c.travelTo('town');
     const xpBefore = (await c.observe()).self.skills.unarmed.xp;
     const wolf2 = [...w.server.game.mobs.values()].find((m) => m.type === 'wolf' && m.id !== wolf.id)!;
-    await a.goTo(wolf2.id);
+    await Promise.all([a.goTo(wolf2.id), b.goTo(wolf2.id)]);
     wolf2.hp = 1;
     const r2 = await a.attack(wolf2.id, 'slash');
     assert.equal(r2.damage, Math.round(12 * 1.05));
@@ -108,8 +114,8 @@ test('a lone fighter loses to the Elder Bear; the boss resets, and enrage triple
     assert.equal(bear.engagedAt, undefined);
 
     // Enrage: a fight that has lasted past enrageAfterMs hits three times as hard.
-    await solo.waitReady();
-    await solo.travelTo('wilds');
+    await solo.revive();
+    assert.equal((await solo.waitReady()).self.downed, null, 'bandaged back up');
     await solo.goTo(bear.id);
     const p = raw(w, S.playerId);
     await solo.attack(bear.id);

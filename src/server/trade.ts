@@ -6,6 +6,7 @@
 import { TRADE_SILVER_FEE, baseOf, type ItemStack } from '../shared/catalog.ts';
 import type { TradeReceipt, TradeView } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
+import { requireFace } from './identity.ts';
 import type { CommandDef, Player, Trade } from './types.ts';
 import { type Bag, addItems, covers, describe, fail, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
 import { questProgress, requireZone } from './world.ts';
@@ -58,6 +59,7 @@ function receiptFor(g: Game, tradeId: string, ownerId: string): TradeReceipt | n
 }
 
 function propose(g: Game, p: Player, payload: Record<string, any>) {
+  requireFace(p, g.now(), 'trading');
   requireZone(g, p, 'town', 'trading');
   const to = reqStr(payload, 'to', 40);
   const target = g.players.get(to);
@@ -84,6 +86,7 @@ function propose(g: Game, p: Player, payload: Record<string, any>) {
 }
 
 function accept(g: Game, p: Player, payload: Record<string, any>) {
+  requireFace(p, g.now(), 'trading');
   const t = getTrade(g, p, payload);
   if (t.counterpartyId !== p.id) fail('TRADE_STATE', 'only the counterparty can accept the terms');
   if (t.status !== 'proposed') fail('TRADE_STATE', `trade is ${t.status}`);
@@ -136,6 +139,7 @@ function submit(g: Game, p: Player, payload: Record<string, any>) {
 }
 
 function lock(g: Game, p: Player, payload: Record<string, any>) {
+  requireFace(p, g.now(), 'trading');
   const t = getTrade(g, p, payload);
   requireLockable(g, p, t);
   if (payload.items !== undefined) setSubmission(g, p, t, stacks(payload.items, 'items'));
@@ -225,22 +229,29 @@ function settle(g: Game, t: Trade) {
 
 export function tradeTick(g: Game, now: number) {
   for (const t of g.trades.values()) {
-    if (t.status === 'proposed' && now > t.proposalExpiresAt) {
-      t.status = 'expired';
-      t.closedAt = now;
-      g.markTrade(t);
-      for (const id of [t.proposerId, t.counterpartyId]) g.emit('trade.expired', { kind: 'player', playerId: id }, { tradeId: t.id, stage: 'proposal', receipt: null }, {});
-    } else if (t.status === 'agreed' && t.lockDeadline !== null && now > t.lockDeadline) {
-      for (const [id, sub] of Object.entries(t.subs)) {
-        const p = g.players.get(id);
-        if (p && Object.keys(sub.items).length) { addItems(p.inventory, toStacks(sub.items)); g.markPlayer(p); }
-      }
-      t.status = 'expired';
-      t.closedAt = now;
-      g.markTrade(t);
-      storeReceipts(g, t, 'expired');
+    if ((t.status === 'proposed' && now > t.proposalExpiresAt) || (t.status === 'agreed' && t.lockDeadline !== null && now > t.lockDeadline)) expire(g, t, now);
+  }
+}
+
+/** When a death is made known, their open trades end and each side's escrow goes back. */
+export function expireTradesOf(g: Game, p: Player) {
+  for (const t of g.trades.values()) if (isOpen(t) && (t.proposerId === p.id || t.counterpartyId === p.id)) expire(g, t, g.now());
+}
+
+function expire(g: Game, t: Trade, now: number) {
+  const proposal = t.status === 'proposed';
+  g.markTrade(t);
+  if (!proposal) {
+    for (const [id, sub] of Object.entries(t.subs)) {
+      const p = g.players.get(id);
+      if (p && Object.keys(sub.items).length) { g.markPlayer(p); addItems(p.inventory, toStacks(sub.items)); }
     }
   }
+  t.status = 'expired';
+  t.closedAt = now;
+  if (proposal) {
+    for (const id of [t.proposerId, t.counterpartyId]) g.emit('trade.expired', { kind: 'player', playerId: id }, { tradeId: t.id, stage: 'proposal', receipt: null }, {});
+  } else storeReceipts(g, t, 'expired');
 }
 
 const ro = (run: CommandDef['run']): CommandDef => ({ mutates: false, run });

@@ -43,7 +43,7 @@ export interface WorldMap {
   regions: MapRegion[];
   /** Where `move { to: '<region>' }` / travelTo(region) walks. The town anchor is the plaza, next to every place. */
   anchors: Record<ZoneId, Pos>;
-  /** Respawn point after death (the town plaza). */
+  /** Where new characters start (the town plaza). */
   spawn: Pos;
   places: MapPlace[];
   /** Resource nodes never move. Ids match observe().zone.nodes. */

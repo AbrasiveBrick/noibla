@@ -1,6 +1,6 @@
 # Community & betrayal plan: settlements, hunting parties, theft, permadeath
 
-> Staged roadmap. Stages 1-4 (parties and bosses, settlements and stockpiles, buildings and shared work, theft and witnesses) have shipped; each later stage is one PR and one session.
+> Staged roadmap. Stages 1-5 (parties and bosses, settlements and stockpiles, buildings and shared work, theft and witnesses, death and murder) have shipped; each later stage is one PR and one session.
 
 ## Context
 
@@ -38,8 +38,8 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 
 - **Parties** (`src/server/party.ts`): `party.invite`, `party.accept`, `party.leave`, `party.kick`, `party.view`, up to 5 members.
   - A party of one never blocks being invited or joining another.
-  - Members see each other's zone and HP.
-  - Kill XP and quest credit are shared among members in the zone.
+  - Members within view see each other's position and HP (stage 5: nothing from afar, except a downed partner in the region).
+  - Kill XP and quest credit are shared among members beside each other (stage 5: in the region and within view).
   - New `Visibility` kind `{ kind: 'party', id }`.
 - **Bosses** (`MOB_TYPES`, new flag `boss`):
   - **Elder Bear** (825 HP) in the wilds, so groups learn bosses without PvP risk, and **Ash Wyrm** (1500 HP) in the frontier.
@@ -108,7 +108,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Leaving, expulsion and exile:** the stash stays its owner's (they can empty it at the plot), contributions and deposits stay with the settlement, and what they gathered or gave stops counting for shared work.
 - **Abandonment:** the buildings fall. The stockpile, every stash and the materials of unfinished projects spill into one bag at the plot, and stash owners are told.
 - **Left for later stages, and not advertised until then:**
-  - Stage 5: the infirmary (needs `wyrm_scale`, a ninth building and town slot), and watchtower movements in `corpse.examine`. The watchtower logs walking only, so a death leaves an arrival with no departure.
+  - Stage 5 (shipped): the infirmary (needs `wyrm_scale`, a ninth building and town slot), and watchtower movements in `corpse.examine`. The watchtower logs walking only, so a death leaves an arrival with no departure.
   - Stage 6: allies using stations and not setting off the palisade (`buildingStation` and `noteCrossing` in `buildings.ts`), and the palisade's raid defense.
 - **The theory, to be tested with real agents.** Let *f* be the share of a solo player's income that comes from refining the five shared raw materials, counting what is crafted from them. It ignores upkeep and the time the extra refining takes.
 
@@ -189,7 +189,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Any player can `revive` them (a 5 s channel that damage interrupts), bringing them back at 30% HP.
   - In PvP zones, any player can `attack` a downed player to finish them.
   - **Field bandage:** a craftable item that allows one self-revive. It is a trade good and stops solo deaths from wiping out every bot.
-- **Settlement membership of the dead:** remove them as `removeMember` does, so what they gathered and gave stops counting too. Decide who gets their stash.
+- **Settlement membership of the dead:** remove them as `removeMember` does, so what they gathered and gave stops counting too. Their stash goes where the bank goes.
 - **Permanent death:**
   - **Character state:** `Player.dead = { at, zone }`. Commands return a `DEAD` error with a hint to register a new character, and `observe` still works. The name stays reserved.
   - **Loot:** everything carried and equipped drops into a corpse bag.
@@ -205,6 +205,42 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Hooded cloak:** a crafted consumable. For 2 minutes the wearer appears as "a hooded figure" in zone events and in `zoneView`, to victims and witnesses alike. It keeps the mystery alive even though a dead player's agent remembers who killed its old character.
 - **Bounties:** `bounty.post` escrows silver on a player and pays it to whoever kills them. This gives communities a way to deliver justice.
 - **Sandbox prompt:** `sandbox/agent-prompt.md` and `sandbox/entrypoint.sh` handle a dead character by registering `<name>-2` and so on, keeping notes in `/work`.
+- **Rules the plan left open, decided with the user (2026-11-22):**
+  - **When a death is known:** membership and inheritance wait for the first `death.report`, else 10 minutes. Until then roster, stockpile and heir show nothing, so a killer who is the heir gains by reporting first.
+  - **Party sight:** nothing from afar. Others see only the name and online state.
+  - **Sight, narrowed after testing found a leak:** with region-wide lookups, whoever pulled up a hood out of sight was the one player who suddenly read as elsewhere. So position, zone, HP and move-to-player work only within view, and a hood looks like being out of sight. One exception: an unhooded downed partner shows to the party in the same region, for the rescue.
+  - **No hooding in combat** or while a mob is after you. A hood that runs out mid-fight still gives its wearer away.
+  - **The dead's stashes:** as the bank (heir, else their settlement, else destroyed).
+  - **The last member:** the plan read literally. Without a will, bank and stash go to the stockpile and spill with it, so a lone founder is a profitable target.
+  - **Bandage:** one each in the kit, existing characters once. Self-revive is a command, never automatic.
+  - **Bounty:** the finisher, or the downer on a bleed-out. A mob kill refunds. The list changes when the death is known.
+  - **Report reward:** a charter amount (default 0) out of the victim's village's stockpile, to the first reporter, whoever it is.
+  - **Silver sink:** 25% of the carried silver is still destroyed at death. Being downed costs nothing.
+- **As built:**
+  - `src/server/death.ts` owns all of it. `src/server/identity.ts` has the hood's rule for every module.
+  - **Two event ids a blow:** a hit, going down, a finish and bleeding out each spend two, whoever is present. An outsider's gaps don't tell a death from a hit.
+  - **Timing**, as for theft (#31): a down or a death writes a sighting row for every player, `seen` only for those present, and private notices (`bounty.paid`, `will.*`, `bounty.closed`, a corpse's `loot.taken`) are sent by a later tick.
+  - **The time of death** is only ever shown as a 2 minute window: the corpse bag's countdown and the moment a death becomes known are dated by the window too.
+  - **The notices of a death made known** (inheritance, bounties) don't say where it happened.
+  - **One rule for sight** (`canPlace`): `player.get`, the party view, `move`, `attack` and `revive`. Party bonus and kill credit follow it: partners count only within view, or damage and event ids would tell which of them pulled a hood up.
+  - **What begins under a hood is told under it to the end** (a revive, the spoils, who struck the blow).
+  - **Witnesses are not rolled:** everyone in the region saw it. A bleed-out names no killer in `player.death`, or whoever walked in during the minute would learn it.
+  - **A hood fights alone** (no party bonus or credit), always sets off the palisade, and skips take-back on withdrawals: each would otherwise name the figure.
+  - **The dead are no cameras:** their `observe` shows nothing of the living and their event stream stops.
+  - **The downed witness thefts, the dead don't.** Going down doesn't shorten a pilfer's busy time.
+  - **Downtime:** after a restart the downed get their whole time again.
+- **What may be inferred, on purpose:**
+  - A gap of two event ids says that someone somewhere took a blow.
+  - Whoever comes into the region sees the corpse if they come within view, and a partner there sees 0 HP.
+  - Once a death is known: members see a roster change, outsiders a member count and the bounty list, and posting a bounty on the victim fails. A refund tells a poster that no player did it.
+  - A death stops the victim's agent, so they go offline, and that agent may tell everything as a new character.
+  - A hood: continuity of position and HP for whoever watches it go on or come off, of what it was doing when it runs out, and of who walked into a region and never out. Damage hints at gear and skill. A pilfer or plot act still says the figure is a member, and a withdrawal that they may withdraw.
+  - A corpse's watchtower clues show outsiders that a working tower stood in the region, and are lost if that settlement is abandoned.
+- **What an agent run should show:** downs per hour by cause; how many are revived, by whom and by bandage; permanent deaths and whether agents register again and keep their notes; murders, first reporters and whom they accuse against the true killer; whether wills and bounties are used; whether lone founders are hunted; the `COMBAT_LOCKED` count.
+- **Known limits, none of them measured with agents:**
+  - 60 seconds may be short for an agent that thinks 10-30 seconds between calls and isn't streaming events.
+  - A friend or an alt can collect the bounty on someone who agrees to die, or die with a fresh alt for a village's reward if it can join.
+  - A bounty on someone who never dies stays in escrow.
 - Tests: `test/death.test.ts` covers revive versus finishing a downed player, the timer running out, will inheritance, a death with no witnesses leaking nothing, the first-reporter flag, and the hood hiding the identity.
 
 ## Stage 6: Diplomacy and espionage

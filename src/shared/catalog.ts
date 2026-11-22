@@ -4,13 +4,13 @@
 import { STARTERS } from './starters.ts';
 
 export type ZoneId = 'town' | 'wilds' | 'frontier' | 'hollow' | 'ridge';
-/** `contested`: settlement land. PvP is allowed and death drops everything, as in the lethal frontier. */
+/** `contested`: settlement land. PvP is allowed, as in the lethal frontier. `safe-wild`: no PvP, but beasts can still kill you (see DEATH). */
 export type Safety = 'safe' | 'safe-wild' | 'contested' | 'lethal';
 /** Every station is in town except the kitchen, which only settlements have (see BUILDINGS). */
 export type StationId = 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench' | 'altar' | 'kitchen';
 export type Slot = 'weapon' | 'armor' | 'tool';
 export const SLOTS: Slot[] = ['weapon', 'armor', 'tool'];
-export type ItemKind = 'currency' | 'resource' | 'material' | 'tool' | 'weapon' | 'armor' | 'orb' | 'food';
+export type ItemKind = 'currency' | 'resource' | 'material' | 'tool' | 'weapon' | 'armor' | 'orb' | 'food' | 'supply';
 export type SkillId =
   | 'mining' | 'woodcutting' | 'farming'
   | 'smelting' | 'woodworking' | 'tanning' | 'cooking'
@@ -86,6 +86,8 @@ export const ITEMS: Record<string, ItemDef> = {
   orb_chaos: { id: 'orb_chaos', name: 'Chaos Orb', kind: 'orb', tier: 3, description: 'Rerolls a rare item: new affixes (three, sometimes four). Drops only from frontier wraiths (or enchanted from wraith essence).' },
   orb_vaal: { id: 'orb_vaal', name: 'Vaal Orb', kind: 'orb', tier: 3, description: 'Corrupts: one affix may jump a tier, the item may be bricked (all affixes destroyed), or nothing may change. Corrupted items can never be modified again.' },
   ration: { id: 'ration', name: 'Ration', kind: 'food', tier: 1, description: 'Cooked from grain at a settlement kitchen. Eating one makes you Well fed for a while (see catalog.food): more XP and faster regeneration out of combat.' },
+  field_bandage: { id: 'field_bandage', name: 'Field Bandage', kind: 'supply', tier: 1, description: 'One self-revive while downed: send revive before the time runs out (see catalog.death). Every character starts with one. A good thing to trade.' },
+  hooded_cloak: { id: 'hooded_cloak', name: 'Hooded Cloak', kind: 'supply', tier: 2, description: 'Used up by hood.wear: for a while others see only "a hooded figure" (see catalog.hood).' },
   // Tools: equip one in the tool slot. Each job needs its own tool family (see TOOL_FAMILIES).
   copper_pickaxe: { id: 'copper_pickaxe', name: 'Copper Pickaxe', kind: 'tool', tier: 1, slot: 'tool', toolTier: 1, toolFor: ['mining'], description: 'Tier 1. Mines veins (wilds and frontier).' },
   iron_pickaxe: { id: 'iron_pickaxe', name: 'Iron Pickaxe', kind: 'tool', tier: 2, slot: 'tool', toolTier: 2, toolFor: ['mining'], description: 'Tier 2. Mines veins (wilds and frontier).' },
@@ -212,6 +214,9 @@ export const RECIPES: Record<string, RecipeDef> = {
   // Armor
   leather_jerkin: recipe({ id: 'leather_jerkin', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 1, minLevel: 0, inputs: [{ item: 'leather', qty: 3 }], output: { item: 'leather_jerkin', qty: 1 } }),
   iron_mail: recipe({ id: 'iron_mail', kind: 'craft', station: 'forge', skill: 'armorcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'leather', qty: 2 }], output: { item: 'iron_mail', qty: 1 } }),
+  // Supplies (tanning with a needle, at the workbench)
+  field_bandage: recipe({ id: 'field_bandage', kind: 'craft', station: 'workbench', skill: 'tanning', tier: 1, minLevel: 0, inputs: [{ item: 'leather', qty: 2 }], output: { item: 'field_bandage', qty: 1 } }),
+  hooded_cloak: recipe({ id: 'hooded_cloak', kind: 'craft', station: 'workbench', skill: 'tanning', tier: 2, minLevel: 2, inputs: [{ item: 'leather', qty: 6 }], output: { item: 'hooded_cloak', qty: 1 } }),
   // Orbs (enchanting at the altar): fuse orb shards. Regal, Chaos and Vaal also need wraith essence and an enchanting focus.
   orb_transmute: recipe({ id: 'orb_transmute', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 1, minLevel: 0, inputs: [{ item: 'orb_shard', qty: 10 }], output: { item: 'orb_transmute', qty: 1 } }),
   orb_augment: recipe({ id: 'orb_augment', kind: 'craft', station: 'altar', skill: 'enchanting', tier: 1, minLevel: 0, inputs: [{ item: 'orb_shard', qty: 10 }], output: { item: 'orb_augment', qty: 1 } }),
@@ -235,11 +240,12 @@ export const TOOL_FAMILIES: Record<ToolJob, string> = {
 /** Tool tier a job of tier T needs. */
 export const requiredToolTier = (tier: number): number => Math.max(1, tier - 1);
 
-/** Every new player starts with one copper tool of each family. Better tools come from toolcrafters. */
-export const STARTER_KIT: ItemStack[] = ['pickaxe', 'axe', 'skinning_knife', 'tongs', 'saw', 'hammer', 'needle', 'hoe', 'trowel', 'pot'].map((f) => ({ item: `copper_${f}`, qty: 1 }));
-/** Bump when tools join the starter kit, and list them here: existing players get exactly these, once, on load. */
-export const KIT_VERSION = 2;
-export const KIT_ADDED: Record<number, ItemStack[]> = { 2: ['hoe', 'trowel', 'pot'].map((f) => ({ item: `copper_${f}`, qty: 1 })) };
+/** Every new character starts with one copper tool of each family and one field bandage. Better tools come from toolcrafters. */
+export const STARTER_KIT: ItemStack[] = ['pickaxe', 'axe', 'skinning_knife', 'tongs', 'saw', 'hammer', 'needle', 'hoe', 'trowel', 'pot']
+  .map((f) => ({ item: `copper_${f}`, qty: 1 })).concat([{ item: 'field_bandage', qty: 1 }]);
+/** Bump when items join the starter kit, and list them here: existing players get exactly these, once, on load. */
+export const KIT_VERSION = 3;
+export const KIT_ADDED: Record<number, ItemStack[]> = { 2: ['hoe', 'trowel', 'pot'].map((f) => ({ item: `copper_${f}`, qty: 1 })), 3: [{ item: 'field_bandage', qty: 1 }] };
 
 // ---------- affixes ----------
 
@@ -357,8 +363,6 @@ export interface ZoneDef {
   hasForum: boolean;
   hasQuestBoard: boolean;
   pvp: boolean;
-  /** Death drops carried + equipped items into a loot bag. */
-  fullLoot: boolean;
   /** Settlement plots generated in this region (see SETTLEMENT). */
   plots: number;
   nodes: { type: string; count: number }[];
@@ -369,35 +373,35 @@ export const ZONES: Record<ZoneId, ZoneDef> = {
   town: {
     id: 'town', name: 'Brightwater (Town)', safety: 'safe', description: 'No combat. Bank, crafting stations, quest board, trade forum.',
     adjacent: ['wilds'], stations: ['smelter', 'sawmill', 'tannery', 'forge', 'workbench', 'altar'], hasBank: true, hasForum: true, hasQuestBoard: true,
-    pvp: false, fullLoot: false, plots: 0, nodes: [], mobs: [],
+    pvp: false, plots: 0, nodes: [], mobs: [],
   },
   wilds: {
-    id: 'wilds', name: 'Greenreach (Safe Wilderness)', safety: 'safe-wild', description: 'Basic resources and PvE. Dying here keeps your gear and inventory.',
+    id: 'wilds', name: 'Greenreach (Safe Wilderness)', safety: 'safe-wild', description: 'Basic resources and PvE, no PvP. Beasts can still down you, and a downed character nobody revives dies for good.',
     adjacent: ['town', 'frontier', 'hollow', 'ridge'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
-    pvp: false, fullLoot: false, plots: 0,
+    pvp: false, plots: 0,
     nodes: [{ type: 'copper_vein', count: 2 }, { type: 'iron_vein', count: 3 }, { type: 'pine_grove', count: 2 }],
     mobs: [{ type: 'wolf', count: 3 }, { type: 'boar', count: 3 }, { type: 'elder_bear', count: 1 }],
   },
   frontier: {
-    id: 'frontier', name: 'The Ashen Frontier (Lethal)', safety: 'lethal', description: 'Open PvP. Exclusive duskiron and wraith essence. Death drops everything you carry and wear.',
+    id: 'frontier', name: 'The Ashen Frontier (Lethal)', safety: 'lethal', description: 'Open PvP. Exclusive duskiron and wraith essence. The downed can be finished off, and death is for good.',
     adjacent: ['wilds', 'ridge'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
-    pvp: true, fullLoot: true, plots: 0,
+    pvp: true, plots: 0,
     nodes: [{ type: 'duskiron_vein', count: 2 }],
     mobs: [{ type: 'wraith', count: 3 }, { type: 'ash_wyrm', count: 1 }],
   },
   hollow: {
     id: 'hollow', name: 'Mossy Hollow (Contested)', safety: 'contested',
-    description: 'Settlement land north of the wilds, reached only through them. PvP is allowed and death drops everything you carry and wear. Stone, grain and settlement plots.',
+    description: 'Settlement land north of the wilds, reached only through them. PvP is allowed, the downed can be finished off, and death is for good. Stone, grain and settlement plots.',
     adjacent: ['wilds'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
-    pvp: true, fullLoot: true, plots: 3,
+    pvp: true, plots: 3,
     nodes: [{ type: 'stone_quarry', count: 2 }, { type: 'fertile_field', count: 2 }, { type: 'pine_grove', count: 1 }],
     mobs: [{ type: 'wolf', count: 2 }, { type: 'boar', count: 1 }],
   },
   ridge: {
     id: 'ridge', name: 'Stonewatch Ridge (Contested)', safety: 'contested',
-    description: 'Settlement land south of the wilds, with a ford into the frontier. PvP is allowed and death drops everything you carry and wear. Rich stone, some iron, settlement plots.',
+    description: 'Settlement land south of the wilds, with a ford into the frontier. PvP is allowed, the downed can be finished off, and death is for good. Rich stone, some iron, settlement plots.',
     adjacent: ['wilds', 'frontier'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
-    pvp: true, fullLoot: true, plots: 2,
+    pvp: true, plots: 2,
     nodes: [{ type: 'stone_quarry', count: 3 }, { type: 'iron_vein', count: 1 }, { type: 'fertile_field', count: 1 }],
     mobs: [{ type: 'boar', count: 2 }, { type: 'wolf', count: 1 }],
   },
@@ -417,9 +421,9 @@ export const QUESTS: Record<string, QuestDef> = {
   ore_run: { id: 'ore_run', name: 'Ore Run', description: 'Mine 6 copper ore.', objective: { kind: 'gather', target: 'copper_ore', count: 6 }, reward: [{ item: 'silver', qty: 15 }] },
   apprentice_smith: { id: 'apprentice_smith', name: 'Apprentice Smith', description: 'Craft a copper sword.', objective: { kind: 'craft', target: 'copper_sword', count: 1 }, reward: [{ item: 'silver', qty: 20 }] },
   frontier_hunt: { id: 'frontier_hunt', name: 'Frontier Hunt', description: 'Kill a wraith in the frontier.', objective: { kind: 'kill', target: 'wraith', count: 1 }, reward: [{ item: 'silver', qty: 60 }] },
-  // Boss quests: every player who damaged the boss, and every party member of the killer in the region, gets the kill credit.
-  bear_hunt: { id: 'bear_hunt', name: 'Bear Hunt', description: 'Help kill the Elder Bear in the wilds (a group job: everyone who hits it, and the killer\'s party in the region, gets credit).', objective: { kind: 'kill', target: 'elder_bear', count: 1 }, reward: [{ item: 'silver', qty: 120 }] },
-  wyrm_slayer: { id: 'wyrm_slayer', name: 'Wyrm Slayer', description: 'Help kill the Ash Wyrm in the frontier (a group job: everyone who hits it, and the killer\'s party in the region, gets credit).', objective: { kind: 'kill', target: 'ash_wyrm', count: 1 }, reward: [{ item: 'silver', qty: 300 }] },
+  // Boss quests: every player who damaged the boss, and every party member of the killer beside them, gets the kill credit.
+  bear_hunt: { id: 'bear_hunt', name: 'Bear Hunt', description: 'Help kill the Elder Bear in the wilds (a group job: everyone who hits it, and the killer\'s party beside them, gets credit).', objective: { kind: 'kill', target: 'elder_bear', count: 1 }, reward: [{ item: 'silver', qty: 120 }] },
+  wyrm_slayer: { id: 'wyrm_slayer', name: 'Wyrm Slayer', description: 'Help kill the Ash Wyrm in the frontier (a group job: everyone who hits it, and the killer\'s party beside them, gets credit).', objective: { kind: 'kill', target: 'ash_wyrm', count: 1 }, reward: [{ item: 'silver', qty: 300 }] },
   // Trade contracts: progress counts only what actually changes hands in settled blind trades with other players.
   supply_contract: { id: 'supply_contract', name: 'Supply Contract', description: 'Deliver 4 iron bars to other players through settled trades.', objective: { kind: 'deliver', target: 'iron_bar', count: 4 }, reward: [{ item: 'silver', qty: 40 }] },
   outfitter_contract: { id: 'outfitter_contract', name: 'Outfitter Contract', description: 'Deliver an iron mail to another player through a settled trade.', objective: { kind: 'deliver', target: 'iron_mail', count: 1 }, reward: [{ item: 'silver', qty: 50 }] },
@@ -445,13 +449,52 @@ export const TIMING = {
   regenFraction: 0.04,
   nodeRegenMs: 6000,
   lootBagTtlMs: 15 * 60_000,
-  respawnBusyMs: 1000,
+  /** At 0 HP outside town you are downed this long, then you die for good. See DEATH. */
+  downedMs: 60_000,
+  /** The revive channel. Damage to either side interrupts it. */
+  reviveMs: 5000,
+  hoodMs: 1000,
   /**
    * stockpile.pilfer and stash.pilfer: the goods are yours at once, then you are busy this long, at the plot and unable
    * to walk off or fight. Damage does not interrupt it.
    */
   pilferMs: 10_000,
 };
+
+/**
+ * Downed and death. At 0 HP outside town you are downed for catalog.timing.downedMs (`infirmaryMult` times that for a
+ * member within `infirmaryRange` tiles of their own settlement's working infirmary): you can't act, chat or DM, and
+ * mobs drop you. Anyone within range can revive you, and you can revive yourself with one `bandage`. A revive brings you
+ * back at `reviveHpPct`% HP. Where PvP is allowed, one attack on a downed player finishes them.
+ *
+ * Death is for good. A quarter of the carried silver is destroyed (deathSilverLoss) and the rest of what you carried and
+ * wore drops into a bag by the corpse. The estate (bank, stashes) passes when the death is made known: at the first
+ * death.report, else `knownAfterMs` later, rounded up to `timeWindowMs`. It goes to the heir of the will, else to the
+ * settlement's stockpile, else it is destroyed. Membership and party end then, not before.
+ */
+export const DEATH = {
+  bandage: 'field_bandage',
+  reviveHpPct: 30,
+  infirmaryRange: 8,
+  infirmaryMult: 2,
+  knownAfterMs: 10 * 60_000,
+  /** corpse.examine tells the time of death only this closely. */
+  timeWindowMs: 2 * 60_000,
+  /** A corpse can be examined and reported this long. Its bag rots like any loot bag (timing.lootBagTtlMs). */
+  corpseMs: 7 * 24 * 3600_000,
+  /** corpse.examine shows what working watchtowers logged from this long before the time of death to this long after. */
+  clueBeforeMs: 5 * 60_000,
+  clueAfterMs: 5 * 60_000,
+  reportTextMax: 500,
+  /** Open bounties one player may have posted. */
+  maxBounties: 20,
+};
+
+/**
+ * hood.wear uses up one `item`. For `ms` you are `name`, under a throwaway id, in everything others see you do or say
+ * in the world, the watchtower and the audit log included. It can't go on in combat. Death takes it off.
+ */
+export const HOOD = { item: 'hooded_cloak', ms: 2 * 60_000, name: 'a hooded figure' };
 
 export const BASE_HP = 100;
 export const STARTING_SILVER = 20;
@@ -497,8 +540,8 @@ export const COMBAT = {
 
 /**
  * Parties: up to `maxSize` players who fight together.
- * - Each other party member in your region adds `damageBonusPerAlly` to your attack damage (up to `maxDamageBonus`).
- * - When a party member kills a mob, every other member in the region gets the quest kill credit and
+ * - Each other party member beside you (in your region and within view) adds `damageBonusPerAlly` to your attack damage (up to `maxDamageBonus`).
+ * - When a party member kills a mob, every other member beside them gets the quest kill credit and
  *   `killXpShare` × (mob HP × combat.xpPerDamage) XP in their weapon skill.
  * - Boss loot drops into a spoils bag that only players who damaged the boss can open for `spoilsReservedMs`;
  *   after that anyone can. Any eligible player can take everything: share fairly or not.
@@ -526,7 +569,9 @@ export const SETTLEMENT = {
   voteTtlMs: 30 * 60_000,
   maxTaxPct: 50,
   /** Charter of a new settlement. */
-  defaultCharter: { open: false, withdrawRole: 'steward' as 'leader' | 'steward' | 'member', taxPct: 0 },
+  defaultCharter: { open: false, withdrawRole: 'steward' as 'leader' | 'steward' | 'member', taxPct: 0, reportReward: 0 },
+  /** The charter's reportReward is at most this: silver from the stockpile to the first to report a member's death. */
+  maxReportReward: 1000,
   nameMin: 3,
   nameMax: 30,
   /** Audit entries returned per page by stockpile.log (and the tail shown by stockpile.view). */
@@ -541,7 +586,7 @@ export const SETTLEMENT = {
   levels: [
     { level: 1, name: 'camp', buildings: 0, members: 1, slots: 3, income: 5 },
     { level: 2, name: 'village', buildings: 3, members: 3, slots: 6, income: 25 },
-    { level: 3, name: 'town', buildings: 6, members: 5, slots: 8, income: 60 },
+    { level: 3, name: 'town', buildings: 6, members: 5, slots: 9, income: 60 },
   ],
   /**
    * Items (silver excluded) the stockpile holds; a storehouse holds more. Full of a village's bars and planks it is
@@ -567,7 +612,7 @@ export const SETTLEMENT = {
   alertsKept: 20,
 };
 
-export type BuildingId = 'workshop' | 'forge_hall' | 'farm' | 'kitchen' | 'storehouse' | 'palisade' | 'watchtower' | 'huts';
+export type BuildingId = 'workshop' | 'forge_hall' | 'farm' | 'kitchen' | 'storehouse' | 'palisade' | 'watchtower' | 'huts' | 'infirmary';
 
 export interface BuildingDef {
   id: BuildingId;
@@ -637,6 +682,11 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
     cost: items({ pine_plank: 50, stone: 30, leather: 10 }), upkeep: items({ pine_plank: 5, stone: 10 }),
     description: 'A private stash for each member at the plot. Only its owner sees inside, but other members can pilfer from it blindly.',
   },
+  infirmary: {
+    id: 'infirmary', name: 'Infirmary', tier: 3, minLevel: 2, work: 20,
+    cost: items({ pine_plank: 50, leather: 20, wyrm_scale: 3 }), upkeep: items({ pine_plank: 5, stone: 10 }),
+    description: 'Members downed near it hold on twice as long before they die (see catalog.death). Needs Ash Wyrm scales.',
+  },
 };
 
 /** Well fed: what eating a ration gives. Eating again restarts the timer and never stacks. Death ends it. */
@@ -648,7 +698,7 @@ export const FOOD = {
   regenMult: 2,
 };
 
-/** Fraction of carried (not banked) silver destroyed on any death, before the rest is dropped or kept. */
+/** Fraction of carried (not banked) silver destroyed on death, before the rest drops by the corpse. Being downed costs nothing. */
 export const DEATH_SILVER_LOSS = 0.25;
 
 /** Trades: fraction of the silver each party receives that is destroyed at settlement (minimum 1 when any silver moves). */
@@ -745,4 +795,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, party: PARTY, settlement: SETTLEMENT, buildings: BUILDINGS, food: FOOD, starterKit: STARTER_KIT, orbs: ORBS, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, death: DEATH, hood: HOOD, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, party: PARTY, settlement: SETTLEMENT, buildings: BUILDINGS, food: FOOD, starterKit: STARTER_KIT, orbs: ORBS, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };

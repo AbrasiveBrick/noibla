@@ -103,42 +103,49 @@ test('gear determines abilities; town is safe; PvP only in the frontier; combat 
   } finally { await w.close(); }
 });
 
-test('death: safe wilderness keeps everything; frontier drops carried + equipped items for others to loot; bank and skills are safe', async () => {
+test('death: a beast downs you, a bandage saves you once, and then death is for good, the safe wilds included', async () => {
   const w = await world({ speed: 80 });
   try {
     const v = await w.bot('Doomed');
     const looter = await w.bot('Looter');
     const me = await v.whoami();
-    // Prepare: copper ore carried, silver banked, punching skill.
     await v.travelTo('wilds');
     await v.gatherItem('copper_ore', 2);
     const boar = await v.approachMob('boar');
     await v.sendWhenReady('attack', { targetId: boar.id });
-    // Stand still and let the boar win (safe wilderness).
-    await v.waitFor(async () => (await v.observe()).self.zone === 'town' || null, { timeoutMs: 20_000, what: 'death in the wilds' });
+    // Stand still and let the boar win.
+    const down = await v.waitForEvent((e) => e.type === 'self.downed', 20_000);
+    assert.equal(down.data.bandages, 1, 'from the kit');
     let obs = await v.observe();
-    assert.ok(obs.self.inventory.some((s) => s.item === 'copper_ore'), 'safe-zone death keeps inventory');
-    // Every death destroys 25% of carried silver, safe zones included: 20 → 15.
-    assert.equal(await v.count('silver'), 15);
-    await v.deposit([{ item: 'silver', qty: 15 }]);
-    const xpBefore = obs.self.skills.unarmed.xp + obs.self.skills.mining.xp;
+    assert.deepEqual([obs.self.zone, obs.self.hp, obs.self.dead], ['wilds', 0, null], 'down where they fell');
+    await v.revive();
+    obs = await v.waitReady();
+    assert.equal(obs.self.downed, null);
+    assert.ok(obs.self.hp > 0);
+    assert.equal(await v.count('silver'), 20, 'being downed costs no silver');
+    assert.ok(obs.self.inventory.some((s) => s.item === 'copper_ore'), 'nor anything carried');
 
-    await Promise.all([v.travelTo('frontier'), looter.travelTo('frontier')]);
+    await v.travelTo('frontier');
     const wraith = await v.approachMob('wraith');
     await v.sendWhenReady('attack', { targetId: wraith.id });
     const died = await v.waitForEvent((e) => e.type === 'self.died', 20_000);
-    assert.equal(died.data.zone, 'frontier');
+    assert.deepEqual([died.data.zone, died.data.bledOut, died.data.killerName], ['frontier', true, 'Wraith']);
     obs = await v.observe();
-    assert.equal(obs.self.zone, 'town');
+    assert.equal(obs.self.zone, 'frontier', 'no respawn');
     assert.deepEqual(obs.self.inventory, []);
-    assert.deepEqual((await v.bank()).items, [{ item: 'silver', qty: 15 }]);
-    assert.ok(obs.self.skills.unarmed.xp + obs.self.skills.mining.xp >= xpBefore);
+    assert.equal(obs.self.dead?.corpseId, died.data.corpseId);
+    const refused = await v.request('bank.view', {});
+    assert.equal(!refused.ok && refused.error.code, 'DEAD');
+    assert.match(!refused.ok ? refused.error.hint ?? '' : '', /register a new character/i);
 
+    await looter.travelTo('frontier');
     await looter.goTo(died.data.bagId);
     const lo = await looter.observe();
+    assert.ok(lo.zone.corpses.some((c) => c.victimId === me.playerId));
     const bag = lo.zone.lootBags.find((b) => b.ownerId === me.playerId)!;
     assert.ok(bag.inRange && bag.id === died.data.bagId);
     assert.ok(bag.items.some((s) => s.item === 'copper_ore'));
+    assert.equal(bag.items.find((s) => s.item === 'silver')?.qty, 15, 'a quarter of the carried silver is destroyed');
     const taken = await looter.lootAll(bag.id);
     assert.ok(taken.taken.some((s) => s.item === 'copper_ore'));
     assert.ok((await looter.count('copper_ore')) >= 2);

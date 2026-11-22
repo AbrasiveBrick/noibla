@@ -11,8 +11,11 @@ export interface Facts {
   kitTradeId?: string; kitReceiptProducer?: TradeReceipt; kitReceiptFighter?: TradeReceipt;
   lockFirst?: CommandResponse; lockReplay?: CommandResponse; silverBeforeLock?: number; silverAfterLock?: number;
   fighterCaughtUp?: number;
-  fighterBankAfterDeath?: { item: string; qty: number }[];
-  fighterSkillsKept?: boolean;
+  successor?: GameClient;
+  deadRefusal?: string;
+  reportFirst?: boolean;
+  heirBank?: { item: string; qty: number }[];
+  heirSkillXp?: number;
   fighterDeath?: { zone: string; dropped: { item: string; qty: number }[]; killer: string };
   rivalLoot?: { item: string; qty: number }[];
   scamTradeId?: string; scamReceiptProducer?: TradeReceipt; scamViewBeforeLock?: TradeView;

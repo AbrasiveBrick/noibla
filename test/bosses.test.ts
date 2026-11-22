@@ -81,7 +81,7 @@ function fight(type: string, team: BuildId[], defense: Defense = 'timed', lagMs 
       assert.ok(s.now() - start < 180_000, `${team} vs ${type} never ended`);
       for (const id of alive) {
         const p = s.g.players.get(id)!;
-        if (p.zone !== s.boss.zone) { alive.delete(id); continue; }
+        if (p.downed || p.dead) { alive.delete(id); continue; }
         if (p.busyUntil + lagMs > s.now()) continue;
         const armor = p.equipment.armor ? itemDef(p.equipment.armor)?.abilities ?? [] : [];
         const ready = (a: AbilityId) => armor.includes(a) && (p.cooldowns[a] ?? 0) <= s.now();
@@ -140,4 +140,24 @@ test('enrage comes into play in slow fights and not in quick ones', () => {
   assert.deepEqual(fight('elder_bear', ['t3Veteran', 't3Veteran', 't3Veteran']), { won: true, enraged: false }, 'a veteran trio beats the timer');
   assert.deepEqual(fight('ash_wyrm', ['t3', 't3']), { won: false, enraged: true }, 'an untrained duo runs out of time');
   assert.deepEqual(fight('ash_wyrm', ['t3', 't3', 't3']), { won: true, enraged: false }, 'a trio beats the timer');
+});
+
+test('a bandage is no second wind: going down alone resets the boss', () => {
+  for (const type of BOSSES) {
+    const s = setup(type, ['t3Veteran']);
+    try {
+      const [id] = s.ids;
+      const p = () => s.g.players.get(id)!;
+      for (let i = 0; i < 20_000 && !p().downed; i++) {
+        if (p().busyUntil <= s.now()) s.send(id, 'attack', { targetId: s.boss.id });
+        s.step();
+      }
+      assert.ok(p().downed, `${type} downs a lone veteran`);
+      assert.ok(s.send(id, 'revive').ok, 'the bandage from the kit');
+      for (let i = 0; i < 400 && p().downed; i++) s.step();
+      assert.ok(!p().downed && p().hp > 0 && p().hp < s.g.maxHp(p()) / 2, 'back on little HP');
+      assert.equal(s.boss.hp, MOB_TYPES[type].hp, `the ${type} is whole again`);
+      assert.equal(s.boss.engagedAt, undefined);
+    } finally { s.g.close(); }
+  }
 });

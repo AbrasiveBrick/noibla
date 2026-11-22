@@ -88,9 +88,9 @@ function settle(f: Fake, size: number) {
 }
 
 test('catalog: buildings promise nothing a later stage owes, and hide their odds', () => {
-  assert.deepEqual(Object.keys(BUILDINGS).sort(), ['farm', 'forge_hall', 'huts', 'kitchen', 'palisade', 'storehouse', 'watchtower', 'workshop'], 'the infirmary waits for stage 5');
+  assert.deepEqual(Object.keys(BUILDINGS).sort(), ['farm', 'forge_hall', 'huts', 'infirmary', 'kitchen', 'palisade', 'storehouse', 'watchtower', 'workshop'], 'the infirmary came with stage 5');
   for (const b of Object.values(BUILDINGS)) {
-    assert.doesNotMatch(b.description, /downed|raid|ally|allies|revive|\bkeys?\b/i, `${b.id} advertises a later stage`);
+    assert.doesNotMatch(b.description, b.id === 'infirmary' ? /raid|ally|allies|\bkeys?\b/i : /downed|raid|ally|allies|revive|\bkeys?\b/i, `${b.id} advertises a later stage`);
     // Stage 4 ships exactly these three effects, each on its own building.
     for (const [word, owner] of [[/witness/i, 'watchtower'], [/\block/i, 'storehouse'], [/pilfer|steal|theft/i, null]] as const) {
       const may = owner ? b.id === owner : ['watchtower', 'storehouse', 'huts'].includes(b.id);
@@ -659,7 +659,7 @@ test('shared work attack: idle alts, bought ore and ore handed over by outsiders
 test('shared work attack: what left the inventory, by bank, refining or death, is no longer gathered work', () => {
   const f = fake();
   try {
-    const { ids: [A], mine, give, ownSmelt, handed, home } = pooling(f);
+    const { ids: [A], mine, give, ownSmelt, handed } = pooling(f);
     const banked = mine(A, 10);
     f.put(A, f.g.map.places.find((x) => x.id === 'bank')!);
     f.ok(A, 'bank.deposit', { items: [{ item: 'copper_ore', qty: banked }] });
@@ -673,9 +673,8 @@ test('shared work attack: what left the inventory, by bank, refining or death, i
 
     const dropped = mine(A, 10);
     f.g.mutate(() => killPlayer(f.g, f.p(A), { kind: 'mob', id: 'wolf', name: 'Wolf' }));
-    handed(A, dropped);
-    home(A);
-    assert.equal(give(A, dropped), 0, 'died, then got as much back');
+    assert.ok(dropped > 0);
+    assert.equal(f.g.settlements.get(f.p(A).settlementId!)!.work[A]?.gathered.copper_ore, undefined, 'died: none of it is gathered work');
   } finally { f.g.close(); }
 });
 
@@ -1160,7 +1159,7 @@ test('saves: existing players get only the new tools, once, and older settlement
 
     // Turn the save back into what stage 2 wrote.
     const db = new DatabaseSync(dbPath);
-    const added = ['copper_hoe', 'copper_trowel', 'copper_pot'];
+    const added = ['copper_hoe', 'copper_trowel', 'copper_pot', 'field_bandage'];
     for (const row of db.prepare('SELECT id, data FROM players').all() as { id: string; data: string }[]) {
       const p = JSON.parse(row.data);
       for (const t of added) delete p.inventory[t];
@@ -1180,7 +1179,7 @@ test('saves: existing players get only the new tools, once, and older settlement
       f = fake({ dbPath });
       for (const id of [A, B, untouched]) for (const t of added) assert.equal(f.p(id).inventory[t], 1, `${t}, restart ${restart}`);
       assert.equal(f.p(untouched).inventory.copper_hammer, undefined, 'the rest of the kit is not granted again');
-      assert.equal(STARTER_KIT.length, 10);
+      assert.equal(STARTER_KIT.length, 11);
       const s = f.g.settlements.get(sid)!;
       assert.equal(s.stockpile.stone, 3);
       assert.deepEqual([s.buildings, s.level], [[], 1]);
@@ -1261,7 +1260,7 @@ function bossFight(type: string, build: { sword: string; armor: string; level: n
       let standing = 0;
       for (const id of ids) {
         const p = f.p(id);
-        if (p.zone !== boss.zone || p.stats.deaths) continue;
+        if (p.downed || p.dead) continue;
         standing++;
         if (p.busyUntil + lagMs > f.now()) continue;
         const hp = p.hp / f.g.maxHp(p);
