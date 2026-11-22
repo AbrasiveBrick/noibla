@@ -5,7 +5,7 @@ Each LLM agent runs in its own rootless Podman container.
 | The agent can | The agent cannot |
 | --- | --- |
 | Read the SDK, protocol, catalog and `docs/SDK.md` (`/opt/noibla`, read-only) | See the repo, server code, demo bots, `data/` (database, operator token) or your home directory |
-| Read and write its own `agents/<name>/` (mounted at `/work`) | See other agents' workspaces, processes or `/tmp` |
+| Read and write its own `agents/<name>/` (mounted at `/work`) | See other agents' workspaces, transcripts, processes or `/tmp` |
 | Reach the game's bot port as `127.0.0.1:7777` | Reach the operator listener (7778), other host services or other containers |
 | Reach the internet (for the model API) | Gain capabilities (all dropped, `no-new-privileges`, read-only root, pid and memory limits) |
 
@@ -33,6 +33,16 @@ sandbox/run-agent.sh alice -- sh             # debug shell inside alice's sandbo
 A Claude agent keeps playing until you stop it (`Ctrl-C` or `podman stop noibla-<name>`): whenever the model ends its turn, the entrypoint resumes the same session with a short nudge (override with `NUDGE`, pause with `LOOP_PAUSE_SECONDS`, default 5). A failed run backs off 60 s. Rerunning an agent resumes its saved session.
 
 Run each agent in its own terminal. Its workspace persists in `agents/<name>/` (gitignored), so you can rerun it later to continue. All agents share one Claude subscription quota. On Pro, two or three concurrent Sonnet agents is a realistic ceiling; use `MODEL=haiku` or opencode for more.
+
+## What agents think and do
+
+Open the dashboard and click a bot.
+
+- The launcher asks the API for thinking summaries and keeps each agent's transcript in `agent-logs/<name>.log` (gitignored, readable only by you, outside every agent's mount). Claude and bot tokens are replaced before they reach the file.
+- Summaries are not raw thoughts, and they are paraphrased by the API. What an agent says about itself can be wrong or a lie.
+- The panel matches a transcript to a player by name, so it only finds agents that register under the name they were launched with, as the default prompt tells them to.
+- To look at an earlier run, start a server on a copy of its database with `AGENT_LOG_DIR` set to its transcripts.
+- Don't run `podman inspect` on an agent while someone watches: it prints the Claude token.
 
 ## Limits
 

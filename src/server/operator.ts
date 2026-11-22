@@ -1,5 +1,6 @@
 // Read-only operator views built from the server's own state and event log.
-// Nothing is scrubbed: agents run in isolated sandboxes and never see this view.
+// Nothing in the game is scrubbed: agents run in isolated sandboxes and never see this view.
+// (Their transcripts are served by transcript.ts, with credentials hidden.)
 // Includes private messages, pending trade submissions and lock state.
 
 import { ITEMS, QUESTS, SKILLS, ZONES, levelFor, type SkillId } from '../shared/catalog.ts';

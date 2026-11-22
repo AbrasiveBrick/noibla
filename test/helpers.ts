@@ -19,7 +19,7 @@ let counter = 0;
 
 export async function world(o: { speed?: number; dir?: string } = {}): Promise<World> {
   const dir = o.dir ?? mkdtempSync(join(tmpdir(), 'noibla-test-'));
-  const server = await startServer({ dbPath: join(dir, 'world.db'), port: 0, operatorPort: 0, speed: o.speed ?? 50, operatorToken: OP, log: () => {} });
+  const server = await startServer({ dbPath: join(dir, 'world.db'), port: 0, operatorPort: 0, speed: o.speed ?? 50, operatorToken: OP, agentLogDir: join(dir, 'agent-logs'), log: () => {} });
   const clients: GameClient[] = [];
   return {
     server, url: server.url, dir,
