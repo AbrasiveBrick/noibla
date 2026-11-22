@@ -9,6 +9,8 @@
 //   the operator  a `theft` event with all of it.
 //   anyone else   nothing. A pilfer spends the same number of event ids whatever the evidence came to, and the logs
 //                 number their entries per settlement, so no gaps in ids tell what it came to.
+// Nor may the clock tell: a pilfer writes, queues and sends the same whether or not anyone saw it, so do the same work
+// for every possible witness and never branch on who saw before a later tick (Game.emitCopy).
 // docs/COMMUNITY_PLAN.md (stage 4) says what may still be inferred.
 
 import { randomInt } from 'node:crypto';
@@ -28,6 +30,8 @@ import { requireReady } from './world.ts';
  */
 const ROLL_RANGE = 1_000_000;
 const happens = (chance: number) => randomInt(ROLL_RANGE) < chance * ROLL_RANGE;
+/** Addresses the copy of a bystander who saw nothing: no player has this id, so it reaches no one. */
+const NOBODY = '';
 
 /** Whose plot `p` pilfers at: their own settlement's, whatever their role. The one place that decides who may. */
 function pilferTarget(g: Game, p: Player): Settlement {
@@ -115,7 +119,10 @@ function carryOff(g: Game, p: Player, s: Settlement, act: Sighting['act'], taken
   p.busyUntil = now + busyMs;
 
   const everyone = [...g.players.values()];
-  const witnesses = everyone.filter((o) => o.id !== p.id && o.zone === s.zone && !o.travel && happens(CRIME_ODDS.witness));
+  const bystanders = everyone.filter((o) => o.id !== p.id && o.zone === s.zone && !o.travel).map((o) => ({ o, saw: happens(CRIME_ODDS.witness) }));
+  const witnesses = bystanders.filter((b) => b.saw).map((b) => b.o);
+  // Kept in the operator's event too, so that its row is as long either way.
+  const missed = bystanders.filter((b) => !b.saw).map((b) => b.o);
   // The tower makes out who is at the plot, not whose hand it is. Listed in the world's order, not the thief first.
   const watched = works(s, 'watchtower') && happens(CRIME_ODDS.watchtower) ? everyone.filter((o) => atPlot(g, o, s)) : [];
   const stockpile = act === 'stockpile.pilfer';
@@ -126,11 +133,12 @@ function carryOff(g: Game, p: Player, s: Settlement, act: Sighting['act'], taken
     ...(owner ? { owner: { id: owner.id, name: owner.name } } : {}),
   };
   const theft = g.emit('theft', { kind: 'operator' }, {
-    ...saw, witnesses: witnesses.map((o) => ({ id: o.id, name: o.name })), watched: watched.map((o) => ({ id: o.id, name: o.name })), traces,
+    ...saw, witnesses: witnesses.map((o) => ({ id: o.id, name: o.name })), missed: missed.map((o) => ({ id: o.id, name: o.name })), watched: watched.map((o) => ({ id: o.id, name: o.name })), traces,
   }, { zone: s.zone, actor: p });
-  for (const o of witnesses) {
-    g.store.run('INSERT INTO sightings(ts, player_id, data) VALUES(?, ?, ?)', now, o.id, JSON.stringify(saw));
-    g.emitCopy(theft, 'witness.saw', o.id, saw);
+  for (const b of bystanders) {
+    // Under their own id either way: a stand-in id would touch fewer index pages, and the commit would be quicker.
+    g.store.run('INSERT INTO sightings(ts, player_id, data, seen) VALUES(?, ?, ?, ?)', now, b.o.id, JSON.stringify(saw), b.saw ? 1 : 0);
+    g.emitCopy(theft, 'witness.saw', b.saw ? b.o.id : NOBODY, saw);
   }
   for (const o of watched) logWatch(g, s, now, o, 'at_pilfer');
   // No audit entry for a stash: it would show every member what was in it.
@@ -146,7 +154,7 @@ function carryOff(g: Game, p: Player, s: Settlement, act: Sighting['act'], taken
 /** Your own sightings, newest first. The row ids stay in: their gaps would count other people's. */
 function witnessLog(g: Game, p: Player, payload: Record<string, any>) {
   const limit = optInt(payload, 'limit', 1, 200, SETTLEMENT.logPage);
-  const entries: Sighting[] = g.store.all<{ ts: number; data: string }>('SELECT ts, data FROM sightings WHERE player_id = ? ORDER BY id DESC LIMIT ?', p.id, limit)
+  const entries: Sighting[] = g.store.all<{ ts: number; data: string }>('SELECT ts, data FROM sightings WHERE player_id = ? AND seen = 1 ORDER BY id DESC LIMIT ?', p.id, limit)
     .map((r) => ({ ts: r.ts, ...JSON.parse(r.data) }));
   return { entries };
 }

@@ -1,7 +1,7 @@
 // Authoritative game server core: state, transactions, idempotent command
 // execution, event visibility, and the world tick.
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { KIT_ADDED, KIT_VERSION, MOB_TYPES, NODE_TYPES, STARTER_KIT, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } from '../shared/catalog.ts';
 import { MAP_LAYOUT, generateMap, nearestWalkable, regionAt, type WorldMap } from '../shared/map.ts';
 import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/protocol.ts';
@@ -40,6 +40,8 @@ const RATE_PER_SEC = 40;
 const RATE_BURST = 80;
 /** A bot without an open event stream counts as online this long after its last command. Agents often think for 10-30 s between calls. */
 const ONLINE_WINDOW_MS = 60_000;
+/** How long after the act a copy (emitCopy) is sent, in real ms. */
+const COPY_DELAY_MS = [250, 1000] as const;
 /** Identical failures (same command type and error code, back to back) before the error carries `repeated`. */
 export const REPEAT_THRESHOLD = 3;
 /** Game-clock spacing of the operator's per-player progression snapshots. */
@@ -76,7 +78,9 @@ export class Game {
   private dirtyTrades = new Set<string>();
   private dirtyParties = new Set<string>();
   private dirtySettlements = new Set<string>();
-  private outbox: { ev: GameEvent; vis: Visibility }[] = [];
+  private outbox: { ev: GameEvent; vis: Visibility; delayMs?: number }[] = [];
+  /** Committed copies (emitCopy) waiting to be sent by a later tick. */
+  private whispers: { ev: GameEvent; vis: Visibility; dueAt: number }[] = [];
   private subscribers = new Set<Subscriber>();
   private eventSeq: number;
   private rate = new Map<string, { tokens: number; at: number }>();
@@ -304,9 +308,13 @@ export class Game {
   /**
    * Tells one player their version of `of` under the same id, so however many are told, the ids in everyone's stream
    * stay the same. The copy carries nothing else of the original, and the operator has the original.
+   *
+   * It is sent by a tick, a random moment later: writing to a stream takes time, so sending it with the command would
+   * let whoever sent that time how many were told. Emit one copy per player who could have been told, to NOBODY for
+   * those who weren't, so that the command does the same work either way.
    */
   emitCopy(of: GameEvent, type: EventType, playerId: string, data: unknown) {
-    this.outbox.push({ ev: { id: of.id, ts: of.ts, type, zone: of.zone, data }, vis: { kind: 'player', playerId } });
+    this.outbox.push({ ev: { id: of.id, ts: of.ts, type, zone: of.zone, data }, vis: { kind: 'player', playerId }, delayMs: randomInt(...COPY_DELAY_MS) });
   }
 
   /** Spends an id without an event, where whether an event was emitted is itself a secret. */
@@ -314,11 +322,24 @@ export class Game {
 
   private dispatchOutbox() {
     const items = this.outbox.splice(0);
-    for (const { ev, vis } of items) {
-      for (const sub of this.subscribers) {
-        if (this.canSee(sub, vis)) {
-          try { sub.send(ev); } catch { /* subscriber gone */ }
-        }
+    for (const { ev, vis, delayMs } of items) {
+      if (delayMs !== undefined) this.whispers.push({ ev, vis, dueAt: this.now() + delayMs });
+      else this.send(ev, vis);
+    }
+  }
+
+  private sendWhispers(now: number) {
+    if (!this.whispers.length) return;
+    const due = this.whispers.filter((w) => w.dueAt <= now);
+    if (!due.length) return;
+    this.whispers = this.whispers.filter((w) => w.dueAt > now);
+    for (const { ev, vis } of due) this.send(ev, vis);
+  }
+
+  private send(ev: GameEvent, vis: Visibility) {
+    for (const sub of this.subscribers) {
+      if (this.canSee(sub, vis)) {
+        try { sub.send(ev); } catch { /* subscriber gone */ }
       }
     }
   }
@@ -510,6 +531,7 @@ export class Game {
         tradeTick(this, now);
         this.updateOnline(now);
       });
+      this.sendWhispers(now);
       if (now - this.lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) this.snapshot(now);
     } catch (e) {
       this.log(`[tick-error] ${(e as Error).stack ?? e}`);

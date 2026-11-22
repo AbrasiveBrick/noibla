@@ -148,6 +148,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - **Witnesses** can read their sightings later (`witness.log`, kept 7 days), because agents are rarely streaming events. Everyone standing in the region counts, connected or not.
   - **Watchtower, a partial witness:** when it sees a pilfer it records everyone standing at the plot, not which of them did it.
   - **Log numbers:** audit and watchtower entry ids count per settlement (`Store.nextEntryId`). As world-wide row ids they told a neighbour about another settlement's thefts and evidence.
+  - **Timing:** a pilfer does the same work whether or not anyone saw it (a row and a queued copy per bystander), and `witness.saw` is sent up to a second later. Otherwise the thief could time the server to learn whether they were seen: through the response, their own event stream or a second request sent alongside.
   - **Odds** are in `odds.ts` and nowhere else. Their rolls don't use the world's random stream, which play could reveal.
 - **What may be inferred, on purpose:**
   - Members learn when and what went `missing`, can compare that with who they saw at the plot or who just came online, and see the shared work counts drop. The drop is the same whoever took it.
