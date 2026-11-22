@@ -1,6 +1,6 @@
-import type { AbilityId, SkillId, Slot, ZoneId } from '../shared/catalog.ts';
+import type { AbilityId, BuildingId, SkillId, Slot, ZoneId } from '../shared/catalog.ts';
 import type { Pos } from '../shared/map.ts';
-import type { GameEvent } from '../shared/protocol.ts';
+import type { GameEvent, PalisadeAlert } from '../shared/protocol.ts';
 import type { Bag } from './util.ts';
 import type { Game } from './game.ts';
 
@@ -19,6 +19,10 @@ export interface Player {
   equipment: Partial<Record<Slot, string>>;
   /** Received the starter tool kit (players from before the tool slot get it on load). */
   toolKit?: boolean;
+  /** Starter kit version already granted (see KIT_VERSION). Optional: saves from before stage 3 have none. */
+  kitVersion?: number;
+  /** Well fed until then (see FOOD). */
+  wellFedUntil?: number;
   skills: Partial<Record<SkillId, number>>;
   busyUntil: number;
   cooldowns: Partial<Record<AbilityId, number>>;
@@ -83,9 +87,25 @@ export interface Settlement {
   /** Expelled or exiled players: barred from joining an open settlement until invited again. */
   barred: Record<string, number>;
   motions: SettlementMotion[];
-  /** 1 = camp. Stage 3 buildings raise it. */
+  /** Public level, from the buildings that stand and the members (see levelOf). */
   level: number;
+  // Saves from before stage 3 lack the fields below: upgradeSettlement adds them on load.
+  buildings: SettlementBuilding[];
+  /** Construction under way. */
+  projects: Partial<Record<BuildingId, SettlementProject>>;
+  /** Owner id -> stash. It stays the owner's after they leave. */
+  stashes: Record<string, Bag>;
+  /** Shared work by member: raw units that cover others' refining, and the member's fraction of output carried per recipe. */
+  work: Record<string, { cover: Bag; carry: Record<string, number> }>;
+  /** Latest palisade alerts, oldest first. */
+  alerts: PalisadeAlert[];
+  nextIncomeAt?: number;
 }
+
+/** A finished building. `unpaid`: the stockpile could not pay its upkeep, so it does nothing. */
+export interface SettlementBuilding { id: BuildingId; builtAt: number; paidUntil: number; unpaid?: boolean }
+
+export interface SettlementProject { materials: Bag; work: number; startedBy: string }
 
 export interface Party {
   id: string;

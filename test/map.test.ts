@@ -28,7 +28,10 @@ function checkMap(m: WorldMap) {
   for (const z of Object.values(ZONES)) reach(m.anchors[z.id], `${z.id} anchor`);
   // Places: one per station plus bank, quest board and shop, all usable from the plaza.
   const placeIds = m.places.map((p) => p.id).sort();
-  for (const station of new Set(Object.values(RECIPES).map((r) => r.station))) assert.ok(placeIds.includes(station), `station ${station} placed`);
+  for (const station of new Set(Object.values(RECIPES).map((r) => r.station))) {
+    if (station === 'kitchen') assert.ok(!(placeIds as string[]).includes(station), 'only settlements have kitchens');
+    else assert.ok(placeIds.includes(station), `station ${station} placed`);
+  }
   for (const id of ['bank', 'quest_board', 'shop']) assert.ok(placeIds.includes(id as any), `${id} placed`);
   for (const p of m.places) {
     reach(p, p.id);

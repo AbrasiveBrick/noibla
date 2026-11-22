@@ -17,7 +17,7 @@ test('catalog: every job has a tool family in three tiers, each craftable at the
       assert.equal(!!RECIPES[id].requiresFocus, tier === 3, id);
     }
   }
-  assert.equal(STARTER_KIT.length, 7);
+  assert.equal(STARTER_KIT.length, 10);
 });
 
 test('new players carry a copper kit; jobs need the matching tool equipped', async () => {

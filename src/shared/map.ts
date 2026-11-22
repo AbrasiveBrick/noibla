@@ -23,7 +23,7 @@ export interface Pos { x: number; y: number }
 export const MAP_LAYOUT = '2';
 
 /** Things you use by standing near them in town. Crafting stations plus the bank, quest board and shop. */
-export type PlaceId = StationId | 'bank' | 'quest_board' | 'shop';
+export type PlaceId = Exclude<StationId, 'kitchen'> | 'bank' | 'quest_board' | 'shop';
 
 /** A rectangle of tiles: (x, y) belongs to the region with x0 <= x <= x1 and y0 <= y <= y1. */
 export interface MapRegion { id: ZoneId; x0: number; x1: number; y0: number; y1: number }

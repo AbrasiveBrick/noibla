@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS stockpile_log (
   action TEXT NOT NULL, items TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS stockpile_log_settlement ON stockpile_log(settlement_id, id);
+CREATE TABLE IF NOT EXISTS watch_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, settlement_id TEXT NOT NULL, ts INTEGER NOT NULL, player_id TEXT NOT NULL, name TEXT NOT NULL,
+  move TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS watch_log_settlement ON watch_log(settlement_id, id);
 CREATE TABLE IF NOT EXISTS trades (id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, trade_id TEXT NOT NULL, counterparty_id TEXT NOT NULL,
@@ -74,6 +79,9 @@ export class Store {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.db.exec(SCHEMA);
+    // Audit rows from before stage 3 have no building.
+    const columns = this.db.prepare('PRAGMA table_info(stockpile_log)').all() as { name: string }[];
+    if (!columns.some((c) => c.name === 'building')) this.db.exec('ALTER TABLE stockpile_log ADD COLUMN building TEXT');
   }
 
   stmt(sql: string): StatementSync {

@@ -2,13 +2,15 @@
 // execution, event visibility, and the world tick.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { MOB_TYPES, NODE_TYPES, STARTER_KIT, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } from '../shared/catalog.ts';
+import { KIT_ADDED, KIT_VERSION, MOB_TYPES, NODE_TYPES, STARTER_KIT, STARTING_SILVER, BASE_HP, ZONES, type ZoneId } from '../shared/catalog.ts';
 import { MAP_LAYOUT, generateMap, nearestWalkable, regionAt, type WorldMap } from '../shared/map.ts';
 import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/protocol.ts';
 import { Store } from './store.ts';
-import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
+import { GameError, addItems, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
 import type { UniqueItem } from '../shared/protocol.ts';
 import type { CommandDef, LootBag, Mob, Party, Player, ResourceNode, Settlement, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
+import { upgradeSettlement } from './buildings.ts';
+import { constructionCommands, settlementTick } from './construction.ts';
 import { orbCommands } from './orbs.ts';
 import { partyCommands } from './party.ts';
 import { settlementCommands } from './settlement.ts';
@@ -42,7 +44,7 @@ export const REPEAT_THRESHOLD = 3;
 /** Game-clock spacing of the operator's per-player progression snapshots. */
 export const SNAPSHOT_INTERVAL_MS = 60_000;
 /** High-volume operator events pruned after `EVENT_RETENTION_MS`; trades, deaths, quests, chat etc. are kept. */
-const PRUNABLE_EVENTS = ['combat.hit', 'combat.buff', 'gather', 'travel.depart', 'travel.arrive', 'player.online', 'player.offline', 'command.failed', 'bank', 'shop', 'repair'];
+const PRUNABLE_EVENTS = ['combat.hit', 'combat.buff', 'gather', 'travel.depart', 'travel.arrive', 'player.online', 'player.offline', 'command.failed', 'bank', 'shop', 'repair', 'eat', 'stockpile.upkeep', 'settlement.alert'];
 
 export class Game {
   readonly store: Store;
@@ -94,7 +96,7 @@ export class Game {
     this.tickMs = opts.tickMs ?? 25;
     this.lastSnapshotAt = this.store.get<{ ts: number | null }>('SELECT MAX(ts) AS ts FROM snapshots')?.ts ?? -Infinity;
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
-    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands, ...settlementCommands };
+    this.commands = { ...worldCommands, ...orbCommands, ...socialCommands, ...tradeCommands, ...partyCommands, ...settlementCommands, ...constructionCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     // Procedural map: generated when the world is created; the seed is stored so restarts rebuild the same map.
     let mapSeed = Number(this.store.getMeta('map_seed') ?? NaN);
@@ -121,8 +123,7 @@ export class Game {
     for (const row of this.store.all<{ id: string; name: string; token_hash: string; data: string }>('SELECT id, name, token_hash, data FROM players')) {
       const p = this.migratePlayer(JSON.parse(row.data), relayout);
       if (relayout) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id);
-      // Players from before the tool slot get the starter tool kit once.
-      if (!p.toolKit) { for (const k of STARTER_KIT) p.inventory[k.item] = (p.inventory[k.item] ?? 0) + k.qty; p.toolKit = true; this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id); }
+      if (grantKit(p)) this.store.run('UPDATE players SET data = ? WHERE id = ?', JSON.stringify(p), p.id);
       this.players.set(p.id, p);
       this.nameIndex.set(p.name.toLowerCase(), p.id);
       this.tokenIndex.set(row.token_hash, p.id);
@@ -150,7 +151,7 @@ export class Game {
       this.parties.set(pt.id, pt);
     }
     for (const row of this.store.all<{ data: string }>('SELECT data FROM settlements')) {
-      const s = JSON.parse(row.data) as Settlement;
+      const s = upgradeSettlement(JSON.parse(row.data));
       this.settlements.set(s.id, s);
     }
     if (relayout) this.store.setMeta('map_layout', MAP_LAYOUT);
@@ -256,7 +257,7 @@ export class Game {
     }
     for (const id of this.dirtySettlements) {
       const row = this.store.get<{ data: string }>('SELECT data FROM settlements WHERE id = ?', id);
-      if (row) this.settlements.set(id, JSON.parse(row.data)); else this.settlements.delete(id);
+      if (row) this.settlements.set(id, upgradeSettlement(JSON.parse(row.data))); else this.settlements.delete(id);
     }
     this.clearDirty();
   }
@@ -343,7 +344,7 @@ export class Game {
     const now = this.now();
     const p: Player = {
       id: newId('p'), name, createdAt: now, zone: 'town', pos: { ...this.map.spawn }, travel: null, hp: BASE_HP,
-      inventory: { silver: STARTING_SILVER, ...Object.fromEntries(STARTER_KIT.map((s) => [s.item, s.qty])) }, bank: {}, equipment: {}, toolKit: true, skills: {},
+      inventory: { silver: STARTING_SILVER, ...Object.fromEntries(STARTER_KIT.map((s) => [s.item, s.qty])) }, bank: {}, equipment: {}, toolKit: true, kitVersion: KIT_VERSION, skills: {},
       busyUntil: 0, cooldowns: {}, evadeUntil: 0, braceUntil: 0, lastCombatAt: 0, combatLockUntil: 0, lastRegenAt: 0, wear: {},
       quests: {}, stats: { kills: 0, deaths: 0 }, lastAction: { type: 'register', summary: 'arrived in Brightwater', at: now }, lastSeenAt: now,
     };
@@ -483,6 +484,7 @@ export class Game {
     try {
       this.mutate(() => {
         worldTick(this, now);
+        settlementTick(this, now);
         tradeTick(this, now);
         this.updateOnline(now);
       });
@@ -544,13 +546,27 @@ export class Game {
   }
 
   /** Housekeeping: drops old idempotency records, high-volume operator events and old failure rows. */
-  prune(opts: { commandsMs?: number; eventsMs?: number; failuresMs?: number; snapshotsMs?: number } = {}) {
+  prune(opts: { commandsMs?: number; eventsMs?: number; failuresMs?: number; snapshotsMs?: number; watchMs?: number } = {}) {
     const now = this.now();
     this.pruneCommands(opts.commandsMs);
     this.store.run(`DELETE FROM events WHERE ts < ? AND type IN (${PRUNABLE_EVENTS.map(() => '?').join(', ')})`, now - (opts.eventsMs ?? 24 * 3600_000), ...PRUNABLE_EVENTS);
+    this.store.run('DELETE FROM watch_log WHERE ts < ?', now - (opts.watchMs ?? 7 * 24 * 3600_000));
     this.store.run('DELETE FROM failures WHERE ts < ?', now - (opts.failuresMs ?? 7 * 24 * 3600_000));
     this.store.run('DELETE FROM snapshots WHERE ts < ?', now - (opts.snapshotsMs ?? 30 * 24 * 3600_000));
   }
+}
+
+/**
+ * Players from before the tool slot get the whole starter kit. Everyone else gets only the tools added since the kit
+ * version they hold. Both happen once. Returns whether the player changed.
+ */
+function grantKit(p: Player): boolean {
+  if (p.toolKit && (p.kitVersion ?? 1) >= KIT_VERSION) return false;
+  const give = !p.toolKit ? STARTER_KIT : Object.entries(KIT_ADDED).filter(([v]) => Number(v) > (p.kitVersion ?? 1)).flatMap(([, tools]) => tools);
+  addItems(p.inventory, give);
+  p.toolKit = true;
+  p.kitVersion = KIT_VERSION;
+  return true;
 }
 
 function operatorCanSee(vis: Visibility): boolean {

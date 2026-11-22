@@ -3,13 +3,14 @@
 
 import { randomBytes } from 'node:crypto';
 import {
-  ABILITIES, AFFIXES, BASE_HP, PARTY, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
-  effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type ZoneId,
+  ABILITIES, AFFIXES, BASE_HP, FOOD, PARTY, SLOTS, affixText, UNIQUE_SEP, itemDef, baseOf, isUnique, TOOL_FAMILIES, requiredToolTier, type ToolJob, CATALOG, COMBAT, DEATH_SILVER_LOSS, FOCUS, ITEMS, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, QUESTS, RECIPES, SHOP, SKILLS, TIMING, WEAR, XP, ZONES,
+  effectiveLevel, levelFor, type AbilityId, type ItemStack, type SkillId, type Slot, type StationId, type ZoneId,
 } from '../shared/catalog.ts';
 import type { AffixRoll, MobView, UniqueItem, AbilityView, AttackResult, FocusView, GearWearView, Observation, QuestProgress, SkillView, TravelView, ZoneView } from '../shared/protocol.ts';
 import { MAP_RULES, dist, findPath, inBounds, nearestWalkable, pathLength, placeOf, plotOf, pointAlong, regionAt, walkable, type PlaceId, type Pos } from '../shared/map.ts';
 import type { Game } from './game.ts';
-import { MOB_LOOT, SKILL_ODDS } from './odds.ts';
+import { buildingStation, noteCrossing, recordWork, useSharedWork } from './buildings.ts';
+import { BUILDING_ODDS, MOB_LOOT, SKILL_ODDS } from './odds.ts';
 import type { CommandDef, LootBag, Mob, Player, Walk } from './types.ts';
 import { addItems, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
 import { alliesInZone, invitesFor, partyDamageMult, partyOf, partyView } from './party.ts';
@@ -89,8 +90,8 @@ export function gearView(p: Player, reveal = false): Partial<Record<Slot, GearWe
   return out;
 }
 
-function addWear(g: Game, p: Player, slot: Slot, amount: number) {
-  if (slot === 'tool') amount *= 1 - pct(affixSum(p, ['tool'], 'durable'));
+export function addWear(g: Game, p: Player, slot: Slot, amount: number) {
+  if (slot === 'tool') amount *= 1 - pct(affixSum(p, ['tool'], 'durable') + affixSum(p, ['tool'], 'build_durable'));
   const item = p.equipment[slot];
   if (!item || amount <= 0) return;
   const before = wearOf(p, item);
@@ -99,7 +100,7 @@ function addWear(g: Game, p: Player, slot: Slot, amount: number) {
   p.wear[item] = Math.min(WEAR.max, before + amount);
   if (p.wear[item] >= WEAR.max) {
     if (slot === 'armor') p.hp = Math.min(p.hp, maxHp(p));
-    g.emit('self.gearBroken', { kind: 'player', playerId: p.id }, { slot, item, note: `${item} is broken and works at ${WEAR.brokenMultiplier * 100}% strength. Repair it in town with the "repair" command (${repairCost(item, WEAR.max)} silver).` }, {});
+    g.emit('self.gearBroken', { kind: 'player', playerId: p.id }, { slot, item, note: `${item} is broken and works at ${WEAR.brokenMultiplier * 100}% strength. Repair it in town or at your settlement's forge hall with the "repair" command (${repairCost(item, WEAR.max)} silver).` }, {});
   }
   g.markPlayer(p);
 }
@@ -109,9 +110,11 @@ export function isFocused(p: Player, s: SkillId): boolean { return !!p.focus?.in
 /** The level that counts for rules (see FOCUS): full trained level when focused, capped otherwise. */
 export function skillLevel(p: Player, s: SkillId): number { return effectiveLevel(p.skills[s] ?? 0, isFocused(p, s)); }
 
-/** Adds XP (multiplied when the skill is focused) and returns the amount granted. */
-export function gainXp(p: Player, s: SkillId, xp: number): number {
-  const gained = Math.max(0, Math.round(xp * (isFocused(p, s) ? FOCUS.xpMult : 1)));
+export function isWellFed(g: Game, p: Player): boolean { return (p.wellFedUntil ?? 0) > g.now(); }
+
+/** Adds XP (multiplied when the skill is focused, and again when Well fed) and returns the amount granted. */
+export function gainXp(g: Game, p: Player, s: SkillId, xp: number): number {
+  const gained = Math.max(0, Math.round(xp * (isFocused(p, s) ? FOCUS.xpMult : 1) * (isWellFed(g, p) ? FOOD.xpMult : 1)));
   p.skills[s] = (p.skills[s] ?? 0) + gained;
   return gained;
 }
@@ -145,7 +148,7 @@ export function equippedToolTier(p: Player, job: ToolJob): number {
 }
 
 /** Fails with TOOL_REQUIRED unless the matching tool of a high enough tier is equipped. Returns the busy-time multiplier (broken tools are slow). */
-function requireTool(g: Game, p: Player, job: ToolJob, tier: number, what: string): number {
+export function requireTool(g: Game, p: Player, job: ToolJob, tier: number, what: string): number {
   if (!TOOL_FAMILIES[job]) return 1;
   const need = requiredToolTier(tier);
   const have = equippedToolTier(p, job);
@@ -170,7 +173,7 @@ function requireArrived(g: Game, p: Player): ZoneId {
   return p.zone;
 }
 
-function requireReady(g: Game, p: Player) {
+export function requireReady(g: Game, p: Player) {
   const now = g.now();
   if (p.busyUntil > now) fail('BUSY', 'still performing the previous action', p.busyUntil - now);
 }
@@ -272,7 +275,7 @@ export function observe(g: Game, p: Player): Observation {
       hp: p.hp, maxHp: maxHp(p), busyMs: Math.max(0, p.busyUntil - now),
       inCombat: now - p.lastCombatAt < g.ms(TIMING.outOfCombatMs), combatLockedMs: Math.max(0, p.combatLockUntil - now),
       equipment: { ...p.equipment }, inventory: toStacks(p.inventory), skills, abilities,
-      effects: { evadeMs: Math.max(0, p.evadeUntil - now), braceMs: Math.max(0, p.braceUntil - now) },
+      effects: { evadeMs: Math.max(0, p.evadeUntil - now), braceMs: Math.max(0, p.braceUntil - now), wellFedMs: Math.max(0, (p.wellFedUntil ?? 0) - now) },
       quests: questViews(p),
       focus: focusView(g, p),
       gear: gearView(p),
@@ -377,6 +380,7 @@ function walkTick(g: Game, p: Player, now: number) {
     g.emit('travel.depart', { kind: 'zone', zone: from }, { playerId: p.id, name: p.name, from, to: region }, { zone: from, actor: p });
     p.zone = region;
     g.emit('travel.arrive', { kind: 'zone', zone: region }, { playerId: p.id, name: p.name, from, to: region }, { zone: region, actor: p });
+    noteCrossing(g, p, from, region);
     g.setLastAction(p, 'travel', `entered ${region}`);
     g.markPlayer(p);
   }
@@ -421,8 +425,9 @@ function gather(g: Game, p: Player, payload: Record<string, any>) {
   if (node!.charges === def.maxCharges) node!.nextChargeAt = now + g.ms(TIMING.nodeRegenMs);
   node!.charges--;
   addItems(p.inventory, [{ item: def.item, qty }]);
+  recordWork(g, p, def.item, qty);
   const shard = findShard(g, p);
-  const xp = gainXp(p, def.skill, XP.gather(def.tier));
+  const xp = gainXp(g, p, def.skill, XP.gather(def.tier));
   const busy = g.ms(TIMING.gatherMs * Math.max(0.5, 1 - 0.05 * level) * slow * (1 - pct(affixSum(p, ['tool'], 'gather_speed'))));
   p.busyUntil = now + busy;
   addWear(g, p, 'tool', WEAR.perToolUse);
@@ -451,7 +456,7 @@ function toolHint(p: Player, job: ToolJob, minTier: number): string {
   if (!tool) return `no ${family} of tier ${minTier}+ exists`;
   const r = RECIPES[tool.id];
   const ways = [`buy one from another player`];
-  if (r) ways.unshift(`craft it (recipe "${r.id}" at the ${r.station} in town: ${describe(r.inputs)}; needs ${r.skill} level ${r.minLevel})`);
+  if (r) ways.unshift(`craft it (recipe "${r.id}" at the ${r.station} in town or in your settlement's forge hall: ${describe(r.inputs)}; needs ${r.skill} level ${r.minLevel})`);
   if (SHOP[tool.id] !== undefined) ways.push(`buy it in town with shop.buy for ${SHOP[tool.id]} silver`);
   return `equip a ${tool.id} (tier ${tool.toolTier}) or better in the tool slot. This will fail until you do. Ways to get one: ${ways.join('; ')}.`;
 }
@@ -466,7 +471,7 @@ function makeItem(kind: 'refine' | 'craft') {
     if (!r) fail('BAD_REQUEST', `unknown recipe "${recipeId}"`);
     if (r!.kind !== kind) fail('BAD_REQUEST', `${recipeId} is a ${r!.kind} recipe; use the "${r!.kind}" command`);
     const zone = requireArrived(g, p);
-    requirePlace(g, p, r!.station, recipeId, 'NO_STATION');
+    const home = requireStation(g, p, r!.station, recipeId);
     requireReady(g, p);
     const level = skillLevel(p, r!.skill);
     const focused = isFocused(p, r!.skill);
@@ -482,16 +487,22 @@ function makeItem(kind: 'refine' | 'craft') {
     removeItems(p.inventory, r!.inputs, count);
     let bonus = 0;
     const toolOutput = kind === 'refine' ? affixSum(p, ['tool'], 'refine_output') / 100 : 0;
-    const chance = (focused ? Math.min(SKILL_ODDS.maxBonusOutput, SKILL_ODDS.bonusOutputPerLevel * level) : 0) + toolOutput;
+    const workshopOutput = kind === 'refine' && home?.def.id === 'workshop' ? BUILDING_ODDS.workshopOutput : 0;
+    const chance = (focused ? Math.min(SKILL_ODDS.maxBonusOutput, SKILL_ODDS.bonusOutputPerLevel * level) : 0) + toolOutput + workshopOutput;
     if (chance > 0) for (let i = 0; i < count; i++) if (g.rng() < chance) bonus++;
     // Refining tools with save_inputs: each unit may hand its inputs back.
     let saved = 0;
     const save = kind === 'refine' ? affixSum(p, ['tool'], 'save_inputs') : 0;
     if (save > 0) { for (let i = 0; i < count; i++) if (g.rng() < save / 100) saved++; if (saved) addItems(p.inventory, r!.inputs, saved); }
     const output: ItemStack = { item: r!.output.item, qty: r!.output.qty * count + bonus };
-    const made = isGearKind(output.item) ? createUniques(g, p, output.item, output.qty, itemLevel(r!.tier, level) + affixSum(p, ['tool'], 'craft_ilvl')) : null;
+    // Shared work: the village's workshop adds output on the units other members' gathering covers.
+    const shared = kind === 'refine' && home?.def.id === 'workshop' ? useSharedWork(g, home.s, p, r!, count, output.qty) : undefined;
+    if (shared) output.qty += shared.output;
+    const made = isGearKind(output.item)
+      ? createUniques(g, p, output.item, output.qty, itemLevel(r!.tier, level) + affixSum(p, ['tool'], 'craft_ilvl') + (home?.def.ilvlBonus ?? 0))
+      : null;
     addItems(p.inventory, made ? made.map((u) => ({ item: u.id, qty: 1 })) : [output]);
-    const xp = gainXp(p, r!.skill, XP[kind](r!.tier) * count);
+    const xp = gainXp(g, p, r!.skill, XP[kind](r!.tier) * count);
     const base = kind === 'refine' ? TIMING.refineMs : TIMING.craftMs;
     const speed = kind === 'refine' ? pct(affixSum(p, ['tool'], 'refine_speed')) : 0;
     const busy = g.ms(base * count * Math.max(0.5, 1 - 0.05 * level) * slow * (1 - speed));
@@ -502,8 +513,24 @@ function makeItem(kind: 'refine' | 'craft') {
     g.emit(kind, { kind: 'zone', zone }, { playerId: p.id, name: p.name, recipeId, output, station: r!.station }, { zone, actor: p });
     g.setLastAction(p, kind, `${kind === 'refine' ? 'refined' : 'crafted'} ${output.qty}× ${output.item}`);
     g.markPlayer(p);
-    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * (count - saved) })).filter((s) => s.qty > 0), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(saved ? { inputsSaved: saved } : {}), ...(made ? { items: made.map(publicUnique) } : {}) };
+    return { output, consumed: r!.inputs.map((s) => ({ item: s.item, qty: s.qty * (count - saved) })).filter((s) => s.qty > 0), xp, level: skillLevel(p, r!.skill), busyMs: busy, ...(bonus ? { bonus } : {}), ...(saved ? { inputsSaved: saved } : {}), ...(shared ? { shared } : {}), ...(made ? { items: made.map(publicUnique) } : {}) };
   };
+}
+
+/** A recipe's station: your settlement's building when you stand at it and it works, else the place in town. */
+function requireStation(g: Game, p: Player, station: StationId, what: string) {
+  const home = buildingStation(g, p, station);
+  if (home?.working) return home;
+  if (home) {
+    fail('NO_STATION', `${home.s.name}'s ${home.def.name} is closed: its upkeep is unpaid`, undefined,
+      `put ${describe(home.def.upkeep)} in the stockpile and it reopens${station === 'kitchen' ? '' : `, or use the ${station} in town`}`);
+  }
+  if (station === 'kitchen') {
+    fail('NO_STATION', `${what} needs a kitchen, which only settlements have`, undefined,
+      'stand at the plot of your own settlement with a working kitchen (goTo its plotId), or buy rations from another player');
+  }
+  requirePlace(g, p, station as PlaceId, what, 'NO_STATION');
+  return undefined;
 }
 
 /** Weapons, armor and tools are crafted as unique items. */
@@ -553,9 +580,10 @@ function bestUnique(g: Game, bag: Record<string, number>, base: string): string 
     .sort((a, b) => (g.uniques.get(b)?.ilvl ?? 0) - (g.uniques.get(a)?.ilvl ?? 0) || a.localeCompare(b))[0];
 }
 
-/** Every unique the player owns (carried, equipped, banked), for observation. */
+/** Every unique the player owns (carried, equipped, banked, stashed), for observation. */
 function uniquesOf(g: Game, p: Player): UniqueItem[] {
   const ids = new Set<string>([...Object.keys(p.inventory), ...Object.keys(p.bank), ...Object.values(p.equipment).filter((x): x is string => !!x)]);
+  for (const s of g.settlements.values()) for (const id of Object.keys(s.stashes[p.id] ?? {})) ids.add(id);
   return [...ids].filter(isUnique).sort().map((id) => g.uniques.get(id)).filter((u): u is UniqueItem => !!u).map(publicUnique);
 }
 
@@ -709,7 +737,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
     mob.aggro[p.id] = (mob.aggro[p.id] ?? 0) + damage;
     if (!mob.targetId) { mob.targetId = p.id; mob.nextAttackAt = now + g.ms(mdef.attackMs); }
     if (mdef.boss && mob.engagedAt === undefined) { mob.engagedAt = now; mob.nextAoeAt = now + g.ms(mdef.boss.aoeEveryMs); }
-    const xp = gainXp(p, skill, combatXp(damage));
+    const xp = gainXp(g, p, skill, combatXp(damage));
     g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: mob.id, targetName: mdef.name, ability, damage, targetHp: mob.hp }, { zone, actor: p });
     let loot: ItemStack[] = [];
     let killed = false;
@@ -736,6 +764,9 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
         }
         else note = `no hides: equip a skinning knife (tier ${requiredToolTier(mdef.tier)}+) in the tool slot to skin ${mdef.name}s`;
       }
+      if (!mdef.boss) {
+        for (const d of MOB_LOOT[mob.type].drops) if (d.skin) recordWork(g, p, d.item, loot.find((s) => s.item === d.item)?.qty ?? 0);
+      }
       g.store.ledger('created.mobs', silverIn(loot));
       for (const s of loot) if (itemDef(s.item)?.kind === 'orb') g.store.ledger('orbs.created.mobs', s.qty);
       const contributors = Object.keys(mob.damageBy ?? {});
@@ -754,7 +785,7 @@ function useAbility(g: Game, p: Player, payload: Record<string, any>, defaultToA
 
   const v = victim!;
   const res = damagePlayer(g, v, raw, { kind: 'player', id: p.id, name: p.name });
-  const xp = gainXp(p, skill, combatXp(res.damage));
+  const xp = gainXp(g, p, skill, combatXp(res.damage));
   g.emit('combat.hit', { kind: 'zone', zone }, { attackerId: p.id, attackerName: p.name, targetId: v.id, targetName: v.name, ability, damage: res.damage, dodged: res.dodged, targetHpPct: Math.round((v.hp / maxHp(v)) * 100), pvp: true }, { zone, actor: p });
   g.setLastAction(p, 'combat', res.killed ? `killed ${v.name}` : `attacking ${v.name}`);
   return { ability, targetId: v.id, damage: res.damage, dodged: res.dodged, targetHp: res.killed ? 0 : v.hp, killed: res.killed, loot: [], xp, busyMs: gcd, ...(weaponWear !== undefined ? { weaponWear } : {}) };
@@ -791,7 +822,7 @@ function shareKill(g: Game, killer: Player, mobType: string, contributors: strin
   for (const a of alliesInZone(g, killer)) {
     credited.add(a.id);
     const skill = weaponSkillOf(a);
-    const xp = gainXp(a, skill, Math.round(def.hp * COMBAT.xpPerDamage * PARTY.killXpShare));
+    const xp = gainXp(g, a, skill, Math.round(def.hp * COMBAT.xpPerDamage * PARTY.killXpShare));
     questProgress(g, a, 'kill', mobType, 1);
     g.emit('quest.progress', { kind: 'player', playerId: a.id }, { partyKill: true, killerName: killer.name, mobType, xp, skill }, {});
     g.markPlayer(a);
@@ -874,6 +905,7 @@ export function killPlayer(g: Game, victim: Player, source: { kind: 'mob' | 'pla
   victim.cooldowns = {};
   victim.evadeUntil = 0;
   victim.braceUntil = 0;
+  victim.wellFedUntil = 0;
   victim.lastCombatAt = 0;
   victim.combatLockUntil = 0;
   victim.busyUntil = now + g.ms(TIMING.respawnBusyMs);
@@ -904,6 +936,24 @@ function loot(g: Game, p: Player, payload: Record<string, any>) {
   g.setLastAction(p, 'loot', `looted ${describe(want)} from ${bag!.ownerName}'s bag`);
   g.markPlayer(p);
   return { taken: want, remaining: toStacks(bag!.items) };
+}
+
+// ---------- food ----------
+
+function eat(g: Game, p: Player) {
+  requireReady(g, p);
+  if ((p.inventory[FOOD.item] ?? 0) < 1) {
+    fail('NOT_ENOUGH_ITEMS', `you carry no ${FOOD.item}`, undefined, 'cook rations from grain at a settlement kitchen (refine { recipeId: "ration" }), or buy them from players');
+  }
+  g.markPlayer(p);
+  removeItems(p.inventory, [{ item: FOOD.item, qty: 1 }]);
+  const now = g.now();
+  p.wellFedUntil = now + g.ms(FOOD.wellFedMs);
+  const busy = g.ms(TIMING.eatMs);
+  p.busyUntil = now + busy;
+  g.emit('eat', { kind: 'operator' }, { playerId: p.id, name: p.name, item: FOOD.item }, { zone: p.zone, actor: p });
+  g.setLastAction(p, 'eat', `ate a ${FOOD.item}`);
+  return { ate: FOOD.item, wellFedMs: g.ms(FOOD.wellFedMs), busyMs: busy };
 }
 
 // ---------- banking ----------
@@ -1025,7 +1075,8 @@ function shopBuy(g: Game, p: Player, payload: Record<string, any>) {
 function repair(g: Game, p: Player, payload: Record<string, any>) {
   const slotArg = payload.slot === undefined ? undefined : reqStr(payload, 'slot', 10);
   if (slotArg !== undefined && !SLOTS.includes(slotArg as Slot)) fail('BAD_REQUEST', `slot must be one of ${SLOTS.join(', ')}`);
-  requirePlace(g, p, 'forge', 'repairs');
+  const hall = buildingStation(g, p, 'forge');
+  if (!hall?.working) requirePlace(g, p, 'forge', 'repairs');
   const slots: Slot[] = slotArg ? [slotArg as Slot] : SLOTS;
   const jobs: { slot: Slot; item: string; wearRemoved: number; cost: number }[] = [];
   for (const slot of slots) {
@@ -1037,9 +1088,10 @@ function repair(g: Game, p: Player, payload: Record<string, any>) {
   const total = jobs.reduce((n, j) => n + j.cost, 0);
   payFromInventory(p, total, 'this repair');
   for (const j of jobs) delete p.wear![j.item];
-  p.hp = maxHp(p);
+  // Town keeps HP full. Anywhere else a repair must not heal, or a 1 silver repair would be a full heal in PvP land.
+  p.hp = p.zone === 'town' ? maxHp(p) : Math.min(p.hp, maxHp(p));
   g.store.ledger('destroyed.repair', total);
-  g.emit('repair', { kind: 'operator' }, { playerId: p.id, name: p.name, repaired: jobs, paid: total }, { zone: 'town', actor: p });
+  g.emit('repair', { kind: 'operator' }, { playerId: p.id, name: p.name, repaired: jobs, paid: total }, { zone: p.zone, actor: p });
   g.setLastAction(p, 'repair', `repaired ${jobs.map((j) => j.item).join(', ')} for ${total} silver`);
   g.markPlayer(p);
   return { repaired: jobs, paid: total, gear: gearView(p) };
@@ -1075,7 +1127,7 @@ export function worldTick(g: Game, now: number) {
     const max = maxHp(p);
     if (p.hp < max && p.zone === 'town') { p.hp = max; g.markPlayer(p); continue; }
     if (p.hp < max && now - p.lastCombatAt >= g.ms(TIMING.outOfCombatMs) && now - p.lastRegenAt >= g.ms(TIMING.regenIntervalMs)) {
-      p.hp = Math.min(max, p.hp + Math.ceil(max * TIMING.regenFraction));
+      p.hp = Math.min(max, p.hp + Math.ceil(max * TIMING.regenFraction * (isWellFed(g, p) ? FOOD.regenMult : 1)));
       p.lastRegenAt = now;
       g.markPlayer(p);
     }
@@ -1170,4 +1222,5 @@ export const worldCommands: Record<string, CommandDef> = {
   'shop.list': ro(() => shopList()),
   'shop.buy': rw(shopBuy),
   repair: rw(repair),
+  eat: rw((g, p) => eat(g, p)),
 };

@@ -3,14 +3,15 @@
 // The public list shows a settlement's name, region, size and level (the plot marker in view shows its name), nothing else.
 // The server never judges: it records every stockpile change with its actor (stockpile_log) and leaves the rest to players.
 
-import { SETTLEMENT, TIMING, ZONES, type ItemStack } from '../shared/catalog.ts';
+import { SETTLEMENT, TIMING, ZONES, type BuildingId, type ItemStack } from '../shared/catalog.ts';
 import { MAP_RULES, dist, plotOf, type MapPlot } from '../shared/map.ts';
+import { activeLevelOf, atPlot, buildingViews, capacityOf, levelOf, projectViews, sharedWorkView, units } from './buildings.ts';
 import type {
   SettlementInviteView, SettlementMotionView, SettlementPublicView, SettlementSummary, SettlementView, StockpileEntry,
 } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { CommandDef, Player, Settlement, SettlementMotion, SettlementRole } from './types.ts';
-import { addItems, describe, fail, newId, optInt, removeItems, reqStr, stacks, toStacks } from './util.ts';
+import { addItems, describe, fail, newId, optInt, removeItems, reqStr, stacks, toBag, toStacks, type Bag } from './util.ts';
 
 const ROLES: SettlementRole[] = ['member', 'steward', 'leader'];
 const RANK: Record<SettlementRole, number> = { member: 0, steward: 1, leader: 2 };
@@ -71,6 +72,13 @@ export function settlementView(g: Game, s: Settlement, viewer: string): Settleme
       .map(([id, m]) => ({ id, name: nameOf(g, id), role: m.role, online: g.isOnline(id), joinedAt: m.joinedAt })),
     invites: liveInvites(g, s).map(([id, exp]) => ({ playerId: id, name: nameOf(g, id), expiresInMs: exp - now })),
     motions: s.motions.filter((m) => m.expiresAt > now).map((m) => motionView(g, s, m, viewer)),
+    levelName: levelOf(s).name,
+    activeLevel: activeLevelOf(s).level,
+    slots: { used: s.buildings.length + Object.keys(s.projects).length, max: levelOf(s).slots },
+    buildings: buildingViews(g, s),
+    projects: projectViews(s),
+    sharedWork: sharedWorkView(s, viewer),
+    alerts: [...s.alerts].reverse(),
   };
 }
 
@@ -78,7 +86,7 @@ export function settlementSummary(g: Game, p: Player): SettlementSummary | null 
   const s = settlementOf(g, p);
   if (!s) return null;
   const pl = plot(g, s);
-  return { id: s.id, name: s.name, zone: s.zone, plotId: s.plotId, x: pl.x, y: pl.y, role: roleOf(s, p.id)! };
+  return { id: s.id, name: s.name, zone: s.zone, plotId: s.plotId, x: pl.x, y: pl.y, role: roleOf(s, p.id)!, level: s.level, buildings: s.buildings.filter((b) => !b.unpaid).map((b) => b.id) };
 }
 
 export function settlementInvitesFor(g: Game, p: Player): SettlementInviteView[] {
@@ -99,14 +107,14 @@ function freePlots(g: Game): MapPlot[] {
 
 // ---------- guards ----------
 
-function requireMember(g: Game, p: Player): Settlement {
+export function requireMember(g: Game, p: Player): Settlement {
   const s = settlementOf(g, p);
   if (!s) fail('SETTLEMENT_STATE', 'you are not in a settlement', undefined, 'settlement.list shows the settlements; settlement.found founds one at a free plot');
   prune(g, s!);
   return s!;
 }
 
-function requireRole(g: Game, p: Player, min: SettlementRole, what: string): Settlement {
+export function requireRole(g: Game, p: Player, min: SettlementRole, what: string): Settlement {
   const s = requireMember(g, p);
   const role = roleOf(s, p.id)!;
   if (RANK[role] < RANK[min]) fail('FORBIDDEN', `${what} needs the ${min} role${min === 'leader' ? '' : ' or higher'}; you are a ${role}`, undefined, min === 'leader' ? `ask the leader (${nameOf(g, leaderOf(s))}), or replace them with settlement.vote { kind: 'leader' }` : undefined);
@@ -121,30 +129,32 @@ function requireTarget(g: Game, s: Settlement, payload: Record<string, any>, key
 }
 
 /** Stockpile use: standing (not walking) within MAP_RULES.range.plot of the settlement's plot. */
-function requireAtPlot(g: Game, p: Player, s: Settlement, what: string) {
+export function requireAtPlot(g: Game, p: Player, s: Settlement, what: string) {
   const pl = plot(g, s);
   if (p.travel) fail('TRAVELING', `walking to ${p.travel.target ?? p.travel.to}`, p.travel.arriveAt - g.now(), 'wait for arrival');
   const d = dist(p.pos, pl);
   // Same region too: plots near a border must not be usable from the safe wilds.
-  if (p.zone !== s.zone || d > MAP_RULES.range.plot + 1e-9) {
+  if (!atPlot(g, p, s)) {
     fail('OUT_OF_RANGE', `${what} needs you within ${MAP_RULES.range.plot} tiles of ${s.name}'s plot at (${pl.x}, ${pl.y}), standing in ${s.zone}; you are ${round1(d)} tiles away`, undefined, `walk there first: move { to: '${pl.id}' } (SDK: goTo('${pl.id}'))`);
   }
 }
 
 // ---------- audit log ----------
 
-function audit(g: Game, s: Settlement, actor: Player | null, action: StockpileEntry['action'], items: ItemStack[]) {
+export function audit(g: Game, s: Settlement, actor: Player | null, action: StockpileEntry['action'], items: ItemStack[], building?: BuildingId) {
   if (!items.length) return;
   const ts = g.now();
-  const res = g.store.run('INSERT INTO stockpile_log(settlement_id, ts, actor_id, actor_name, action, items) VALUES(?, ?, ?, ?, ?, ?)', s.id, ts, actor?.id ?? null, actor?.name ?? null, action, JSON.stringify(items));
-  const entry: StockpileEntry = { id: Number(res.lastInsertRowid), ts, actorId: actor?.id ?? null, actorName: actor?.name ?? null, action, items };
-  g.emit('stockpile.changed', vis(s), { settlementId: s.id, entry }, actor ? { actor, zone: s.zone } : { zone: s.zone });
+  const res = g.store.run('INSERT INTO stockpile_log(settlement_id, ts, actor_id, actor_name, action, items, building) VALUES(?, ?, ?, ?, ?, ?, ?)', s.id, ts, actor?.id ?? null, actor?.name ?? null, action, JSON.stringify(items), building ?? null);
+  const entry: StockpileEntry = { id: Number(res.lastInsertRowid), ts, actorId: actor?.id ?? null, actorName: actor?.name ?? null, action, items, ...(building ? { building } : {}) };
+  // The automatic entries get their own event type, which the operator's event log prunes.
+  const type = action === 'upkeep' || action === 'produced' || action === 'income' ? 'stockpile.upkeep' : 'stockpile.changed';
+  g.emit(type, vis(s), { settlementId: s.id, entry }, actor ? { actor, zone: s.zone } : { zone: s.zone });
 }
 
 function logRows(g: Game, s: Settlement, limit: number, beforeId = Number.MAX_SAFE_INTEGER): StockpileEntry[] {
-  return g.store.all<{ id: number; ts: number; actor_id: string | null; actor_name: string | null; action: StockpileEntry['action']; items: string }>(
-    'SELECT id, ts, actor_id, actor_name, action, items FROM stockpile_log WHERE settlement_id = ? AND id < ? ORDER BY id DESC LIMIT ?', s.id, beforeId, limit,
-  ).map((r) => ({ id: r.id, ts: r.ts, actorId: r.actor_id, actorName: r.actor_name, action: r.action, items: JSON.parse(r.items) }));
+  return g.store.all<{ id: number; ts: number; actor_id: string | null; actor_name: string | null; action: StockpileEntry['action']; items: string; building: BuildingId | null }>(
+    'SELECT id, ts, actor_id, actor_name, action, items, building FROM stockpile_log WHERE settlement_id = ? AND id < ? ORDER BY id DESC LIMIT ?', s.id, beforeId, limit,
+  ).map((r) => ({ id: r.id, ts: r.ts, actorId: r.actor_id, actorName: r.actor_name, action: r.action, items: JSON.parse(r.items), ...(r.building ? { building: r.building } : {}) }));
 }
 
 // ---------- membership changes ----------
@@ -164,9 +174,13 @@ function promoteSuccessor(g: Game, s: Settlement) {
 /** Removes `who`. The best-ranked, longest-standing member leads if the leader goes; the last one out abandons the plot. */
 function removeMember(g: Game, s: Settlement, who: Player, reason: 'leave' | 'expel' | 'exile', by?: Player): boolean {
   const wasLeader = roleOf(s, who.id) === 'leader';
-  delete s.members[who.id];
-  delete who.settlementId;
+  g.markSettlement(s);
   g.markPlayer(who);
+  delete s.members[who.id];
+  // Their work stops covering anyone. Their stash stays theirs: stash.withdraw at the plot still works.
+  delete s.work[who.id];
+  s.level = levelOf(s).level;
+  delete who.settlementId;
   for (const m of s.motions) delete m.votes[who.id];
   s.motions = s.motions.filter((m) => m.targetId !== who.id);
   if (reason !== 'leave') s.barred[who.id] = g.now();
@@ -179,20 +193,27 @@ function removeMember(g: Game, s: Settlement, who: Player, reason: 'leave' | 'ex
   return false;
 }
 
-/** Nobody left: the plot is free again and the stockpile spills into a loot bag at the plot that anyone may take. */
+/**
+ * Nobody left: the plot is free again and the buildings fall. The stockpile, every stash (former members' included)
+ * and the materials of unfinished projects spill into one loot bag at the plot that anyone may take.
+ */
 function disband(g: Game, s: Settlement) {
   const pl = plot(g, s);
-  const items = toStacks(s.stockpile);
+  const spilled: Bag = { ...s.stockpile };
+  for (const bag of [...Object.values(s.stashes), ...Object.values(s.projects).map((pr) => pr!.materials)]) addItems(spilled, toStacks(bag));
+  const items = toStacks(spilled);
   let bagId: string | null = null;
   if (items.length) {
     const now = g.now();
     bagId = newId('bag');
-    const bag = { id: bagId, zone: s.zone, x: pl.x, y: pl.y, ownerId: s.id, ownerName: `${s.name} (abandoned)`, items: { ...s.stockpile }, createdAt: now, expiresAt: now + g.ms(TIMING.lootBagTtlMs) };
+    const bag = { id: bagId, zone: s.zone, x: pl.x, y: pl.y, ownerId: s.id, ownerName: `${s.name} (abandoned)`, items: spilled, createdAt: now, expiresAt: now + g.ms(TIMING.lootBagTtlMs) };
     g.bags.set(bagId, bag);
     g.markBag(bag);
     audit(g, s, null, 'abandoned', items);
     s.stockpile = {};
   }
+  for (const owner of Object.keys(s.stashes)) g.emit('stash.spilled', { kind: 'player', playerId: owner }, { settlementId: s.id, name: s.name, plotId: s.plotId, bagId }, {});
+  g.store.run('DELETE FROM watch_log WHERE settlement_id = ?', s.id);
   g.settlements.delete(s.id);
   g.markSettlement(s);
   g.emit('settlement.disbanded', { kind: 'zone', zone: s.zone }, { settlementId: s.id, name: s.name, plotId: s.plotId, bagId }, { zone: s.zone });
@@ -228,6 +249,7 @@ function found(g: Game, p: Player, payload: Record<string, any>) {
   const s: Settlement = {
     id: newId('stl'), name, zone: pl!.region, plotId: pl!.id, founderId: p.id, foundedAt: now,
     members: { [p.id]: { role: 'leader', joinedAt: now } }, charter: { ...SETTLEMENT.defaultCharter }, stockpile: {}, invites: {}, barred: {}, motions: [], level: 1,
+    buildings: [], projects: {}, stashes: {}, work: {}, alerts: [],
   };
   g.settlements.set(s.id, s);
   g.markSettlement(s);
@@ -269,6 +291,7 @@ function join(g: Game, p: Player, payload: Record<string, any>) {
   delete s!.invites[p.id];
   delete s!.barred[p.id];
   s!.members[p.id] = { role: 'member', joinedAt: g.now() };
+  s!.level = levelOf(s!).level;
   p.settlementId = s!.id;
   g.markSettlement(s!);
   g.markPlayer(p);
@@ -400,7 +423,11 @@ function list(g: Game) {
 function deposit(g: Game, p: Player, payload: Record<string, any>) {
   const s = requireMember(g, p);
   requireAtPlot(g, p, s, 'the stockpile');
-  const items = removeItems(p.inventory, stacks(payload.items, 'items', false));
+  const asked = stacks(payload.items, 'items', false);
+  const adding = units(toBag(asked));
+  const room = capacityOf(s) - units(s.stockpile);
+  if (adding && adding > room) fail('SETTLEMENT_STATE', `the stockpile has room for ${Math.max(0, room)} more items`, undefined, 'a storehouse holds much more; silver takes no room');
+  const items = removeItems(p.inventory, asked);
   addItems(s.stockpile, items);
   g.markSettlement(s);
   g.markPlayer(p);
@@ -426,7 +453,7 @@ function withdraw(g: Game, p: Player, payload: Record<string, any>) {
 function stockpileView(g: Game, p: Player) {
   const s = requireMember(g, p);
   requireAtPlot(g, p, s, 'reading the stockpile');
-  return { settlementId: s.id, items: toStacks(s.stockpile), log: logRows(g, s, SETTLEMENT.logPage) };
+  return { settlementId: s.id, items: toStacks(s.stockpile), used: units(s.stockpile), capacity: capacityOf(s), log: logRows(g, s, SETTLEMENT.logPage) };
 }
 
 function stockpileLog(g: Game, p: Player, payload: Record<string, any>) {

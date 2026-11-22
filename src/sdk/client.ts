@@ -7,7 +7,7 @@
 // command can never duplicate items or transfers.
 
 import { randomUUID } from 'node:crypto';
-import { baseOf, itemDef, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, type ToolJob, type OrbId, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
+import { baseOf, BUILDINGS, itemDef, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, type ToolJob, type OrbId, type AbilityId, type BuildingId, type ItemStack, type Slot, type StationId, type ZoneId } from '../shared/catalog.ts';
 import { dist, findPath, pathLength, type PlaceId, type Pos } from '../shared/map.ts';
 import {
   TRANSIENT_ERRORS,
@@ -251,6 +251,23 @@ export class GameClient {
   stockpile() { return this.send('stockpile.view', {}); }
   /** The audit log, newest first. Members only, from anywhere. */
   stockpileLog(o: { limit?: number; beforeId?: number } = {}) { return this.send('stockpile.log', o); }
+
+  // ---------- buildings ----------
+
+  /** Puts materials into a project (starting it if needed). Without `items`: everything it still needs that you carry. */
+  settlementContribute(building: BuildingId, items?: ItemStack[], opts?: SendOptions) { return this.send('settlement.contribute', items ? { building, items } : { building }, opts); }
+  /** One timed unit of work; `buildBuilding` keeps going until it is done. */
+  settlementBuild(building: BuildingId, opts?: SendOptions) { return this.send('settlement.build', { building }, opts); }
+  settlementCancelProject(building: BuildingId, opts?: SendOptions) { return this.send('settlement.cancelProject', { building }, opts); }
+  /** Your own stashes, from anywhere. */
+  stash() { return this.send('stash.view', {}); }
+  stashDeposit(items: ItemStack[], opts?: SendOptions) { return this.send('stash.deposit', { items }, opts); }
+  /** `settlementId` is only needed for a stash left in a former settlement. */
+  stashWithdraw(items: ItemStack[], settlementId?: string, opts?: SendOptions) { return this.send('stash.withdraw', { items, ...(settlementId ? { settlementId } : {}) }, opts); }
+  /** Who walked into and out of your settlement's region, newest first. */
+  watchtowerLog(o: { limit?: number; beforeId?: number } = {}) { return this.send('watchtower.log', o); }
+  /** Eats a ration: Well fed. */
+  eat(opts?: SendOptions) { return this.send('eat', {}, opts); }
 
   reportFeedback(o: { category: FeedbackCategory; summary: string; details?: string; relatedCommandId?: string }, opts?: SendOptions) {
     return this.send('reportFeedback', o, opts);
@@ -534,7 +551,7 @@ export class GameClient {
       } catch (e) {
         const station = RECIPES[recipeId]?.station;
         if (!(e instanceof CommandError) || e.code !== 'NO_STATION' || !station) throw e;
-        await this.goTo(station);
+        await this.goTo(await this.whereToUse(station));
         r = await this.sendWhenReady(kind, { recipeId, count: n });
       }
       made += r.output.qty;
@@ -542,6 +559,50 @@ export class GameClient {
       left -= n;
     }
     return { item, qty: made };
+  }
+
+  /**
+   * Where to use a station: your settlement's plot when a working building there has it and you are in its region
+   * (or it is a kitchen, which town lacks), else the place in town.
+   */
+  private async whereToUse(station: StationId): Promise<string> {
+    const obs = await this.observe();
+    const s = obs.settlement;
+    if (s?.buildings.some((id) => BUILDINGS[id].stations?.includes(station)) && (station === 'kitchen' || obs.self.zone === s.zone)) return s.plotId;
+    if (station === 'kitchen') throw new Error('cooking needs your own settlement with a working kitchen; or buy rations from players');
+    return station;
+  }
+
+  /**
+   * At your plot: puts in what `building` still needs from your inventory, then works on it until it stands.
+   * When materials are still missing it stops and returns them in `needs`.
+   */
+  async buildBuilding(building: BuildingId, o: { timeoutMs?: number } = {}): Promise<{ built: boolean; needs: ItemStack[] }> {
+    const deadline = Date.now() + (o.timeoutMs ?? 180_000);
+    await this.waitReady();
+    await this.goToStockpile();
+    const view = async () => (await this.settlement()).settlement;
+    const before = await view();
+    if (before?.buildings.some((b) => b.id === building)) return { built: true, needs: [] };
+    const project = before?.projects.find((p) => p.building === building);
+    if (!project?.readyToBuild) {
+      const missing = project?.needs ?? BUILDINGS[building].cost;
+      const inv = (await this.observe()).self.inventory;
+      if (!missing.some((m) => inv.some((i) => i.item === m.item))) return { built: false, needs: missing };
+      const { project: after } = await this.settlementContribute(building);
+      if (!after.readyToBuild) return { built: false, needs: after.needs };
+    }
+    await this.equipToolFor('construction', BUILDINGS[building].tier);
+    for (;;) {
+      if (Date.now() > deadline) throw new Error(`buildBuilding(${building}) timed out`);
+      try {
+        if ((await this.sendWhenReady('settlement.build', { building })).built) return { built: true, needs: [] };
+      } catch (e) {
+        // Another member finished it first.
+        if ((await view())?.buildings.some((b) => b.id === building)) return { built: true, needs: [] };
+        throw e;
+      }
+    }
   }
 
   refineItem(recipeId: string, count = 1) { return this.make(recipeId, count, 'refine'); }
