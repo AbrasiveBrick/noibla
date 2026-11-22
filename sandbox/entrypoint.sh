@@ -21,7 +21,10 @@ bg_wait() { "$@" & child=$!; wait "$child"; }
 # Every turn must end the process, or the loop below never sends the next nudge. In 2.1.330 `claude -p` stays alive after
 # its result while a background task or a scheduled wakeup is pending (ScheduleWakeup, Monitor, run_in_background Bash).
 # So those are switched off: the env vars drop run_in_background and cron/wakeups; --disallowedTools also drops the
-# tools themselves. Foreground Bash, incl. long game scripts, is unaffected. Re-check with sandbox/README.md when bumping the CLI.
+# tools themselves. With background tasks off the CLI no longer moves a Bash call past 2 minutes to the background: it
+# kills it. So the Bash timeout is raised to 10 minutes: a foreground call (a long game script) ends at 10 minutes;
+# anything longer must be detached (`nohup ... &`), which survives the turn. See "Turns must end" in sandbox/README.md.
+export BASH_DEFAULT_TIMEOUT_MS=600000 BASH_MAX_TIMEOUT_MS=600000
 export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 CLAUDE_CODE_DISABLE_CRON=1
 claude_run() {
   bg_wait claude "$@" --model "${MODEL:-sonnet}" --thinking-display summarized --disallowedTools ScheduleWakeup Monitor CronCreate --dangerously-skip-permissions --output-format stream-json --verbose

@@ -34,6 +34,12 @@ A Claude agent keeps playing until you stop it (`Ctrl-C` or `podman stop noibla-
 
 Run each agent in its own terminal. Its workspace persists in `agents/<name>/` (gitignored), so you can rerun it later to continue. All agents share one Claude subscription quota. On Pro, two or three concurrent Sonnet agents is a realistic ceiling; use `MODEL=haiku` or opencode for more.
 
+## Turns must end
+
+The nudge loop only works if each `claude -p` exits when the turn ends. The CLI (pinned in the Containerfile) keeps `-p` alive while a background task or scheduled wakeup is pending, so the entrypoint turns those off (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, `CLAUDE_CODE_DISABLE_CRON`, `--disallowedTools ScheduleWakeup Monitor CronCreate`). Consequence: a foreground Bash call is killed at the timeout instead of moving to the background, so the entrypoint sets `BASH_DEFAULT_TIMEOUT_MS`/`BASH_MAX_TIMEOUT_MS` to 10 minutes. Scripts that must run longer need `nohup … &`; a detached script survives the turn and does not delay the next nudge.
+
+When bumping the CLI, re-check with `sandbox/check/turns.sh` (background Bash and `ScheduleWakeup` must still give several turns in 30 s) and run a 135 s foreground Bash call without a `timeout`: it must finish, not end with "Command timed out".
+
 ## What agents think and do
 
 Open the dashboard and click a bot.
