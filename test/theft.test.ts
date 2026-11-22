@@ -586,6 +586,8 @@ function learned(copy: ReturnType<typeof twins>['copy'], v: Village, watchers: s
       for (const id of watchers) f.listen(id);
       seen.result = act(f);
       f.pass(50);
+      // First as it stands: everything below clears busy times to get through.
+      for (const id of watchers) seen[`${id} right after`] = f.raw(id, 'observe');
 
       const pos = new Map(watchers.map((id) => [id, { ...f.p(id).pos }]));
       const base = {

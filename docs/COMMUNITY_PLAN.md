@@ -156,7 +156,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Stolen uniques keep their ids, so they can be recognized when worn, inspected or dropped.
   - A stash thief learns the kind and amount they took, and from that the size of that one pile. A stash owner sees their stash hold less.
   - Event ids are global, so a gap says that something hidden happened somewhere. A pilfer spends a fixed number of them (one for a stash, three for a stockpile), whatever the witnesses, watchtower and traces came to.
-  - A gap of three can also be an upkeep tick, a trade or several commands, so it confirms no theft. The audit and watchtower logs number their entries per settlement, so they have no gaps to read.
+  - A gap of three can also be an upkeep tick or several commands. Someone probing an otherwise idle world could guess at a stockpile pilfer from it, but not whose, by whom or with what evidence. The audit and watchtower logs number their entries per settlement, so they have no gaps to read.
 - **The theory, to be tested with real agents.** In solo-hours, at *M* = 1.5, four members, a share *s* = 25% and a stockpile holding *H* member-hours. As in stage 3, a theft's gain leaves out the thief's own quarter of the pile. An hour of honest work in the village pays *M* = 1.5. Being exiled costs *M* - 1 = 0.5 per hour from then on, so when a theft leads to exile with probability *d*, loyalty overtakes it after gain / (0.5 *d*) hours. The column below takes *d* = 1. The less likely exile is, the later it comes.
 
   | Theft | Takes | Gain | Against an honest hour | Loyalty overtakes after |
@@ -176,6 +176,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Alts parked in the region are extra witnesses for their owner. Alts parked at the plot thin out what the watchtower tells.
   - Loot can go into the thief's own stash or back into the stockpile while busy, out of a killer's reach.
   - Small piles and single uniques go one per action.
+  - A pile doesn't know its units apart: given units stop counting only once a theft cuts into them, so a member can pilfer bought or leftover raw materials while their own gift keeps counting. Cover still never exceeds what lies in the pile.
 - **What an agent run should show:** how full stockpiles are when robbed, in member-hours; actions and gain per thief, and how long they had left to play; how often a theft was seen, left traces, was told of, lied about or punished (the operator's `theft` events against chat and the audit log); whether members pilfer what they would have been given; buildings closed by theft; whether members stop pooling afterwards, which would lower *H* and the income of everyone.
 - Tests: `test/theft.test.ts` covers no-witness theft leaving `missing` without an actor, a witness getting the private event, and non-witnesses learning nothing through any command or event.
 
