@@ -7,7 +7,7 @@
 //                   Someone who bled out has no killer in player.death: only those present at the blow saw it.
 //   the corpse      cause, weapon base, an approximate time and watchtower movements, to whoever stands by it.
 //   members, heir, party, bounty posters
-//                   nothing until the death is made known (settleEstate): the first report, else a timer.
+//                   nothing until the death is made known (settleEstate): the tick after the first report, else a timer.
 //   the operator    the true killer, behind any hood.
 //   anyone else     nothing. A blow spends two event ids whether it hurts, downs or kills, and whoever is told,
 //                   so the gaps in an outsider's stream don't tell a death from a hit. Nor does the work it does count
@@ -448,7 +448,7 @@ function report(g: Game, p: Player, payload: Record<string, any>) {
   g.emit('death.report', { kind: 'public' }, { corpseId: c.id, victim: c.victim, zone: c.zone, reporter, accuse, text, first }, { zone: c.zone, actor: p });
   let reward = 0;
   if (first) {
-    // Before the estate passes: the last member's death takes the stockpile with it.
+    // Before the estate passes (the next tick): the last member's death takes the stockpile with it.
     const s = c.settlementId ? g.settlements.get(c.settlementId) : undefined;
     if (s) reward = Math.min(s.charter.reportReward, s.stockpile.silver ?? 0);
     if (s && reward > 0) {
@@ -457,7 +457,9 @@ function report(g: Game, p: Player, payload: Record<string, any>) {
       addItems(p.inventory, paid);
       audit(g, s, p, 'reward', paid);
     } else g.skipEventId();
-    if (!c.settledAt) settleEstate(g, c);
+    // By the next tick, not in this command: what passing the estate writes depends on the will and the bounties, and
+    // the reporter could time it.
+    if (!c.settledAt) c.dueAt = Math.min(c.dueAt, g.now());
   }
   g.setLastAction(p, 'report', `reported ${c.victim.name}'s death${accuse ? `, accusing ${accuse.name}` : ''}${reward ? ` (${describe([{ item: 'silver', qty: reward }])} reward)` : ''}`);
   return { corpseId: c.id, first, reward };

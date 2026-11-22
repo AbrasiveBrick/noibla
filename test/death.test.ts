@@ -552,6 +552,7 @@ test('estate: open trades end, escrow comes home, and no silver appears or vanis
   const c = murder(f, v);
   f.put(v.kay, c);
   f.ok(v.kay, 'death.report', { corpseId: c.id, text: 'found like this' });
+  f.pass(1);
   assert.equal(f.g.trades.get(t)!.status, 'expired');
   assert.equal(f.p(v.stranger).inventory.silver, 500, 'their side is back');
   assert.equal(f.p(v.heir).bank.silver, 777 + 30, 'the dead\'s goes with the estate');
@@ -569,7 +570,9 @@ test('reports: public, the first is marked and paid, once each, and it makes the
   assert.deepEqual(r, { corpseId: c.id, first: true, reward: 40 });
   assert.equal(v.s().stockpile.silver, 460);
   assert.equal(f.p(v.kim).inventory.silver, 340);
-  assert.equal(v.s().members[v.vic], undefined, 'known at once');
+  assert.ok(v.s().members[v.vic], 'not inside the command');
+  f.pass(1);
+  assert.equal(v.s().members[v.vic], undefined, 'known by the next tick');
   assert.equal(f.p(v.heir).bank.silver, 777);
   for (const id of [v.mate, v.poster, v.neighbour]) {
     const e = f.heard.get(id)!.find((x) => x.type === 'death.report')!;
@@ -929,6 +932,36 @@ test('timing: a blow writes the same whoever was there, and its notices come a l
   f.pass(1000);
   assert.ok(f.heard.get(v.kim)!.some((e) => e.type === 'bounty.paid'));
 }));
+
+test('timing: a first report does the same work whatever the will, the wealth and the bounties', () => {
+  const work = (setup: (f: Fake, v: Village) => void) => {
+    const f = fake();
+    try {
+      const v = cast(f);
+      // The reward is the reporter's to know (it is in the result), and would differ between the cases below.
+      v.s().charter.reportReward = 0;
+      setup(f, v);
+      const c = murder(f, v);
+      f.put(v.wit, c);
+      f.save();
+      const done: string[] = [];
+      const run = f.g.store.run.bind(f.g.store);
+      f.g.store.run = ((sql: string, ...args: any[]) => { done.push(sql); return run(sql, ...args); }) as typeof f.g.store.run;
+      f.ok(v.wit, 'death.report', { corpseId: c.id, text: 'found' });
+      f.g.store.run = run;
+      f.pass(1);
+      assert.ok(f.g.corpses.get(c.id)!.settledAt, 'known by the next tick');
+      return done;
+    } finally { f.g.close(); }
+  };
+  const heir = work(() => {});
+  assert.ok(heir.some((sql) => sql.startsWith('INSERT INTO corpses')));
+  for (const [why, setup] of [
+    ['the settlement inherits', (f: Fake, v: Village) => { delete f.p(v.vic).will; }],
+    ['nobody inherits', (f: Fake, v: Village) => { delete f.p(v.vic).will; f.ok(v.vic, 'settlement.leave'); }],
+    ['poor and unwanted', (f: Fake, v: Village) => { f.p(v.vic).bank = {}; delete f.g.settlements.get(v.sid)!.stashes[v.vic]; f.g.bounties.clear(); }],
+  ] as const) assert.deepEqual(work(setup), heir, why);
+});
 
 // ---------- saves ----------
 

@@ -457,7 +457,7 @@ await bot.reportDeath(corpseId, 'A sword did this.', suspectId);                
 - Every command but `observe` fails with `DEAD`, and the event stream goes quiet. `observe` shows nothing of the living any more.
 - The name stays reserved. Register a new character (`Name-2`, `Name-3`, ...): it starts with nothing but the kit.
 
-**When a death becomes known.** Until then settlement, party, heir and bounty posters are told nothing: the roster, stockpile and bounty list stay as they were. It becomes known at the **first death report**, or else 10 minutes after the death (base, rounded up to 2 minutes so it doesn't give away the exact time). Then, at once:
+**When a death becomes known.** Until then settlement, party, heir and bounty posters are told nothing: the roster, stockpile and bounty list stay as they were. It becomes known at the **first death report** (by the next tick), or else 10 minutes after the death (base, rounded up to 2 minutes so it doesn't give away the exact time). Then, at once:
 
 - The victim's open trades end and escrow goes back.
 - **The estate passes:** bank, every hut stash and returned escrow go to the will's heir (a player's bank or a settlement's stockpile). Without a living heir they go to the victim's settlement's stockpile, else they are destroyed. If the victim was that settlement's last member, all of it spills at the plot with the rest.
