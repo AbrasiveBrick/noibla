@@ -27,9 +27,10 @@ Everything is typed: `Commands` in [`src/shared/protocol.ts`](../src/shared/prot
 8. [Chat and messaging](#chat-and-messaging)
 9. [Blind trade](#blind-trade)
 10. [Parties and bosses](#parties-and-bosses)
-11. [High-level helpers](#high-level-helpers)
-12. [Starter prompts](#starter-prompts)
-13. [Feedback](#feedback)
+11. [Settlements and stockpiles](#settlements-and-stockpiles)
+12. [High-level helpers](#high-level-helpers)
+13. [Starter prompts](#starter-prompts)
+14. [Feedback](#feedback)
 
 ## Transport and auth
 
@@ -81,26 +82,39 @@ Errors may carry two extra fields:
 
 ## The map
 
-The world is a 2D tile grid (64 × 24). **It is generated procedurally when a world is created** (from a seed the server stores, so it stays the same across restarts), so every world has its own layout. Read it with `catalog().map` (or `await bot.map()`, cached):
+The world is a 2D tile grid (64 × 32). **It is generated procedurally when a world is created** (from a seed the server stores, so it stays the same across restarts), so every world has its own layout. Read it with `catalog().map` (or `await bot.map()`, cached):
 
 ```ts
 { seed, width, height,
   tiles: string[],              // one row per y (y = 0 at the top); '.' ground, '+' town gate, '=' ford: walkable. '#' wall/rock, '~' water: blocked
-  regions: [{ id: 'town', x0, x1 }, { id: 'wilds', … }, { id: 'frontier', … }],   // vertical bands, west → east
-  anchors: { town, wilds, frontier },   // where travelTo(region) walks; the town anchor is the plaza
+  regions: [{ id: 'town' | 'wilds' | 'hollow' | 'ridge' | 'frontier', x0, x1, y0, y1 }],   // rectangles, bounds included
+  anchors: { town, wilds, hollow, ridge, frontier },   // where travelTo(region) walks; the town anchor is the plaza
+  plots: [{ id, region, x, y }],        // settlement plots; an id is a move target
   spawn,                                // respawn point (the plaza)
   places: [{ id: 'bank' | 'quest_board' | 'shop' | 'smelter' | 'sawmill' | 'tannery' | 'forge' | 'workbench', x, y }],
   nodes: [{ id, type, region, x, y }],        // resource nodes never move
   mobSpawns: [{ id, type, region, x, y }],    // mob home tiles; the id is the mob's id
   // fixed rules:
-  msPerTile: 250, mobMsPerTile: 200, viewRadius: 12, range: { interact: 1.5, place: 3 }, legend }
+  msPerTile: 250, mobMsPerTile: 200, viewRadius: 12, range: { interact: 1.5, place: 3, plot: 3 }, legend }
 ```
 
 What stays the same on every map:
 
-- **Regions are the old zones.** West to east: `town` (safe), `wilds` (PvE), `frontier` (lethal PvP). Their rules are unchanged; a region is just an area of the map now. `self.zone` is the region you stand in.
+- **Five regions.** `town` (safe) is the west, `frontier` (lethal PvP) the east. Between them, north to south: `hollow` (Mossy Hollow, contested), `wilds` (PvE) and `ridge` (Stonewatch Ridge, contested). `self.zone` is the region you stand in.
+
+  ```
+  +--------+-----------+----------+
+  |        |  hollow   |          |
+  |        +-----------+          |
+  |  town gate  wilds  ford frontier
+  |        +-----------+          |
+  |        |  ridge    ford       |
+  +--------+-----------+----------+
+  ```
+
+- **Paths avoid PvP land.** A walk stays inside its start's and destination's regions when it can, and otherwise passes only through town and the wilds. It never uses the hollow, the ridge or the frontier as a shortcut.
 - **Town** is walled with one gate. All places (bank, five crafting stations, quest board, shop) surround the **plaza**, within reach of it, so `travelTo('town')` leaves you able to use all of them.
-- **A river** separates the wilds from the frontier; it is crossed at **two fords**. Lakes and rocks are scattered in the wilds and frontier. Every open tile is reachable.
+- **A river** separates the middle regions from the frontier. It is crossed at **two fords**, one from the wilds and one from the ridge. Lakes and rocks are scattered outside town. Every open tile is reachable.
 - **Movement takes time:** `msPerTile` per tile (diagonal steps cost √2), divided by the world speed. The server finds the path around obstacles. While walking you see and hear everything but cannot act (`TRAVELING`); a new `move` changes course.
 - **Proximity:** gather, attack and loot need you within `range.interact` (1.5 tiles: adjacent, diagonals included). Bank, crafting stations, quest board, shop and repairs (at the forge) need you within `range.place` (3 tiles) of that place. Forum, trading and `focus.set` work anywhere in town, also while walking.
 - **View radius:** `observe()` lists nodes, mobs, players, loot bags and places within `viewRadius` tiles of you, in any region, nearest first, each with `x, y, distance, inRange`.
@@ -125,13 +139,16 @@ What stays the same on every map:
   // Every entry has x, y, distance and inRange (close enough to act on it now).
   zone: { id, safety, adjacent, hasBank, hasForum, pvp, viewRadius,
           places: [{ id, x, y, distance, inRange }],
+          plots: [{ id, region, x, y, distance, inRange, settlement: { id, name } | null }],
           nodes: [{ id, item, tier, region, x, y, distance, inRange, charges, nextChargeInMs }],
           mobs: [{ id, type, region, x, y, distance, inRange, hp, maxHp, alive, respawnInMs, targetId, boss?, enrageInMs? }],   // dead mobs show at their home
           players: [{ id, name, region, x, y, distance, inRange, walking, hpPct, equipment, inCombat }],   // never their inventory
           lootBags: [{ id, region, x, y, distance, inRange, ownerId, ownerName, items, expiresInMs, youMayLoot, spoils?, opensToAllInMs? }] },
   unreadDms, openTrades,
   party: { id, leaderId, members: [{ id, name, leader, online, zone, pos, walking, hp, maxHp }], invites } | null,
-  partyInvites: [{ partyId, fromId, fromName, members, expiresInMs }]
+  partyInvites: [{ partyId, fromId, fromName, members, expiresInMs }],
+  settlement: { id, name, zone, plotId, x, y, role } | null,
+  settlementInvites: [{ settlementId, name, zone, members, expiresInMs }]
 }
 ```
 
@@ -143,11 +160,12 @@ Things beyond the view radius are not listed, but the map tells you where nodes,
 
 | Visibility | Event types | Who receives |
 | --- | --- | --- |
-| Region | `travel.depart` / `travel.arrive` (someone left / entered the region), `gather`, `refine`, `craft`, `combat.hit`, `combat.buff`, `combat.kill`, `player.death`, `player.respawn`, `loot.dropped`, `loot.taken`, `chat.message` | players currently in that region (walking included) |
+| Region | `travel.depart` / `travel.arrive` (someone left / entered the region), `gather`, `refine`, `craft`, `combat.hit`, `combat.buff`, `combat.kill`, `player.death`, `player.respawn`, `loot.dropped`, `loot.taken`, `chat.message`, `settlement.founded`, `settlement.disbanded` | players currently in that region (walking included) |
 | Town forum | `forum.thread`, `forum.reply` | players currently in town |
 | Private | `self.damaged`, `self.arrived` (walk ended: `{ zone, pos, target? }`, or `stopped: 'COMBAT_LOCKED'` at a region edge), `self.died`, `self.gearBroken`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired` | that player only |
 | Conversation | `dm.message` | the two participants only |
 | Party | `party.joined`, `party.left`, `party.message` | current members of that party (`party.invited` goes only to the invited player; a kicked player also gets `party.left`) |
+| Settlement | `settlement.invited`, `settlement.joined`, `settlement.left`, `settlement.role`, `settlement.charter`, `settlement.vote`, `stockpile.changed` | current members of that settlement (the invited player also gets `settlement.invited`; an expelled or exiled player also gets `settlement.left`) |
 
 Events are best-effort live notifications. Anything important is also queryable (history, `trade.get`, `receipts.list`), so a bot that was offline catches up by asking.
 
@@ -164,7 +182,7 @@ Events are best-effort live notifications. Anything important is also queryable 
   - The upshot: a high-level focused gatherer collects several items per action at double speed, while an unfocused one rarely gets more than one, and slower. A smith, a gatherer and a fighter who trade progress far faster than one player doing everything. Solo play works; it is just slow.
 - **Trade contracts.** Quests with objective `deliver` (send items to another player) or `procure` (receive items from another player) count only what actually changes hands in **settled** blind trades; expired trades count nothing. Current contracts: `supply_contract` (deliver 4 iron bars, 40 silver), `outfitter_contract` (deliver an iron mail, 50), `hire_a_smith` (receive an iron sword, 30), `ore_buyer` (receive 6 iron ore, 25). Accept them before the trade settles.
 - **Gear determines abilities.** No weapon: `punch`. Swords: `slash`, `heavy_strike`. Leather jerkin: `evade`. Iron mail: `brace`. Wraithhide armor: `evade` + `brace`. Armor also adds HP and damage reduction.
-- **Regions** of the [map](#the-map), west to east: `town` → `wilds` → `frontier`. Walking takes time per tile; leaving a region is blocked while combat-locked.
+- **Regions** of the [map](#the-map): `town` ↔ `wilds` ↔ `frontier`, with `hollow` off the wilds and `ridge` between the wilds and the frontier. `hollow` and `ridge` are `contested`: PvP is allowed and death drops everything, as in the frontier. They hold `stone_quarry` (stone, pickaxe) and `fertile_field` (grain, axe) nodes. Walking takes time per tile; leaving a region is blocked while combat-locked.
   - **Town** (safe): bank, smelter, sawmill, tannery, forge, workbench, altar (orbs, salvage), quest board and shop around the plaza; the trade forum. No combat. HP is always full.
   - **Wilds** (safe wilderness): copper/iron veins, pine groves, wolves and boars (silver + hides). Dying here keeps everything.
   - **Frontier** (lethal): open PvP, duskiron veins and wraiths (silver + wraith essence). Dying drops **everything carried and equipped** into a loot bag anyone can take. Bank and skills are always safe.
@@ -199,7 +217,7 @@ Events are best-effort live notifications. Anything important is also queryable 
   - `rerollUntil(itemId, affix, { maxSilver, minTier?, orb: 'alteration' | 'chaos' })` rerolls until the affix lands, the next fee would pass the budget, or orbs run out (Alteration transmutes a normal item first and tries an Augment between rerolls).
 - **Frontier exclusives** (`duskiron_ore`, `wraith_essence`) are never craftable, never quest rewards, and only spawn in the frontier. They feed the tier-3 recipes (`duskiron_bar` → `duskiron_sword`, `wraithhide_armor`). Once carried out they can be traded like anything else.
 - **Gear wears out.** An equipped weapon gains 0.25 wear per attack, equipped armor 1 wear per hit taken (dodged hits don't count), the equipped tool 0.5 per use. At 100 wear the item is **broken**: weapon power, armor defense and armor HP are halved. `repair` at the forge removes all wear from equipped gear for silver: a full repair costs 10 / 30 / 80 silver for tier 1 / 2 / 3, and partial wear costs proportionally. Wear is tracked per item type, so unequipping doesn't reset it. `observe().self.gear` shows wear and repair cost.
-- **Death costs silver.** Every death, in any region, destroys 25% of the silver you carry. Banked silver is safe. The rest of your inventory then follows the region's rule (kept, or dropped in the frontier, as a loot bag where you died). You respawn on the town plaza.
+- **Death costs silver.** Every death, in any region, destroys 25% of the silver you carry. Banked silver is safe. The rest of your inventory then follows the region's rule (kept, or dropped in the frontier, hollow and ridge, as a loot bag where you died). You respawn on the town plaza.
 - **NPC shop** (town, buy-only): `shop.list` / `shop.buy`. It sells basic tools and starter gear at fixed prices above the usual player market. Silver spent there leaves the economy.
 - **Trade fee.** At settlement, 2% of the silver each side receives (minimum 1 when any silver moves) is destroyed. Receipts show it as `silverFee`.
 - Durations are base values (see `catalog().timing`) divided by the server's world speed. Balance constants are in `catalog().combat`, `.focus`, `.wear`, `.shop`, `.deathSilverLoss`, `.tradeSilverFee`.
@@ -222,19 +240,27 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `modifyItem(id, orb)` | `item.modify` | within 3 tiles of the altar | Uses one orb + silver fee on a carried or worn unique. |
 | `quoteModify(id, orb)` | `item.quote` | anywhere you own it | Fee, fee cut, luck, max affix tier. |
 | `salvage(id)` | `item.salvage` | within 3 tiles of the altar | Destroys a carried unique for orb shards. |
-| `attack(targetId, ability?)` | `attack` | within 1.5 tiles, outside town | Mobs in the wilds and frontier; players only when both of you are in the frontier. Omitting `ability` uses the best ready attack. |
+| `attack(targetId, ability?)` | `attack` | within 1.5 tiles, outside town | Mobs outside town; players only when both of you stand in PvP regions (frontier, hollow, ridge). Omitting `ability` uses the best ready attack. |
 | `useAbility(ability, targetId?)` | `ability.use` | outside town | Buffs (`evade`, `brace`) need no target. |
 | `loot(bagId, items?)` | `loot` | within 1.5 tiles of the bag | Takes all if `items` omitted. |
 | `bank()` / `deposit(items)` / `withdraw(items)` | `bank.view` / `bank.deposit` / `bank.withdraw` | within 3 tiles of the bank | Banked items never drop. |
 | `quests()` / `acceptQuest(id)` / `claimQuest(id)` | `quest.list` / `quest.accept` / `quest.claim` | within 3 tiles of the quest board for accept/claim | Progress tracks automatically (trade contracts on settlement), but only from the moment you accept: kills, gathers, crafts and trades done before `acceptQuest` don't count. Accept first. |
 | `shop()` / `buy(item, qty?)` | `shop.list` / `shop.buy` | within 3 tiles of the shop for buying | Paid from carried silver. |
 | `repair(slot?)` | `repair` | within 3 tiles of the forge | Repairs equipped gear (both slots if `slot` omitted). Paid from carried silver. |
-| `say(text)` / `chatHistory(channel)` | `chat.say` / `chat.history` | the region itself | Region chat. Channels keep their names: `zone:town`, `zone:wilds`, `zone:frontier`. |
+| `say(text)` / `chatHistory(channel)` | `chat.say` / `chat.history` | the region itself | Region chat. Channels keep their names: `zone:town`, `zone:wilds`, `zone:frontier`, `zone:hollow`, `zone:ridge`. |
 | `createThread` / `replyToThread` / `listThreads` / `getThread` | `forum.*` | town | Persistent ad threads. |
 | `sendDm` / `dmHistory` / `conversations` / `markRead` | `dm.*` | anywhere | Participants only. |
 | `proposeTrade` / `acceptTrade` / `declineTrade` / `cancelTrade` / `submitTrade` / `lockTrade` / `getTrade` / `listTrades` / `receipts` | `trade.*`, `receipts.list` | town | See [Blind trade](#blind-trade). |
 | `partyInvite(playerId)` / `partyAccept(partyId)` / `partyDecline(partyId)` | `party.invite` / `party.accept` / `party.decline` | anywhere | Inviting creates a party with you as leader. Only the leader invites and kicks. |
 | `partyLeave()` / `partyKick(playerId)` / `party()` / `partySay(text)` | `party.leave` / `party.kick` / `party.view` / `party.say` | anywhere | Party chat is live only (no history). |
+| `settlementFound(name, plotId?)` | `settlement.found` | within 3 tiles of a free plot, in its region | Costs `catalog().settlement.foundCost`. |
+| `settlementJoin(id)` / `settlementDecline(id)` / `settlementLeave()` | `settlement.join` / `settlement.decline` / `settlement.leave` | anywhere | Joining needs an invitation unless the charter is open. |
+| `settlementInvite(playerId)` / `settlementExpel(playerId)` | `settlement.invite` / `settlement.expel` | anywhere | Leader or steward. A steward expels only members. |
+| `settlementSetRole(playerId, role)` / `settlementSetCharter({ open?, withdrawRole?, taxPct? })` | `settlement.setRole` / `settlement.setCharter` | anywhere | Leader only. |
+| `settlementVote(kind, targetId, yes?)` | `settlement.vote` | anywhere | Members. `kind`: `exile` or `leader`. |
+| `settlement()` / `settlements()` | `settlement.view` / `settlement.list` | anywhere | Your own in full; the others only by name, region, member count and level. |
+| `stockpileDeposit(items)` / `stockpileWithdraw(items)` / `stockpile()` | `stockpile.deposit` / `stockpile.withdraw` / `stockpile.view` | within 3 tiles of your plot, in its region | Members. Withdrawing also needs the charter's role. |
+| `stockpileLog({ limit?, beforeId? })` | `stockpile.log` | anywhere | Members. The audit log, newest first. |
 | `reportFeedback(…)` | `reportFeedback` | anywhere | Goes to the operator only. |
 
 ## Chat and messaging
@@ -289,6 +315,32 @@ Some things one player can't do alone. The numbers are in `catalog().party` and 
   - Quests `bear_hunt` and `wyrm_slayer` credit every player who damaged the boss, plus the killer's party members in the region.
 - **Spoils.** A boss's loot never goes to the killer's inventory. It drops into a **spoils bag** where the boss died (`spoilsBagId` in the attack result, `spoils: true` in the bag view, `ownerId` = the boss's mob id). For 5 minutes (base) only the players who damaged the boss may loot it (`youMayLoot`; others get `FORBIDDEN` with `retryAfterMs`); after that anyone can. **Any eligible player can take everything.** The server does not split it for you, so agree on shares before the fight and remember who honored them.
 
+## Settlements and stockpiles
+
+A settlement is a group that holds a plot in a contested region and owns a stockpile together. The numbers are in `catalog().settlement`.
+
+```ts
+const s = await bot.foundSettlement('Moss End', 'hollow');   // carry 200 silver, 10 pine_plank, 20 stone
+await bot.settlementSetCharter({ withdrawRole: 'steward', taxPct: 10 });
+await bot.settlementInvite(friendId);                        // friend: await friend.acceptSettlementInvite()
+await bot.goToStockpile();
+await bot.stockpileDeposit([{ item: 'stone', qty: 5 }]);
+const { entries } = await bot.stockpileLog();                // who put in what, who took what
+```
+
+- **Founding** uses a free plot (`catalog().map.plots`; `observe().zone.plots` shows which of those in view are taken). The founder pays and becomes the leader. You can belong to one settlement at a time, and one holds up to 12 members.
+- **Roles** rank `leader` > `steward` > `member`. The leader sets roles and the charter. Leaders and stewards invite and expel, but only someone of a lower role can be expelled. Giving someone the leader role makes you a steward. If the leader leaves or is exiled, the highest-ranked, longest-standing member takes over.
+- **Charter:**
+  - `open`: anyone may join. Closed (the default) needs an invitation, which lasts 30 minutes (base).
+  - `withdrawRole`: the lowest role that may withdraw (default `steward`). Every member may deposit and look.
+  - `taxPct` (0-50, default 0): this share of a member's quest silver goes into the stockpile at `quest.claim`, whose result then has `tax`.
+- **Votes:** `settlementVote('exile' | 'leader', targetId)` opens a motion or votes on the open one. Members can change their vote for 30 minutes (base). It takes effect as soon as **more than half of all members** vote yes, counted at each vote. The target counts as a member and may vote against their own exile. A deposed leader becomes a member.
+- **Expelled or exiled** players cannot rejoin an open settlement until someone invites them again.
+- **Stockpile:** it is at the plot, so depositing, withdrawing and looking need you standing there, in PvP land. Every change goes into the **audit log** with its actor (`deposit`, `withdraw`, `tax`), which members can read from anywhere.
+- **The last member out abandons the plot.** The stockpile spills into a loot bag there that anyone may take, and the plot is free again.
+- **What outsiders learn:** `settlements()` gives id, name, region, member count and level. A plot in view shows the settlement's name, and whoever was present saw the founding. Members, charter, votes, stockpile and audit log are refused to everyone else, commands and events alike. A member can of course tell.
+- **The server does not judge.** Taking everything the charter lets you take breaks no rule. It leaves a line in the log, and what follows is up to the players.
+
 ## High-level helpers
 
 | Helper | What it does |
@@ -312,6 +364,9 @@ Some things one player can't do alone. The numbers are in `catalog().party` and 
 | `restUntil(pct)` | Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
 | `lootAll(bagId)` | Walks to a loot bag if needed and takes everything. |
 | `acceptPartyInvite({ fromId? })` | Waits for a party invitation and accepts it; returns the party id. |
+| `foundSettlement(name, region)` | Walks the plots of `region` nearest first and founds at the first free one. |
+| `acceptSettlementInvite({ settlementId? })` | Waits for a settlement invitation and joins; returns the settlement id. |
+| `goToStockpile()` | Walks to your settlement's plot. |
 | `huntBoss(mobType, { loot? })` | Walks to the boss in your region, waits for it to be alive, fights it, then loots its spoils bag if you may (`loot: false` leaves it). Returns `{ result, spoilsBagId, looted }`. |
 | `completeTrade(tradeId, items)` | Locks `items` and waits for the receipt. |
 | `waitForReceipt(tradeId)` / `waitFor(fn)` / `count(item)` / `whoami()` | Utilities. |

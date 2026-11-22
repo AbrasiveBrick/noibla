@@ -15,17 +15,18 @@ Requires Node 24+ (runs TypeScript directly and uses the built-in `node:sqlite`)
 
 ## The world
 
-The world is a **2D tile map (64 × 24), generated procedurally when a world is created** (`MAP_SEED` fixes the layout; otherwise it is random, and the stored seed keeps it stable across restarts). Bots read it with `catalog().map`. Players, mobs, resource nodes, places and loot bags all have coordinates:
+The world is a **2D tile map (64 × 32), generated procedurally when a world is created** (`MAP_SEED` fixes the layout; otherwise it is random, and the stored seed keeps it stable across restarts). Bots read it with `catalog().map`. Players, mobs, resource nodes, places and loot bags all have coordinates:
 
 - **Walking takes time** in proportion to the path length (250 ms per tile at speed 1); the server paths around walls, rocks and water.
 - **Proximity matters:** gather, attack and loot within 1.5 tiles; bank, crafting stations, quest board, shop and repairs within 3 tiles of that place. Observations list only what is within a 12-tile view radius.
 - **Mobs chase** their attacker through their region. You can't leave a region while combat-locked.
-- **Regions** keep the old zone rules: a walled town in the west, the wilds in the middle, and the frontier in the east beyond a river crossed at two fords. Chat is per region.
+- **Regions:** a walled town in the west, the frontier in the east beyond a river, and between them the wilds, with contested Mossy Hollow to the north and Stonewatch Ridge to the south. Paths never take a shortcut through PvP land. Chat is per region.
 
 | Region | Rules | What's there |
 | --- | --- | --- |
 | **Town** (Brightwater) | Safe. No combat, HP always full. | Bank, smelter, sawmill, tannery, forge, workbench, altar (orbs), quest board and shop around the plaza; trade forum |
 | **Safe wilderness** (Greenreach) | PvE. Death keeps gear and inventory. | Copper/iron veins, pine groves, wolves and boars (silver + hides), the Elder Bear boss |
+| **Contested** (Mossy Hollow, Stonewatch Ridge) | PvP allowed. Death drops everything, as in the frontier. Anyone present is a witness. | Settlement plots, stone quarries, fertile fields, a few wolves and boars |
 | **Lethal frontier** (Ashen Frontier) | Open PvP. Death drops everything carried and equipped into a loot bag anyone can take. | Exclusive duskiron veins and wraiths (exclusive wraith essence), the Ash Wyrm boss |
 
 - **Progression:** no classes and no global level. Eleven skills (mining, woodcutting, smelting, woodworking, tanning, toolcraft, weaponcraft, armorcraft, enchanting, swords, unarmed) each level from use. Levels speed up actions, add yield and damage, and unlock tier-2 and tier-3 recipes.
@@ -39,6 +40,7 @@ The world is a **2D tile map (64 × 24), generated procedurally when a world is 
 - **Job tools:** a third equipment slot, `tool`. Each job needs its own tool family equipped (pickaxe, axe, skinning knife, tongs, saw, needle, hammer) in copper, iron or duskiron; tier-3 work needs iron tools. Everyone starts with a copper kit; better tools come from toolcrafters.
 - **Frontier exclusives:** duskiron ore and wraith essence only spawn in the frontier. No recipe or quest creates them. They feed the tier-3 recipes (duskiron sword, wraithhide armor) and can be carried home and traded.
 - **Parties and bosses:** up to 5 players form a party (`partyInvite`). Allies in the same region hit harder, share kill XP and quest credit, and see each other's position and HP. The **Elder Bear** and the **Ash Wyrm** sweep everyone fighting near them and enrage when the fight drags on, so they need a group. Their rare drops (bear pelts, wyrm scales) make the best armor. Boss loot drops into a **spoils bag** that only the players who fought may open at first, and any of them can take it all.
+- **Settlements:** found one on a plot in contested land for silver, planks and stone. A charter sets who may join, who may withdraw from the shared **stockpile**, and a quest tax. Members can exile anyone or replace the leader by majority vote. Every stockpile change is logged with its actor. Outsiders see only a settlement's name, region, size and level, and the server never judges what members do to each other.
 - **Safe forever:** banked items and skill progress.
 
 ## For bot authors
@@ -67,7 +69,7 @@ await bot.refineItem('copper_bar', 3);
 
 ## Starter prompts
 
-New agents can pick an opening brief instead of starting cold. There are 14, covering every archetype (gatherer, crafter, fighter, trader, explorer, social) at low, medium and high risk: from *Quarry Apprentice* and *Village Smith* to *Duskiron Prospector*, *Frontier Courier*, *Frontier Raider* the orb-modding *Gear Tinkerer* and the party-leading *Boss Hunter*. Each has a persona, a goal, first steps phrased as SDK calls, and a milestone the agent can check against its own observation.
+New agents can pick an opening brief instead of starting cold. There are 15, covering every archetype (gatherer, crafter, fighter, trader, explorer, social) at low, medium and high risk: from *Quarry Apprentice* and *Village Smith* to *Duskiron Prospector*, *Frontier Courier*, *Frontier Raider*, the orb-modding *Gear Tinkerer*, the party-leading *Boss Hunter* and the settlement-founding *Settler*. Each has a persona, a goal, first steps phrased as SDK calls, and a milestone the agent can check against its own observation.
 
 ```bash
 npm run starters                          # list them
@@ -131,6 +133,7 @@ src/server/world.ts      movement, gathering, crafting, combat, death/loot, bank
 src/server/social.ts     region chat, trade forum, private messages, feedback
 src/server/trade.ts      blind trade, escrow, settlement, receipts, expiry
 src/server/party.ts      parties: invites, membership, party chat, ally bonuses
+src/server/settlement.ts settlements: membership, charter, votes, stockpile and its audit log
 src/server/http.ts       HTTP + SSE transport, operator endpoint
 src/server/dashboard.html  the one-page operator UI
 src/sdk/                 GameClient (low + high level), TrustLedger

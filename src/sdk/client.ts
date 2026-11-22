@@ -8,11 +8,11 @@
 
 import { randomUUID } from 'node:crypto';
 import { baseOf, itemDef, MAX_CRAFT_BATCH, MOB_TYPES, NODE_TYPES, RECIPES, requiredToolTier, type ToolJob, type OrbId, type AbilityId, type ItemStack, type Slot, type ZoneId } from '../shared/catalog.ts';
-import { findPath, pathLength, type PlaceId, type Pos } from '../shared/map.ts';
+import { dist, findPath, pathLength, type PlaceId, type Pos } from '../shared/map.ts';
 import {
   TRANSIENT_ERRORS,
   type ApiError, type CommandResponse, type CommandType, type EventType, type FeedbackCategory, type GameEvent,
-  type MapCatalog, type MobView, type Observation, type PayloadOf, type ResultOf, type TradeReceipt, type TradeStatus, type UniqueItem,
+  type MapCatalog, type MobView, type Observation, type PayloadOf, type ResultOf, type SettlementCharter, type SettlementRole, type SettlementView, type TradeReceipt, type TradeStatus, type UniqueItem,
 } from '../shared/protocol.ts';
 
 export class CommandError extends Error {
@@ -228,6 +228,30 @@ export class GameClient {
   party() { return this.send('party.view', {}); }
   partySay(text: string, opts?: SendOptions) { return this.send('party.say', { text }, opts); }
 
+  // ---------- settlements ----------
+
+  /** Founds a settlement at a free plot you stand by (`foundSettlement` finds one and walks there for you). */
+  settlementFound(name: string, plotId?: string, opts?: SendOptions) { return this.send('settlement.found', { name, ...(plotId ? { plotId } : {}) }, opts); }
+  settlementInvite(playerId: string, opts?: SendOptions) { return this.send('settlement.invite', { playerId }, opts); }
+  settlementJoin(settlementId: string, opts?: SendOptions) { return this.send('settlement.join', { settlementId }, opts); }
+  settlementDecline(settlementId: string, opts?: SendOptions) { return this.send('settlement.decline', { settlementId }, opts); }
+  settlementLeave(opts?: SendOptions) { return this.send('settlement.leave', {}, opts); }
+  settlementExpel(playerId: string, opts?: SendOptions) { return this.send('settlement.expel', { playerId }, opts); }
+  settlementSetRole(playerId: string, role: SettlementRole, opts?: SendOptions) { return this.send('settlement.setRole', { playerId, role }, opts); }
+  settlementSetCharter(charter: Partial<SettlementCharter>, opts?: SendOptions) { return this.send('settlement.setCharter', charter, opts); }
+  /** Opens or votes on a motion: exile `targetId`, or make them leader. Passes with yes votes from more than half of all members. */
+  settlementVote(kind: 'exile' | 'leader', targetId: string, yes = true, opts?: SendOptions) { return this.send('settlement.vote', { kind, targetId, yes }, opts); }
+  /** Your settlement (members, charter, motions) and your invitations. */
+  settlement() { return this.send('settlement.view', {}); }
+  /** Every settlement's public entry: id, name, region, member count and level. */
+  settlements() { return this.send('settlement.list', {}); }
+  stockpileDeposit(items: ItemStack[], opts?: SendOptions) { return this.send('stockpile.deposit', { items }, opts); }
+  stockpileWithdraw(items: ItemStack[], opts?: SendOptions) { return this.send('stockpile.withdraw', { items }, opts); }
+  /** Contents and the latest audit entries. Members at the plot only. */
+  stockpile() { return this.send('stockpile.view', {}); }
+  /** The audit log, newest first. Members only, from anywhere. */
+  stockpileLog(o: { limit?: number; beforeId?: number } = {}) { return this.send('stockpile.log', o); }
+
   reportFeedback(o: { category: FeedbackCategory; summary: string; details?: string; relatedCommandId?: string }, opts?: SendOptions) {
     return this.send('reportFeedback', o, opts);
   }
@@ -387,7 +411,7 @@ export class GameClient {
 
   /**
    * Walks to `target` and waits until there, retrying through busy time and combat locks.
-   * `target`: a region (`'wilds'`), a place (`'bank'`, `'forge'`, …), the id of a node, mob, loot bag or player
+   * `target`: a region (`'wilds'`), a place (`'bank'`, `'forge'`, …), a settlement plot, the id of a node, mob, loot bag or player
    * (stops within interaction range), or `{ x, y }`.
    */
   async goTo(target: string | Pos, o: { timeoutMs?: number } = {}): Promise<Observation> {
@@ -665,6 +689,36 @@ export class GameClient {
     const inv = await this.waitFor(async () => (await this.observe()).partyInvites.find((i) => !o.fromId || i.fromId === o.fromId), { timeoutMs: o.timeoutMs ?? 60_000, intervalMs: 150, what: 'a party invitation' });
     await this.partyAccept(inv.partyId);
     return inv.partyId;
+  }
+
+  /** Waits for a settlement invitation (to `settlementId` if given) and joins. Returns the settlement id. */
+  async acceptSettlementInvite(o: { settlementId?: string; timeoutMs?: number } = {}): Promise<string> {
+    const inv = await this.waitFor(async () => (await this.observe()).settlementInvites.find((i) => !o.settlementId || i.settlementId === o.settlementId), { timeoutMs: o.timeoutMs ?? 60_000, intervalMs: 150, what: 'a settlement invitation' });
+    await this.settlementJoin(inv.settlementId);
+    return inv.settlementId;
+  }
+
+  /**
+   * Walks from plot to plot in `region` (nearest first) until one is free, and founds `name` there. Carry
+   * catalog.settlement.foundCost. These regions are PvP land where death drops everything you carry.
+   */
+  async foundSettlement(name: string, region: ZoneId): Promise<SettlementView> {
+    const [m, start] = await Promise.all([this.map(), this.observe()]);
+    const plots = m.plots.filter((pl) => pl.region === region)
+      .sort((a, b) => dist(a, start.self.pos) - dist(b, start.self.pos));
+    for (const pl of plots) {
+      const obs = await this.goTo(pl.id);
+      if (obs.zone.plots.find((v) => v.id === pl.id)?.settlement) continue;
+      return (await this.settlementFound(name, pl.id)).settlement;
+    }
+    throw new Error(plots.length ? `every plot in ${region} is taken` : `${region} has no settlement plots`);
+  }
+
+  /** Walks to your settlement's plot, where the stockpile is. */
+  async goToStockpile(): Promise<Observation> {
+    const obs = await this.observe();
+    if (!obs.settlement) throw new Error('you are not in a settlement');
+    return this.goTo(obs.settlement.plotId);
   }
 
   /**

@@ -45,7 +45,8 @@ export const TOOL_RULE =
 
 /** Shared rule text rendered with every starter: how the map works. */
 export const MAP_RULE =
-  'The world is a 2D map, generated anew for each world: read it with map() (catalog().map). Town (safe, west), wilds (PvE) and frontier (lethal PvP, east, across a river with two fords) are regions of it. ' +
+  'The world is a 2D map, generated anew for each world: read it with map() (catalog().map). Town (safe, west), wilds (PvE, middle) and frontier (lethal PvP, east, across a river) are regions of it, and so are two contested regions: ' +
+  'hollow (north of the wilds) and ridge (south of them, with a ford to the frontier), where settlements stand, PvP is allowed and death drops everything. Paths never cut through those two unless you are going there or no other way exists. ' +
   'Walking takes time per tile. Gather, attack and loot within 1.5 tiles; use the bank, stations, quest board and shop within 3 tiles (all surround the town plaza, where travelTo(\'town\') takes you). ' +
   'observe() shows what is within 12 tiles, each with distance and inRange. goTo(target) walks to a region, place, node, mob, bag or player; nearestNode(item) and approachMob(type) find what you need. ' +
   'The high-level helpers (gatherItem, hunt, fight, craftItem, lootAll) walk for you.';
@@ -315,6 +316,31 @@ export const STARTERS: StarterPrompt[] = [
       "craftItem('bearhide_jerkin', 1) with 2 bear pelts and 2 leather",
     ],
     milestone: { description: 'Claim Bear Hunt and own a bearhide jerkin.', items: ['bear_pelt', 'bearhide_jerkin'], quests: ['bear_hunt'] },
+  },
+  {
+    id: 'settler',
+    title: 'Settler',
+    archetype: 'social',
+    risk: 'high',
+    zones: ['town', 'wilds', 'hollow', 'ridge'],
+    focus: ['mining', 'woodcutting', 'woodworking'],
+    summary: 'Pool silver, planks and stone, found a settlement in contested land, and decide who may touch the stockpile.',
+    prompt:
+      'Mossy Hollow and Stonewatch Ridge have free plots, and a settlement there holds what a group owns together: members, a charter and a stockpile kept at the plot. ' +
+      'Your goal is to found one (catalog().settlement.foundCost: silver, planks and stone, paid by you) and bring in people you trust. ' +
+      'This is PvP land: anyone there can kill you and take all you carry, and whoever is present sees who did it. ' +
+      'The charter is your real decision. It sets open or closed membership, the role that may withdraw, and a tax on quest silver. Every stockpile change is logged with a name, ' +
+      'but the log only records: judging is up to the members, who can exile anyone or replace you by majority vote. Members and stockpile are secret from outsiders. ' + CHAT_RULE,
+    firstSteps: [
+      "setFocus(['mining', 'woodcutting', 'woodworking']) in town",
+      "acceptQuest('wolf_cull'), then earn 200 silver from quests, hunting and trades, or pool it with partners",
+      "travelTo('wilds'), gatherItem('pine_log', 20); travelTo('town'), refineItem('pine_plank', 10)",
+      "bank everything you do not need, then travelTo('ridge') and gatherItem('stone', 20)",
+      "foundSettlement('Your Name Here', 'ridge')",
+      "settlementSetCharter({ withdrawRole: 'steward', taxPct: 10 }), then settlementInvite(playerId) the people you trust",
+      'goToStockpile(), stockpileDeposit(items), and read stockpileLog() to see who keeps their word',
+    ],
+    milestone: { description: 'Belong to a settlement with at least two members and something of yours in its stockpile.', items: ['stone', 'pine_plank'] },
   },
   {
     id: 'field_tester',

@@ -4,13 +4,19 @@ import { ZONES, RECIPES } from '../src/shared/catalog.ts';
 import { MAP_RULES, dist, findPath, generateMap, pathLength, regionAt, walkable, type WorldMap } from '../src/shared/map.ts';
 import { world } from './helpers.ts';
 
-const spawns = Object.values(ZONES).map((z) => ({ region: z.id, nodes: z.nodes, mobs: z.mobs }));
+const spawns = Object.values(ZONES).map((z) => ({ region: z.id, nodes: z.nodes, mobs: z.mobs, plots: z.plots }));
 
 function checkMap(m: WorldMap) {
-  assert.deepEqual(m.regions.map((r) => r.id), ['town', 'wilds', 'frontier'], 'safety gradient west → east');
-  assert.equal(m.regions[0].x0, 0);
-  assert.equal(m.regions[2].x1, m.width - 1);
-  for (let i = 1; i < m.regions.length; i++) assert.equal(m.regions[i].x0, m.regions[i - 1].x1 + 1, 'regions tile the map');
+  const rect = (id: string) => m.regions.find((r) => r.id === id)!;
+  const [town, hollow, wilds, ridge, frontier] = ['town', 'hollow', 'wilds', 'ridge', 'frontier'].map(rect);
+  assert.deepEqual(m.regions.map((r) => r.id).sort(), Object.keys(ZONES).sort());
+  assert.equal(town.x0, 0);
+  assert.equal(frontier.x1, m.width - 1);
+  assert.ok(town.x1 < wilds.x0 && wilds.x1 < frontier.x0, 'safety gradient west → east');
+  assert.ok(hollow.y1 < wilds.y0 && wilds.y1 < ridge.y0, 'hollow / wilds / ridge north → south');
+  for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width; x++) {
+    assert.equal(m.regions.filter((r) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1).length, 1, `regions tile the map at (${x}, ${y})`);
+  }
   assert.equal(m.tiles.length, m.height);
   for (const row of m.tiles) assert.equal(row.length, m.width);
   for (const z of Object.values(ZONES)) assert.equal(regionAt(m, m.anchors[z.id]), z.id, `${z.id} anchor lies in ${z.id}`);
@@ -38,6 +44,26 @@ function checkMap(m: WorldMap) {
     reach(n, n.id);
     assert.equal(regionAt(m, n), n.region, `${n.id} inside ${n.region}`);
   }
+  for (const z of Object.values(ZONES)) assert.equal(m.plots.filter((x) => x.region === z.id).length, z.plots);
+  for (const pl of m.plots) {
+    reach(pl, pl.id);
+    assert.equal(regionAt(m, pl), pl.region, `${pl.id} inside ${pl.region}`);
+  }
+  // Every region is crossed without leaving it, and no walk takes PvP land as a shortcut.
+  const stays = (from: { x: number; y: number }, to: { x: number; y: number }, range: number, allowed: string[], what: string) => {
+    const path = findPath(m, from, to, range)!;
+    assert.ok(path, what);
+    for (const p of path) assert.ok(allowed.includes(regionAt(m, p)), `seed ${m.seed}: ${what} passes through ${regionAt(m, p)}`);
+    return path;
+  };
+  for (const n of [...m.nodes, ...m.mobSpawns, ...m.plots]) {
+    stays(m.anchors[n.region], n, 0, [n.region], `${n.region} anchor → ${n.id}`);
+    const path = stays(m.spawn, n, 1.5, [...new Set(['town', 'wilds', n.region])], `town → ${n.id}`);
+    assert.equal(regionAt(m, path[path.length - 1]), n.region, `walking to ${n.id} ends in its region`);
+  }
+  stays(m.spawn, m.anchors.frontier, 0, ['town', 'wilds', 'frontier'], 'town → frontier');
+  stays(m.anchors.hollow, m.anchors.frontier, 0, ['hollow', 'town', 'wilds', 'frontier'], 'hollow → frontier');
+  stays(m.anchors.ridge, m.anchors.frontier, 0, ['ridge', 'frontier'], 'ridge → frontier (its own ford)');
   // The frontier is only reachable through the wilds.
   const toFrontier = findPath(m, m.spawn, m.anchors.frontier)!;
   assert.ok(toFrontier.some((p) => regionAt(m, p) === 'wilds'));
@@ -149,7 +175,8 @@ test('mobs chase their attacker inside their region; combat lock blocks leaving 
     // Walk a few tiles away inside the wilds: allowed while locked, and the boar follows.
     const me = (await c.observe()).self.pos;
     let spot = me;
-    for (let y = 0; y < m.height; y++) for (let x = m.regions[1].x0 + 2; x < m.regions[1].x1 - 2; x++) {
+    const wilds = m.regions.find((r) => r.id === 'wilds')!;
+    for (let y = wilds.y0; y <= wilds.y1; y++) for (let x = wilds.x0 + 2; x < wilds.x1 - 2; x++) {
       const d = dist({ x, y }, me);
       if (walkable(m, x, y) && d >= 4 && d <= 6 && findPath(m, me, { x, y })) spot = { x, y };
     }

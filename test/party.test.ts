@@ -148,7 +148,7 @@ test('boss area attack hits fighters near it; spoils are reserved for contributo
     const far = raw(w, D.playerId);
     far.pos = (await d.map()).tiles.flatMap((row, y) => [...row].map((ch, x) => ({ ch, x, y })))
       .filter((t) => t.ch === '.' && Math.hypot(t.x - bear.x, t.y - bear.y) > MOB_TYPES.elder_bear.boss!.aoeRadius + 1 && Math.hypot(t.x - bear.x, t.y - bear.y) < 8)
-      .map(({ x, y }) => ({ x, y })).find((q) => w.server.game.map.regions.find((r) => q.x >= r.x0 && q.x <= r.x1)?.id === 'wilds')!;
+      .map(({ x, y }) => ({ x, y })).find((q) => w.server.game.map.regions.find((r) => q.x >= r.x0 && q.x <= r.x1 && q.y >= r.y0 && q.y <= r.y1)?.id === 'wilds')!;
     bear.nextAoeAt = Date.now();
     const sweep = await b.waitForEvent((ev) => ev.type === 'combat.hit' && ev.data.ability === 'sweep' && ev.data.targetId === B.playerId, 5000);
     assert.equal(sweep.data.area, true);
