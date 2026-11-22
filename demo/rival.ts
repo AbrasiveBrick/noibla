@@ -36,17 +36,29 @@ export async function runRival(c: GameClient, facts: Facts) {
   const fighter = await c.lookupPlayer('Fighter');
   await c.travelTo('frontier');
   say(`waiting in the frontier for ${fighter.name} (${fighter.playerId})`);
-  // player.get reveals the region of players in your region; their position only within view.
-  await c.waitFor(async () => (await c.getPlayer(fighter.playerId)).zone === 'frontier' || null, { timeoutMs: 240_000, intervalMs: 30, what: 'the fighter to enter the frontier' });
+  // The region hears who walks in. Where they are only shows within view.
+  await c.waitFor(async () => c.received.some((e) => e.type === 'travel.arrive' && e.data.playerId === fighter.playerId && e.data.to === 'frontier')
+    || (await c.getPlayer(fighter.playerId)).zone === 'frontier' || null, { timeoutMs: 240_000, intervalMs: 30, what: 'the fighter to enter the frontier' });
   say(`${fighter.name} just crossed the river — stalking them across the map`);
-  await c.waitFor(async () => {
+  const map = await c.map();
+  const haunts = [...map.nodes, ...map.mobSpawns.filter((s) => s.type === 'wraith')].filter((h) => h.region === 'frontier');
+  let next = 0;
+  const catchUp = () => c.waitFor(async () => {
     const o = await c.observe();
-    if (o.zone.players.find((p) => p.id === fighter.playerId && p.inRange)) return true;
-    await c.request('move', { to: fighter.playerId });
+    const seen = o.zone.players.find((p) => p.id === fighter.playerId);
+    if (seen?.inRange) return true;
+    // Out of view, they can't be followed: search the places worth standing at.
+    if (seen) await c.request('move', { to: fighter.playerId });
+    else if (!o.self.travel) await c.request('move', { to: haunts[next++ % haunts.length].id });
     return null;
-  }, { timeoutMs: 60_000, intervalMs: 80, what: 'to catch up with the fighter' });
+  }, { timeoutMs: 90_000, intervalMs: 80, what: 'to catch up with the fighter' });
+  await catchUp();
   say(`caught ${fighter.name} alone — attacking (open PvP zone)`);
-  const outcome = await c.fight(fighter.playerId, { timeoutMs: 60_000 });
+  let outcome = await c.fight(fighter.playerId, { timeoutMs: 60_000 });
+  for (let i = 0; i < 5 && outcome.result === 'target_gone'; i++) {
+    await catchUp();
+    outcome = await c.fight(fighter.playerId, { timeoutMs: 60_000 });
+  }
   say(`fight over: ${outcome.result} after ${outcome.hits} hits`);
   if (outcome.result === 'downed') {
     await c.sendWhenReady('attack', { targetId: fighter.playerId });

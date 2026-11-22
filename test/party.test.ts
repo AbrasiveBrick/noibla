@@ -62,7 +62,7 @@ test('parties: invite, accept, member view, party chat only for members, kick an
   } finally { await w.close(); }
 });
 
-test('allies in the zone add attack damage and share kill XP and quest credit', async () => {
+test('allies beside you add attack damage and share kill XP and quest credit', async () => {
   const w = await world();
   try {
     const a = await w.bot('Striker');
@@ -76,7 +76,7 @@ test('allies in the zone add attack damage and share kill XP and quest credit', 
     await a.equip('iron_sword');
     await Promise.all([a.travelTo('wilds'), b.travelTo('wilds'), c.travelTo('wilds')]);
     const wolf = [...w.server.game.mobs.values()].find((m) => m.type === 'wolf' && m.zone === 'wilds')!;
-    await a.goTo(wolf.id);
+    await Promise.all([a.goTo(wolf.id), b.goTo(wolf.id), c.goTo(wolf.id)]);
     wolf.hp = 13;
     const r = await a.attack(wolf.id, 'slash');
     assert.equal(r.damage, 13, 'iron sword 12 × (1 + 2 allies × 5%)');
@@ -88,7 +88,7 @@ test('allies in the zone add attack damage and share kill XP and quest credit', 
     await c.travelTo('town');
     const xpBefore = (await c.observe()).self.skills.unarmed.xp;
     const wolf2 = [...w.server.game.mobs.values()].find((m) => m.type === 'wolf' && m.id !== wolf.id)!;
-    await a.goTo(wolf2.id);
+    await Promise.all([a.goTo(wolf2.id), b.goTo(wolf2.id)]);
     wolf2.hp = 1;
     const r2 = await a.attack(wolf2.id, 'slash');
     assert.equal(r2.damage, Math.round(12 * 1.05));

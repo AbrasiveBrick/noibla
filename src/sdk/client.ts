@@ -155,7 +155,7 @@ export class GameClient {
   getPlayer(playerId: string) { return this.send('player.get', { playerId }); }
 
   // ---- movement & skills ----
-  /** Starts a walk (returns at once). `to`: region, place, node/mob/bag/corpse id, a player in your region or view, or { x, y }. High level: goTo / moveTo / travelTo. */
+  /** Starts a walk (returns at once). `to`: region, place, node/mob/bag/corpse id, a player within view, or { x, y }. High level: goTo / moveTo / travelTo. */
   move(to: string | Pos, opts?: SendOptions) { return this.send('move', typeof to === 'string' ? { to } : { x: to.x, y: to.y }, opts); }
   gather(nodeId: string, opts?: SendOptions) { return this.send('gather', { nodeId }, opts); }
   refine(recipeId: string, count = 1, opts?: SendOptions) { return this.send('refine', { recipeId, count }, opts); }
@@ -475,7 +475,7 @@ export class GameClient {
   /**
    * Walks to `target` and waits until there, retrying through busy time and combat locks.
    * `target`: a region (`'wilds'`), a place (`'bank'`, `'forge'`, …), a settlement plot, the id of a node, mob, loot bag or player
-   * (stops within interaction range; a player only in your region or within view), a corpse id, or `{ x, y }`.
+   * (stops within interaction range; a player only within view, or a downed partner in your region), a corpse id, or `{ x, y }`.
    */
   async goTo(target: string | Pos, o: { timeoutMs?: number } = {}): Promise<Observation> {
     const deadline = Date.now() + (o.timeoutMs ?? 120_000);

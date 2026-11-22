@@ -180,6 +180,17 @@ function murder(f: Fake, v: Village, victim = v.vic, by = v.kim): Corpse {
 function bleed(f: Fake) { f.pass(TIMING.downedMs + 1); }
 const wear = (f: Fake, id: string, as = FIGURE) => { f.p(id).hood = { as, until: f.now() + FOREVER }; };
 const bankPos = (f: Fake) => f.g.map.places.find((x) => x.id === 'bank')!;
+/** An open tile of the same region between `min` and `max` tiles away. */
+function near(f: Fake, at: Pos, min: number, max: number): Pos {
+  const region = regionAt(f.g.map, at);
+  for (let y = 0; y < f.g.map.height; y++) {
+    for (let x = 0; x < f.g.map.width; x++) {
+      const d = dist(at, { x, y });
+      if (d >= min && d <= max && walkable(f.g.map, x, y) && regionAt(f.g.map, { x, y }) === region) return { x, y };
+    }
+  }
+  return assert.fail('no such tile');
+}
 const allSilver = (f: Fake) => {
   let n = 0;
   for (const p of f.g.players.values()) n += (p.inventory.silver ?? 0) + (p.bank.silver ?? 0);
@@ -278,8 +289,10 @@ test('revive: damage interrupts it, out of range it fails, and finishing the vic
   f.pass(TIMING.reviveMs);
   assert.ok(f.p(v.vic).downed, 'still down');
 
-  f.put(v.wit, v.far);
+  f.put(v.wit, near(f, v.scene, 2, 6));
   assert.equal(f.no(v.wit, 'revive', { targetId: v.vic }).code, 'OUT_OF_RANGE');
+  f.put(v.wit, v.far);
+  assert.equal(f.no(v.wit, 'revive', { targetId: v.vic }).code, 'INVALID_TARGET', 'out of sight in the same region');
   f.put(v.wit, v.town);
   assert.equal(f.no(v.wit, 'revive', { targetId: v.vic }).code, 'INVALID_TARGET', 'from another region: not in sight');
 
@@ -765,6 +778,72 @@ test('hood: spoils don\'t list who fought in the order they joined', scenario((f
   assert.deepEqual(eligible, [NAMES.kay, NAMES.wit, HOOD.name], 'sorted, or the figure is whoever was first');
 }));
 
+test('hood: it can\'t go on in combat, but another cloak can extend one', scenario((f, v) => {
+  f.p(v.kim).inventory[HOOD.item] = 5;
+  const wolf = [...f.g.mobs.values()].find((m) => m.type === 'wolf' && m.zone === 'hollow')!;
+  f.put(v.kim, wolf.home);
+  f.ok(v.kim, 'attack', { targetId: wolf.id });
+  assert.equal(f.no(v.kim, 'hood.wear').code, 'FORBIDDEN', 'just hit');
+  f.p(v.kim).lastCombatAt = 0;
+  const hunted = f.no(v.kim, 'hood.wear');
+  assert.equal(hunted.code, 'FORBIDDEN', 'a mob is after them');
+  assert.match(hunted.hint, /mob/);
+  assert.equal(f.p(v.kim).inventory[HOOD.item], 5, 'no cloak used');
+  f.put(v.kim, v.town);
+  const { as } = f.ok(v.kim, 'hood.wear');
+  assert.ok(!(v.kim in wolf.aggro), 'what was left behind forgets them');
+  f.put(v.kim, v.scene);
+  f.ok(v.kim, 'attack', { targetId: v.vic });
+  assert.equal(f.ok(v.kim, 'hood.wear').as, as, 'extended mid-fight');
+  // Without a mob: being hit by a player is combat enough.
+  f.p(v.vic).inventory[HOOD.item] = 1;
+  const inFight = f.no(v.vic, 'hood.wear');
+  assert.equal(inFight.code, 'FORBIDDEN', 'just hit by a player');
+  assert.ok(inFight.retryAfterMs > 0 && inFight.retryAfterMs <= TIMING.outOfCombatMs);
+  f.pass(TIMING.outOfCombatMs);
+  f.ok(v.vic, 'hood.wear');
+}));
+
+test('hood: a figure can be reached within view and no further', scenario((f, v) => {
+  wear(f, v.kim);
+  f.put(v.late, near(f, v.scene, 2, 6));
+  f.ok(v.late, 'move', { to: FIGURE });
+  f.put(v.late, v.far);
+  for (const [type, payload] of [['move', { to: FIGURE }], ['attack', { targetId: FIGURE }], ['revive', { targetId: FIGURE }]] as const) {
+    assert.match(f.no(v.late, type, payload).message, /not in sight/, `${type}, or the figure could be tracked`);
+  }
+}));
+
+test('hood: a revive ends as it began, though a hood runs out on either side meanwhile', scenario((f, v) => {
+  for (const [hoodOn, text] of [[v.kim, 'the reviver'], [v.vic, 'the revived']] as const) {
+    f.put(v.wit, v.scene);
+    down(f, v, v.vic, v.kay);
+    f.p(hoodOn).hood = { as: FIGURE, until: f.now() + 2000 };
+    f.listen(v.wit);
+    f.ok(v.kim, 'revive', { targetId: f.p(v.vic).hood?.as ?? v.vic });
+    f.pass(TIMING.reviveMs);
+    f.pass(50);
+    assert.equal(f.p(hoodOn).hood, undefined, 'ran out');
+    const told = f.heard.get(v.wit)!.filter((e) => e.type.startsWith('player.reviv'));
+    assert.equal(told.length, 2);
+    for (const secret of [hoodOn, f.p(hoodOn).name]) assert.ok(!JSON.stringify(told).includes(secret), text);
+    assert.equal(f.operator.filter((e) => e.type === 'player.revived').at(-1).data.byId, v.kim, 'the operator knows');
+    f.p(v.vic).hp = 100;
+  }
+}));
+
+test('hood: a boss\'s sweep hits a figure', scenario((f, v) => {
+  const bear = [...f.g.mobs.values()].find((m) => m.type === 'elder_bear')!;
+  for (const id of [v.kim, v.kay]) f.put(id, bear.home);
+  wear(f, v.kim);
+  f.listen(v.kay);
+  f.ok(v.kim, 'attack', { targetId: bear.id });
+  bear.nextAoeAt = f.now();
+  f.pass(50);
+  const sweep = f.heard.get(v.kay)!.find((e) => e.type === 'combat.hit' && e.data.ability === 'sweep')!;
+  assert.deepEqual([sweep.data.targetId, sweep.data.targetName], [FIGURE, HOOD.name]);
+}));
+
 test('operator: the true killer and the true face, in the feed, the store and the state', scenario((f, v) => {
   wear(f, v.kim);
   f.put(v.wit, v.scene);
@@ -1175,7 +1254,7 @@ test('secrecy: the notices of a death made known don\'t say where it happened', 
   } finally { t.done(); }
 });
 
-test('secrecy: the party sees nothing from afar, and the same region sees the fallen', scenario((f, v) => {
+test('secrecy: the party sees within view only, and one exception is a downed partner in the region', scenario((f, v) => {
   const seen = (id: string) => f.ok(id, 'party.view').party.members.find((m: any) => m.id === v.vic);
   const before = seen(v.lead);
   assert.deepEqual([before.zone, before.pos, before.hp, before.maxHp, before.walking], [null, null, null, null, null]);
@@ -1186,6 +1265,25 @@ test('secrecy: the party sees nothing from afar, and the same region sees the fa
   assert.deepEqual({ ...seen(v.lead), online: true }, { ...before, online: true }, 'dead');
   assert.deepEqual(f.ok(v.lead, 'observe').party.members.find((m: any) => m.id === v.vic).hp, null);
   assert.equal(f.no(v.lead, 'move', { to: v.kay }).code, 'BAD_REQUEST', 'nor can they be followed from afar');
+}));
+
+test('rescue: a downed partner shows across the region, unless hooded, and only until they die', scenario((f, v) => {
+  f.put(v.lead, v.far);
+  f.put(v.late, v.far);
+  const seen = () => f.ok(v.lead, 'party.view').party.members.find((m: any) => m.id === v.vic);
+  assert.equal(seen().pos, null, 'on their feet and out of view: nothing');
+  assert.equal(f.ok(v.lead, 'player.get', { playerId: v.vic }).zone, null);
+  down(f, v);
+  assert.deepEqual([seen().hp, seen().zone, f.ok(v.lead, 'player.get', { playerId: v.vic }).zone], [0, 'hollow', 'hollow']);
+  assert.equal(f.ok(v.late, 'player.get', { playerId: v.vic }).zone, null, 'partners only');
+  assert.equal(f.no(v.late, 'move', { to: v.vic }).code, 'BAD_REQUEST');
+  wear(f, v.vic);
+  assert.equal(seen().pos, null, 'not under a hood');
+  delete f.p(v.vic).hood;
+  f.ok(v.lead, 'move', { to: v.vic }); // on the way
+  f.put(v.lead, v.far);
+  finish(f, v);
+  assert.deepEqual([seen().hp, seen().pos], [null, null], 'dead: like someone out of view');
 }));
 
 // ---------- secrecy: who is under the hood ----------
@@ -1400,6 +1498,42 @@ test('secrecy: a hood fights alone, so no bonus or credit names it', () => {
     const open = fight(() => {});
     assert.deepEqual(hooded, alone);
     assert.ok(open.damage > hooded.damage && open.credited, 'a face does get both');
+  } finally { t.done(); }
+});
+
+test('secrecy: pulling a hood up out of sight changes nothing for the rest of the region', () => {
+  const t = twins();
+  try {
+    const { v } = t;
+    const probe: Probe = { watchers: [v.lead, v.late], targets: [v.kim, NAMES.kim] };
+    const polled = (hood: boolean) => learned(t, probe, (f, seen) => {
+      // A wolf for Lenora, with Kimball in the region and out of sight of it.
+      const wolves = [...f.g.mobs.values()].filter((m) => m.zone === 'hollow' && m.type === 'wolf');
+      const tiles: Pos[] = [];
+      for (let y = 0; y < f.g.map.height; y++) {
+        for (let x = 0; x < f.g.map.width; x++) if (walkable(f.g.map, x, y) && regionAt(f.g.map, { x, y }) === 'hollow') tiles.push({ x, y });
+      }
+      let wolf = wolves[0], away = tiles[0];
+      for (const w of wolves) for (const q of tiles) if (dist(q, w.home) > dist(away, wolf.home)) { wolf = w; away = q; }
+      assert.ok(dist(away, wolf.home) > MAP_RULES.viewRadius + 2);
+      for (const id of [v.lead, v.late]) f.put(id, wolf.home);
+      for (const id of [v.vic, v.kay]) f.put(id, v.town);
+      f.put(v.kim, away);
+      // Region-wide, either of these would have told on Kimball: more damage, and an id for the credit.
+      f.p(v.lead).equipment = { weapon: 'duskiron_sword' };
+      f.p(v.kim).quests.wolf_cull = { status: 'active', progress: 0 };
+      f.save();
+      seen.before = [f.ok(v.lead, 'party.view'), f.ok(v.lead, 'player.get', { playerId: v.kim })];
+      if (hood) {
+        wear(f, v.kim);
+        f.save();
+      }
+      seen.after = [f.ok(v.lead, 'party.view'), f.ok(v.lead, 'player.get', { playerId: v.kim })];
+      seen.hit = f.ok(v.lead, 'attack', { targetId: v.late });
+      wolf.hp = 1;
+      seen.kill = f.ok(v.lead, 'attack', { targetId: wolf.id });
+    });
+    assertSame(polled(true), polled(false), 'a hood or none, out of sight');
   } finally { t.done(); }
 });
 

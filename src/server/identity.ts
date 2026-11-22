@@ -6,7 +6,9 @@
 //   - A command that only makes sense under your own name and would also say where you stand (trading, founding,
 //     shared work, wills) refuses a hood (requireFace). It must never show the figure and the name together.
 //   - Acts from anywhere under your own name (DM, party, membership, votes) keep the name and carry no figure.
-//   - A lookup by a player's own id or name never finds them while hooded, and answers exactly as if they were elsewhere.
+//   - A lookup by a player's own id or name never finds them while hooded, and answers exactly as if they were out of sight.
+//     So nothing may tell where a named player is beyond view (canPlace): it would change the moment a hood goes up.
+//   - What began under one identity ends under the same one in what is told (a revive, the spoils, a blow).
 //   - Lists of players are in the order of the ids shown (bySeenId): registration order would tell who a figure is.
 
 import { HOOD } from '../shared/catalog.ts';

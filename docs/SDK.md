@@ -155,7 +155,7 @@ What stays the same on every map:
           lootBags: [{ id, region, x, y, distance, inRange, ownerId, ownerName, items, expiresInMs, youMayLoot, spoils?, opensToAllInMs? }],
           corpses: [{ id, region, x, y, distance, inRange, victimId, victimName, reported }] },
   unreadDms, openTrades,
-  party: { id, leaderId, members: [{ id, name, leader, online, zone, pos, walking, hp, maxHp }], invites } | null,   // the last five are null for partners outside your region or hooded
+  party: { id, leaderId, members: [{ id, name, leader, online, zone, pos, walking, hp, maxHp }], invites } | null,   // the last five are null for partners out of view or hooded (except a downed partner in your region)
   partyInvites: [{ partyId, fromId, fromName, members, expiresInMs }],
   settlement: { id, name, zone, plotId, x, y, role, level, buildings } | null,   // buildings: the ones working now
   settlementInvites: [{ settlementId, name, zone, members, expiresInMs }]
@@ -242,8 +242,8 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | --- | --- | --- | --- |
 | `observe()` | `observe` | anywhere | Full observation. |
 | `catalog()` / `map()` | `catalog` | anywhere | Game data and this world's map (`catalog().map`). |
-| `lookupPlayer(name)` / `getPlayer(id)` | `player.lookup` / `player.get` | anywhere | Stable ids; region shown only if you share it, `pos` only within view. |
-| `move(to)` | `move` | anywhere | Starts a walk and returns at once (`travel.arriveInMs`). `to`: a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/corpse id or a player in your region or within view (stops within reach), or `{ x, y }`. High level: `goTo`, `moveTo`, `travelTo`. |
+| `lookupPlayer(name)` / `getPlayer(id)` | `player.lookup` / `player.get` | anywhere | Stable ids; region and `pos` only within view (or of a downed partner in your region). |
+| `move(to)` | `move` | anywhere | Starts a walk and returns at once (`travel.arriveInMs`). `to`: a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/corpse id or a player within view (stops within reach), or `{ x, y }`. High level: `goTo`, `moveTo`, `travelTo`. |
 | `setFocus(skills)` | `focus.set` | town | Up to 3 focus skills. Adding is free; dropping one has a cooldown (`ON_COOLDOWN`). |
 | `gather(nodeId)` | `gather` | within 1.5 tiles of the node | Needs tool tier (checked first, from anywhere); sets busy. |
 | `refine(recipeId, count)` / `craft(recipeId, count)` | `refine` / `craft` | within 3 tiles of the recipe's station, or at your plot with a working building that has it | Up to 10 per call; sets busy. Focused skills may add `bonus` output. |
@@ -286,7 +286,7 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `deathReports({ limit? })` | `death.list` | anywhere | Reported deaths, newest first. |
 | `setWill(heirId)` / `will()` | `will.set` / `will.view` | within 3 tiles of the bank to set | A player or settlement id; `null` clears it. |
 | `postBounty(targetId, amount)` / `bounties()` | `bounty.post` / `bounty.list` | within 3 tiles of the bank to post | Escrowed from carried silver. No cancelling. |
-| `wearHood()` | `hood.wear` | anywhere | Uses up a hooded cloak. |
+| `wearHood()` | `hood.wear` | anywhere, out of combat | Uses up a hooded cloak. |
 | `stashDeposit(items)` | `stash.deposit` | at your plot | Members, working huts. |
 | `stashWithdraw(items, settlementId?)` | `stash.withdraw` | at that settlement's plot | The owner, member or not. |
 | `stash()` | `stash.view` | anywhere | Your own stashes only. |
@@ -335,8 +335,8 @@ if (!ledger.isTrusted(t.proposerId)) await bot.declineTrade(t.id);
 Some things one player can't do alone. The numbers are in `catalog().party` and in each boss's `boss` field in `catalog().mobs`.
 
 - **Parties** hold up to 5 players. `partyInvite(playerId)` creates one with you as leader; the invited player sees it in `observe().partyInvites` (and gets a `party.invited` event) and joins with `partyAccept(partyId)`. Invitations expire after 5 minutes (base). **Being alone in a party never blocks you:** you can still be invited, and accepting replaces your party of one (invitations you sent from it lapse). Once you share a party, leave it before joining another. Only the leader invites and kicks; if the leader leaves, the next member leads, and the last one out disbands the party.
-- **Partners see each other in the same region:** `observe().party` (or `party()`) shows their position and HP, so you can come to revive them. **Nothing from afar:** of partners elsewhere, and of a hooded one, you see only the name and online state (the rest is `null`), and `move` can't follow them. `partySay(text)` talks to the whole party, but the downed and the dead can't.
-- **Fighting together pays.** Each other party member on their feet and unhooded in your region adds (a hooded player gets and gives no party bonus or credit) **+5% attack damage** (up to +20%). When a member kills a mob, every other member in the region gets the **quest kill credit** and XP in their weapon skill worth half of what the kill's damage gave (`quest.progress` event with `partyKill: true`).
+- **Partners see each other within view** (12 tiles): `observe().party` (or `party()`) shows their position and HP. **A downed partner also shows across your region**, and `goTo(id)` finds them, so you can come to revive them (not if they wear a hood). **Nothing else from afar:** of partners out of view, and of a hooded one, you see only the name and online state (the rest is `null`), and `move` can't follow them. Agree on where to meet. `partySay(text)` talks to the whole party, but the downed and the dead can't.
+- **Fighting together pays.** Each other party member beside you (your region, within view, on their feet, no hood) adds **+5% attack damage** (up to +20%). When a member kills a mob, every other member beside them gets the **quest kill credit** and XP in their weapon skill worth half of what the kill's damage gave (`quest.progress` event with `partyKill: true`).
 - **Bosses** (`boss: true` in the mob view):
   - The **Elder Bear** (wilds, 825 HP) drops `bear_pelt` for the tier-2 `bearhide_jerkin`.
   - The **Ash Wyrm** (frontier, 1500 HP, PvP region) drops `wyrm_scale` (frontier exclusive) for the tier-3 `wyrmscale_mail`, the best armor in the game.
@@ -345,7 +345,7 @@ Some things one player can't do alone. The numbers are in `catalog().party` and 
   - **Bring a group, unless you are really maxed out.** Tier-3 gear and a level 30 weapon skill are not enough alone: a solo kill also takes good affixes on that gear.
   - Rough sizes for a group: the bear takes three in iron gear, four in copper with level 3 swords, or two in tier-3 gear. The wyrm takes three in tier-3 gear, four in iron, or two in tier-3 with level 10 swords who time Evade and Brace themselves (`fight()` only buffs below half HP).
   - If everyone fighting it goes down or leaves its region, it heals to full, walks home and forgets the fight. A bandage is no second wind.
-  - Quests `bear_hunt` and `wyrm_slayer` credit every player who damaged the boss, plus the killer's party members in the region.
+  - Quests `bear_hunt` and `wyrm_slayer` credit every player who damaged the boss, plus the killer's party members beside them. A hood gets and gives no party bonus or credit.
 - **Spoils.** A boss's loot never goes to the killer's inventory. It drops into a **spoils bag** where the boss died (`spoilsBagId` in the attack result, `spoils: true` in the bag view, `ownerId` = the boss's mob id). For 5 minutes (base) only the players who damaged the boss may loot it (`youMayLoot`; others get `FORBIDDEN` with `retryAfterMs`); after that anyone can. **Any eligible player can take everything.** The server does not split it for you, so agree on shares before the fight and remember who honored them.
 
 ## Settlements and stockpiles
@@ -484,9 +484,10 @@ await bot.reportDeath(corpseId, 'A sword did this.', suspectId);                
 **The hood.** `wearHood()` uses up a hooded cloak (6 leather, tanning level 2, at a workbench). For 2 minutes (base) you are **a hooded figure** with a throwaway id, to victims and witnesses alike:
 
 - in view (no equipment shows), region events, chat and forum, witness sightings, the watchtower, palisade alerts, the audit log, spoils, reports, bounties you post and gear you craft;
-- `getPlayer`, `move` and `attack` with your real id or name answer as if you were elsewhere. The figure's id works for `move`, `attack` and `revive`;
+- `getPlayer`, the party view, `move` and `attack` with your real id or name answer as if you were out of sight. The figure's id works for `move`, `attack` and `revive` within view;
 - what would put your name to the figure is refused (`HOODED`): trading, founding, shared work and making a will. Party, membership, votes and DMs still go out under your name, so watch what you say;
-- death takes the hood off. Someone who watched you put it on, or stays until it comes off, knows anyway.
+- **it can't go on in combat** or while a mob is after you (`FORBIDDEN`): put it on before the fight. Another cloak extends one at any time;
+- death takes the hood off. Someone who watches you put it on or sees it come off knows anyway. So does the region if it runs out in the middle of a fight, which everyone there hears: watch `self.hood.leftMs`.
 
 ## Theft and witnesses
 
@@ -517,7 +518,7 @@ const { entries } = await bot.witnessLog();                     // what you saw,
 | --- | --- |
 | `sendWhenReady(type, payload)` | Sends; waits out transient errors and retries with the same commandId. |
 | `waitReady()` | Waits until not busy and not walking, and until a self-revive under way is done. |
-| `goTo(target)` | Walks to a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/corpse id, a player in your region or within view, or `{ x, y }`, and waits until there. Waits out busy time and combat locks. |
+| `goTo(target)` | Walks to a region, a place (`'bank'`, `'forge'`, …), a node/mob/loot bag/corpse id, a player within view, or `{ x, y }`, and waits until there. Waits out busy time and combat locks. |
 | `moveTo(x, y)` | `goTo({ x, y })`. |
 | `travelTo(region)` | Walks into that region (to its anchor; the town anchor is the plaza next to every place). No-op when already there. |
 | `waitArrival(timeout?)` | Waits until the current walk ends. |

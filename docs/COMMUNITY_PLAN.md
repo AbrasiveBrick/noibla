@@ -38,8 +38,8 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 
 - **Parties** (`src/server/party.ts`): `party.invite`, `party.accept`, `party.leave`, `party.kick`, `party.view`, up to 5 members.
   - A party of one never blocks being invited or joining another.
-  - Members in the same region see each other's position and HP (stage 5: nothing from afar).
-  - Kill XP and quest credit are shared among members in the zone.
+  - Members within view see each other's position and HP (stage 5: nothing from afar, except a downed partner in the region).
+  - Kill XP and quest credit are shared among members beside each other (stage 5: in the region and within view).
   - New `Visibility` kind `{ kind: 'party', id }`.
 - **Bosses** (`MOB_TYPES`, new flag `boss`):
   - **Elder Bear** (825 HP) in the wilds, so groups learn bosses without PvP risk, and **Ash Wyrm** (1500 HP) in the frontier.
@@ -207,7 +207,9 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
 - **Sandbox prompt:** `sandbox/agent-prompt.md` and `sandbox/entrypoint.sh` handle a dead character by registering `<name>-2` and so on, keeping notes in `/work`.
 - **Rules the plan left open, decided with the user (2026-11-22):**
   - **When a death is known:** membership and inheritance wait for the first `death.report`, else 10 minutes. Until then roster, stockpile and heir show nothing, so a killer who is the heir gains by reporting first.
-  - **Party sight:** nothing from afar. Position and HP show only to partners in the same region. Others see the name and online state.
+  - **Party sight:** nothing from afar. Others see only the name and online state.
+  - **Sight, narrowed after testing found a leak:** with region-wide lookups, whoever pulled up a hood out of sight was the one player who suddenly read as elsewhere. So position, zone, HP and move-to-player work only within view, and a hood looks like being out of sight. One exception: an unhooded downed partner shows to the party in the same region, for the rescue.
+  - **No hooding in combat** or while a mob is after you. A hood that runs out mid-fight still gives its wearer away.
   - **The dead's stashes:** as the bank (heir, else their settlement, else destroyed).
   - **The last member:** the plan read literally. Without a will, bank and stash go to the stockpile and spill with it, so a lone founder is a profitable target.
   - **Bandage:** one each in the kit, existing characters once. Self-revive is a command, never automatic.
@@ -219,7 +221,8 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - **Two event ids a blow:** a hit, going down, a finish and bleeding out each spend two, whoever is present. An outsider's gaps don't tell a death from a hit.
   - **The time of death** is only ever shown as a 2 minute window: the corpse bag's countdown and the moment a death becomes known are dated by the window too.
   - **The notices of a death made known** (inheritance, bounties) don't say where it happened.
-  - **Players can't be followed from afar:** `move` and `attack` reach a player only in your region or within view. Otherwise they would show where a partner or a hooded player is, and an error would show who is hooded.
+  - **One rule for sight** (`canPlace`): `player.get`, the party view, `move`, `attack` and `revive`. Party bonus and kill credit follow it: partners count only within view, or damage and event ids would tell which of them pulled a hood up.
+  - **What begins under a hood is told under it to the end** (a revive, the spoils, who struck the blow).
   - **Witnesses are not rolled:** everyone in the region saw it. A bleed-out names no killer in `player.death`, or whoever walked in during the minute would learn it.
   - **A hood fights alone** (no party bonus or credit), always sets off the palisade, and skips take-back on withdrawals: each would otherwise name the figure.
   - **The dead are no cameras:** their `observe` shows nothing of the living and their event stream stops.
@@ -230,7 +233,7 @@ Deliver it in **7 stages, one PR and one session each**, the same way gear stage
   - Whoever comes into the region sees the corpse if they come within view, and a partner there sees 0 HP.
   - Once a death is known: members see a roster change, outsiders a member count and the bounty list, and posting a bounty on the victim fails. A refund tells a poster that no player did it.
   - A death stops the victim's agent, so they go offline, and that agent may tell everything as a new character.
-  - A hood: continuity of position and HP for whoever watches it go on or come off, and damage that hints at gear and skill. A pilfer or plot act still says the figure is a member, and a withdrawal that they may withdraw.
+  - A hood: continuity of position and HP for whoever watches it go on or come off, of what it was doing when it runs out, and of who walked into a region and never out. Damage hints at gear and skill. A pilfer or plot act still says the figure is a member, and a withdrawal that they may withdraw.
   - A corpse's watchtower clues show outsiders that a working tower stood in the region, and are lost if that settlement is abandoned.
 - **What an agent run should show:** downs per hour by cause; how many are revived, by whom and by bandage; permanent deaths and whether agents register again and keep their notes; murders, first reporters and whom they accuse against the true killer; whether wills and bounties are used; whether lone founders are hunted; the `COMBAT_LOCKED` count.
 - **Known limits, none of them measured with agents:**

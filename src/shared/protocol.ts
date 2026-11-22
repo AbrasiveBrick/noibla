@@ -100,7 +100,7 @@ export interface LootBagView extends Located { id: string; region: ZoneId; owner
 
 // ---------- Parties ----------
 
-/** Partners in your region show their position and HP. Of the others, and of a hooded one, you see only the name and whether they are online. */
+/** Partners within view show their position and HP, and so does a downed one anywhere in your region (for the rescue). Of the others, and of a hooded one, you see only the name and whether they are online. */
 export interface PartyMemberView { id: string; name: string; leader: boolean; online: boolean; zone: ZoneId | null; pos: Pos | null; walking: boolean | null; hp: number | null; maxHp: number | null }
 export interface PartyView { id: string; leaderId: string; members: PartyMemberView[]; invites: { playerId: string; name: string; expiresInMs: number }[] }
 /** An invitation you received. Accept it with party.accept. */
@@ -398,6 +398,7 @@ export interface Commands {
   /** `map`: the procedurally generated world map of this server plus the fixed MAP_RULES. */
   catalog: { payload: Empty; result: typeof CATALOG & { map: MapCatalog } };
   'player.lookup': { payload: { name: string }; result: { playerId: string; name: string } };
+  /** `zone` and `pos`: only of a player within view (or a downed partner in your region). */
   'player.get': { payload: { playerId: string }; result: { id: string; name: string; online: boolean; zone: ZoneId | null; pos: Pos | null; createdAt: number } };
   // Movement
   /**
@@ -560,7 +561,7 @@ export interface Commands {
   'bounty.post': { payload: { targetId: string; amount: number }; result: { bounty: BountyView; inventory: ItemStack[] } };
   /** Anywhere: bounties on players not known to be dead. */
   'bounty.list': { payload: Empty; result: { bounties: BountyView[] } };
-  /** Uses up a hooded cloak: see catalog.hood. Wearing another extends it. */
+  /** Uses up a hooded cloak: see catalog.hood. Not while in combat. Wearing another extends it. */
   'hood.wear': { payload: Empty; result: { as: string; leftMs: number; busyMs: number } };
   // Feedback
   reportFeedback: { payload: { category: FeedbackCategory; summary: string; details?: string; relatedCommandId?: string }; result: { feedbackId: number } };

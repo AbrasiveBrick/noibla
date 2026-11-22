@@ -1,4 +1,4 @@
-// Parties: small groups that fight together. Members in the same region see each other's position and HP,
+// Parties: small groups that fight together. Members within view see each other's position and HP,
 // share kill credit and bonus XP, and hit harder side by side (see PARTY in the catalog).
 // Party chat and membership events go only to members (Visibility 'party').
 
@@ -7,7 +7,7 @@ import type { PartyInviteView, PartyMessage, PartyView } from '../shared/protoco
 import type { Game } from './game.ts';
 import type { CommandDef, Party, Player } from './types.ts';
 import { cleanText, fail, newId, reqStr } from './util.ts';
-import { maxHp, posOf } from './world.ts';
+import { canPlace, inView, maxHp, posOf } from './world.ts';
 
 const MAX_PARTY_CHAT = 500;
 
@@ -24,18 +24,19 @@ function hasPartymates(g: Game, p: Player): boolean {
 }
 
 /**
- * Other party members on their feet in the same region as `p` (walking or not). A hood fights alone, both ways: a
- * partner's bonus or credit would say who is under it.
+ * Other party members on their feet in `p`'s region and within view (walking or not): who fights beside them. A hood
+ * fights alone, both ways, and nobody out of view counts either: otherwise the bonus, or the event ids the credit
+ * spends, would tell which partner pulled a hood up.
  */
-export function alliesInZone(g: Game, p: Player): Player[] {
+export function alliesBeside(g: Game, p: Player): Player[] {
   const pt = partyOf(g, p);
   if (!pt || p.hood) return [];
-  return pt.members.filter((id) => id !== p.id).map((id) => g.players.get(id)).filter((o): o is Player => !!o && !o.hood && !o.downed && !o.dead && o.zone === p.zone);
+  return pt.members.filter((id) => id !== p.id).map((id) => g.players.get(id)).filter((o): o is Player => !!o && !o.hood && !o.downed && !o.dead && o.zone === p.zone && inView(g, p, o));
 }
 
 /** Attack damage multiplier from allies fighting beside you. */
 export function partyDamageMult(g: Game, p: Player): number {
-  return 1 + Math.min(PARTY.maxDamageBonus, PARTY.damageBonusPerAlly * alliesInZone(g, p).length);
+  return 1 + Math.min(PARTY.maxDamageBonus, PARTY.damageBonusPerAlly * alliesBeside(g, p).length);
 }
 
 function liveInvites(g: Game, pt: Party): [string, number][] {
@@ -43,7 +44,7 @@ function liveInvites(g: Game, pt: Party): [string, number][] {
   return Object.entries(pt.invites).filter(([, exp]) => exp > now);
 }
 
-/** As `viewerId` sees it: nothing from afar, so a distant partner can't watch someone go down, and nothing of a hood. */
+/** As `viewerId` sees it: where and how partners are only as canPlace allows, so a hood looks like being out of sight. */
 export function partyView(g: Game, pt: Party, viewerId: string): PartyView {
   const now = g.now();
   const viewer = g.players.get(viewerId)!;
@@ -53,7 +54,7 @@ export function partyView(g: Game, pt: Party, viewerId: string): PartyView {
     members: pt.members.map((id) => {
       const o = g.players.get(id)!;
       const member = { id, name: o.name, leader: id === pt.leaderId, online: g.isOnline(id) };
-      if (id !== viewerId && (o.zone !== viewer.zone || o.hood)) return { ...member, zone: null, pos: null, walking: null, hp: null, maxHp: null };
+      if (!canPlace(g, viewer, o)) return { ...member, zone: null, pos: null, walking: null, hp: null, maxHp: null };
       const pos = posOf(g, o);
       return { ...member, zone: o.zone, pos: { x: Math.round(pos.x * 10) / 10, y: Math.round(pos.y * 10) / 10 }, walking: !!o.travel, hp: o.hp, maxHp: maxHp(o) };
     }),

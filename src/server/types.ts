@@ -49,8 +49,11 @@ export interface Player {
   downed?: { at: number; until: number; forMs: number; blow: Blow };
   /** Dead for good. `settled`: the estate passed. */
   dead?: { at: number; zone: ZoneId; corpseId: string; settled?: true };
-  /** A revive under way (`targetId` may be the player's own id). */
-  reviving?: { targetId: string; until: number };
+  /**
+   * A revive under way (`targetId` may be the player's own id). `by` and `on`: the two as they were seen when it began,
+   * for how it ends to say the same, or a hood running out meanwhile would put a name to the figure.
+   */
+  reviving?: { targetId: string; until: number; by: Who; on: Who };
   /** Set while hooded and only then: the tick removes it, so it can't run out halfway through a command. */
   hood?: { as: string; until: number };
   /** The heir named at the bank: a player or settlement id. */

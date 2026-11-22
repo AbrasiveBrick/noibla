@@ -15,7 +15,7 @@ import { bySeenId, isAlias, seenAs } from './identity.ts';
 import { BUILDING_ODDS, MOB_LOOT, SKILL_ODDS } from './odds.ts';
 import type { CommandDef, LootBag, Mob, Player, Walk } from './types.ts';
 import { addItems, available, describe, fail, hasItems, missing, newId, obj, optInt, removeItems, reqStr, stacks, toBag, toStacks } from './util.ts';
-import { alliesInZone, invitesFor, partyDamageMult, partyOf, partyView } from './party.ts';
+import { alliesBeside, invitesFor, partyDamageMult, partyOf, partyView } from './party.ts';
 import { audit, requireSharedWork, settlementInvitesFor, settlementSummary, taxQuestReward } from './settlement.ts';
 
 export { killPlayer };
@@ -211,26 +211,38 @@ export function requireInRange(g: Game, p: Player, target: Pos, id: string, what
 
 // ---------- other players ----------
 
-/**
- * The player `key` points at, for what is done to someone in the world: move, attack, revive. Only in your region or
- * in view, so nobody can be followed from afar. A hooded player answers to the figure's id alone: to their own id and
- * name they are just like someone elsewhere.
- */
-export function findPlayer(g: Game, p: Player, key: string, byName = false): Player | undefined {
-  let o: Player | undefined;
-  if (isAlias(key)) o = [...g.players.values()].find((x) => x.hood?.as === key);
-  if (!o) {
-    o = g.players.get(key) ?? (byName ? g.playerByName(key) : undefined);
-    if (o?.hood) return undefined;
-  }
-  if (!o || o.id === p.id) return undefined;
-  return o.zone === p.zone || dist(posOf(g, p), posOf(g, o)) <= MAP_RULES.viewRadius ? o : undefined;
+export function inView(g: Game, p: Player, o: Player): boolean {
+  return dist(posOf(g, p), posOf(g, o)) <= MAP_RULES.viewRadius;
 }
 
-/** Fails for a player who can't be reached. The same answer whether they are far away or hooded. */
+/**
+ * Whether `viewer` may know where `o` is, by name: player.get, the party view, and move, attack and revive. Only within
+ * view, so that pulling up a hood is just like stepping out of sight: anything region-wide would show who vanished.
+ * One exception, so partners can come to the rescue: a downed partner without a hood shows across their region.
+ */
+export function canPlace(g: Game, viewer: Player, o: Player): boolean {
+  if (o.id === viewer.id) return true;
+  if (o.hood) return false;
+  return inView(g, viewer, o) || (!!o.downed && !!o.partyId && o.partyId === viewer.partyId && o.zone === viewer.zone);
+}
+
+/**
+ * The player `key` points at, for what is done to someone in the world: move, attack, revive. A hooded player answers
+ * to the figure's id alone, within view: to their own id and name they are just like someone out of sight.
+ */
+export function findPlayer(g: Game, p: Player, key: string, byName = false): Player | undefined {
+  if (isAlias(key)) {
+    const figure = [...g.players.values()].find((x) => x.hood?.as === key);
+    if (figure) return figure.id !== p.id && inView(g, p, figure) ? figure : undefined;
+  }
+  const o = g.players.get(key) ?? (byName ? g.playerByName(key) : undefined);
+  return o && o.id !== p.id && canPlace(g, p, o) ? o : undefined;
+}
+
+/** Fails for a player who can't be reached. The same answer whether they are out of sight or hooded. */
 export function notInSight(g: Game, code: 'BAD_REQUEST' | 'INVALID_TARGET', key: string, unknown: string, hint?: string, byName = false): never {
   if (isAlias(key) || g.players.has(key) || (byName && g.playerByName(key))) {
-    return fail(code, `${key} is not in your region or in sight`, undefined, 'you can only reach players in your region or within view: observe().zone.players lists those in view. Walk to their region first.');
+    return fail(code, `${key} is not in sight`, undefined, 'you can only reach players within view: observe().zone.players lists them. To find someone, walk where they may be, or ask them where they are.');
   }
   return fail(code, unknown, undefined, hint);
 }
@@ -917,13 +929,13 @@ function dropSpoils(g: Game, mob: Mob, loot: ItemStack[], now: number): LootBag 
 }
 
 /**
- * Kill credit beyond the killer: party members in the region get the quest credit and a share of XP;
+ * Kill credit beyond the killer: party members beside them (in the region and in view) get the quest credit and a share of XP;
  * everyone else who damaged a boss gets the quest credit.
  */
 function shareKill(g: Game, killer: Player, mobType: string, contributors: string[]) {
   const def = MOB_TYPES[mobType];
   const credited = new Set<string>([killer.id]);
-  for (const a of alliesInZone(g, killer)) {
+  for (const a of alliesBeside(g, killer)) {
     credited.add(a.id);
     const skill = weaponSkillOf(a);
     const xp = gainXp(g, a, skill, Math.round(def.hp * COMBAT.xpPerDamage * PARTY.killXpShare));
@@ -1258,12 +1270,10 @@ export const worldCommands: Record<string, CommandDef> = {
   'player.get': ro((g, p, payload) => {
     const o = g.players.get(reqStr(obj(payload), 'playerId', 40));
     if (!o) fail('NOT_FOUND', 'no such player');
-    // A hooded player reads as someone elsewhere.
-    const known = !o!.hood || o!.id === p.id;
-    const sameZone = known && p.zone === o!.zone;
+    // A hooded player reads as someone out of sight.
+    const visible = canPlace(g, p, o!);
     const pos = posOf(g, o!);
-    const visible = known && dist(posOf(g, p), pos) <= MAP_RULES.viewRadius;
-    return { id: o!.id, name: o!.name, online: g.isOnline(o!.id), zone: sameZone ? o!.zone : null, pos: visible ? { x: round1(pos.x), y: round1(pos.y) } : null, createdAt: o!.createdAt };
+    return { id: o!.id, name: o!.name, online: g.isOnline(o!.id), zone: visible ? o!.zone : null, pos: visible ? { x: round1(pos.x), y: round1(pos.y) } : null, createdAt: o!.createdAt };
   }),
   move: rw(move),
   'focus.set': rw(focusSet),

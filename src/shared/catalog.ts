@@ -421,9 +421,9 @@ export const QUESTS: Record<string, QuestDef> = {
   ore_run: { id: 'ore_run', name: 'Ore Run', description: 'Mine 6 copper ore.', objective: { kind: 'gather', target: 'copper_ore', count: 6 }, reward: [{ item: 'silver', qty: 15 }] },
   apprentice_smith: { id: 'apprentice_smith', name: 'Apprentice Smith', description: 'Craft a copper sword.', objective: { kind: 'craft', target: 'copper_sword', count: 1 }, reward: [{ item: 'silver', qty: 20 }] },
   frontier_hunt: { id: 'frontier_hunt', name: 'Frontier Hunt', description: 'Kill a wraith in the frontier.', objective: { kind: 'kill', target: 'wraith', count: 1 }, reward: [{ item: 'silver', qty: 60 }] },
-  // Boss quests: every player who damaged the boss, and every party member of the killer in the region, gets the kill credit.
-  bear_hunt: { id: 'bear_hunt', name: 'Bear Hunt', description: 'Help kill the Elder Bear in the wilds (a group job: everyone who hits it, and the killer\'s party in the region, gets credit).', objective: { kind: 'kill', target: 'elder_bear', count: 1 }, reward: [{ item: 'silver', qty: 120 }] },
-  wyrm_slayer: { id: 'wyrm_slayer', name: 'Wyrm Slayer', description: 'Help kill the Ash Wyrm in the frontier (a group job: everyone who hits it, and the killer\'s party in the region, gets credit).', objective: { kind: 'kill', target: 'ash_wyrm', count: 1 }, reward: [{ item: 'silver', qty: 300 }] },
+  // Boss quests: every player who damaged the boss, and every party member of the killer beside them, gets the kill credit.
+  bear_hunt: { id: 'bear_hunt', name: 'Bear Hunt', description: 'Help kill the Elder Bear in the wilds (a group job: everyone who hits it, and the killer\'s party beside them, gets credit).', objective: { kind: 'kill', target: 'elder_bear', count: 1 }, reward: [{ item: 'silver', qty: 120 }] },
+  wyrm_slayer: { id: 'wyrm_slayer', name: 'Wyrm Slayer', description: 'Help kill the Ash Wyrm in the frontier (a group job: everyone who hits it, and the killer\'s party beside them, gets credit).', objective: { kind: 'kill', target: 'ash_wyrm', count: 1 }, reward: [{ item: 'silver', qty: 300 }] },
   // Trade contracts: progress counts only what actually changes hands in settled blind trades with other players.
   supply_contract: { id: 'supply_contract', name: 'Supply Contract', description: 'Deliver 4 iron bars to other players through settled trades.', objective: { kind: 'deliver', target: 'iron_bar', count: 4 }, reward: [{ item: 'silver', qty: 40 }] },
   outfitter_contract: { id: 'outfitter_contract', name: 'Outfitter Contract', description: 'Deliver an iron mail to another player through a settled trade.', objective: { kind: 'deliver', target: 'iron_mail', count: 1 }, reward: [{ item: 'silver', qty: 50 }] },
@@ -492,7 +492,7 @@ export const DEATH = {
 
 /**
  * hood.wear uses up one `item`. For `ms` you are `name`, under a throwaway id, in everything others see you do or say
- * in the world, the watchtower and the audit log included. Death takes it off.
+ * in the world, the watchtower and the audit log included. It can't go on in combat. Death takes it off.
  */
 export const HOOD = { item: 'hooded_cloak', ms: 2 * 60_000, name: 'a hooded figure' };
 
@@ -540,8 +540,8 @@ export const COMBAT = {
 
 /**
  * Parties: up to `maxSize` players who fight together.
- * - Each other party member in your region adds `damageBonusPerAlly` to your attack damage (up to `maxDamageBonus`).
- * - When a party member kills a mob, every other member in the region gets the quest kill credit and
+ * - Each other party member beside you (in your region and within view) adds `damageBonusPerAlly` to your attack damage (up to `maxDamageBonus`).
+ * - When a party member kills a mob, every other member beside them gets the quest kill credit and
  *   `killXpShare` × (mob HP × combat.xpPerDamage) XP in their weapon skill.
  * - Boss loot drops into a spoils bag that only players who damaged the boss can open for `spoilsReservedMs`;
  *   after that anyone can. Any eligible player can take everything: share fairly or not.

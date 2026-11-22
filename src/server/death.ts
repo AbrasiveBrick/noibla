@@ -250,27 +250,29 @@ function revive(g: Game, p: Player, payload: Record<string, any>) {
   // Used up as it starts: an interrupted self-revive is a death.
   if (self) removeItems(p.inventory, [{ item: DEATH.bandage, qty: 1 }]);
   const busyMs = g.ms(TIMING.reviveMs);
-  p.reviving = { targetId: target.id, until: now + busyMs };
-  // Going down cuts no pilfer short, and neither does getting up.
-  p.busyUntil = Math.max(p.busyUntil, now + busyMs);
   const by = seenAs(p);
   const on = seenAs(target);
+  p.reviving = { targetId: target.id, until: now + busyMs, by, on };
+  // Going down cuts no pilfer short, and neither does getting up.
+  p.busyUntil = Math.max(p.busyUntil, now + busyMs);
   g.emit('player.reviving', { kind: 'zone', zone: target.zone }, { playerId: by.id, name: by.name, targetId: on.id, targetName: on.name, channelMs: busyMs }, { zone: target.zone, actor: p });
   g.setLastAction(p, 'revive', self ? 'bandaging themself' : `reviving ${target.name}`);
   return { targetId: on.id, busyMs };
 }
 
 function finishRevive(g: Game, p: Player) {
-  const target = g.players.get(p.reviving!.targetId)!;
+  const { targetId, by, on } = p.reviving!;
+  const target = g.players.get(targetId)!;
   g.markPlayer(p);
   g.markPlayer(target);
   endRevivesOf(g, target.id);
   delete target.downed;
   target.hp = Math.max(1, Math.ceil((maxHp(target) * DEATH.reviveHpPct) / 100));
   target.lastCombatAt = g.now();
-  const by = seenAs(p);
-  const on = seenAs(target);
-  g.emit('player.revived', { kind: 'zone', zone: target.zone }, { playerId: on.id, name: on.name, byId: by.id, byName: by.name, hp: target.hp }, { zone: target.zone, actor: target });
+  // No actor: it would be masked as they look now, beside how they looked when it began.
+  g.emit('player.revived', { kind: 'zone', zone: target.zone }, { playerId: on.id, name: on.name, byId: by.id, byName: by.name, hp: target.hp }, {
+    zone: target.zone, truth: { playerId: target.id, name: target.name, byId: p.id, byName: p.name },
+  });
   g.setLastAction(target, 'revive', p === target ? 'bandaged themself back up' : `revived by ${p.name}`);
 }
 
@@ -545,9 +547,21 @@ function wearHood(g: Game, p: Player) {
   if (!available(p.inventory, HOOD.item)) {
     fail('NOT_ENOUGH_ITEMS', `you carry no ${HOOD.item}`, undefined, `craft one (recipe "${HOOD.item}", tanning at a workbench) or buy one from a tanner`);
   }
+  const now = g.now();
+  // Another cloak on a hood changes nothing anyone sees, so that is fine at any time.
+  if (!p.hood) {
+    const calmIn = p.lastCombatAt + g.ms(TIMING.outOfCombatMs) - now;
+    const hunted = [...g.mobs.values()].some((m) => m.zone === p.zone && m.hp > 0 && (m.targetId === p.id || p.id in m.aggro));
+    if (calmIn > 0 || hunted) {
+      fail('FORBIDDEN', 'you cannot pull up a hood in combat', calmIn > 0 ? calmIn : undefined,
+        hunted ? 'a mob is after you, and the region would hear it go from hitting you to hitting the hooded figure: kill it or get away from its region, or put the hood on before the fight'
+          : 'the region would hear whose fight the hooded figure took over: wait until you are out of combat, or put the hood on before the fight');
+    }
+    // A beast left behind in another region would pick the figure up where it left the name.
+    clearAggro(g, p.id);
+  }
   g.markPlayer(p);
   removeItems(p.inventory, [{ item: HOOD.item, qty: 1 }]);
-  const now = g.now();
   const leftMs = g.ms(HOOD.ms);
   p.hood = { as: p.hood?.as ?? newId('hood'), until: now + leftMs };
   const busyMs = g.ms(TIMING.hoodMs);
