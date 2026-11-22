@@ -7,10 +7,11 @@ import type { ApiError, CommandResponse, EventType, GameEvent } from '../shared/
 import { Store } from './store.ts';
 import { GameError, fail, makeRng, newId, sha256, stableStringify } from './util.ts';
 import type { UniqueItem } from '../shared/protocol.ts';
-import type { CommandDef, LootBag, Mob, Player, ResourceNode, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
+import type { CommandDef, LootBag, Mob, Party, Player, ResourceNode, SnapshotData, Subscriber, Trade, Visibility } from './types.ts';
 import { bindUniques, worldCommands, worldTick, maxHp } from './world.ts';
 import { socialCommands } from './social.ts';
 import { tradeCommands, tradeTick } from './trade.ts';
+import { partyCommands } from './party.ts';
 import { backfillEconomyLedger } from './operator.ts';
 
 export interface GameOptions {
@@ -53,6 +54,7 @@ export class Game {
   /** Crafted gear instances by unique id (`<base>#<hex>`). The id sits in inventories, banks, equipment, bags and trades like any item. */
   readonly uniques = new Map<string, UniqueItem>();
   readonly trades = new Map<string, Trade>();
+  readonly parties = new Map<string, Party>();
   readonly commands: Record<string, CommandDef>;
 
   private nameIndex = new Map<string, string>();
@@ -61,6 +63,7 @@ export class Game {
   private dirtyBags = new Set<string>();
   private dirtyUniques = new Set<string>();
   private dirtyTrades = new Set<string>();
+  private dirtyParties = new Set<string>();
   private outbox: { ev: GameEvent; vis: Visibility }[] = [];
   private subscribers = new Set<Subscriber>();
   private eventSeq: number;
@@ -82,7 +85,7 @@ export class Game {
     this.tickMs = opts.tickMs ?? 25;
     this.lastSnapshotAt = this.store.get<{ ts: number | null }>('SELECT MAX(ts) AS ts FROM snapshots')?.ts ?? -Infinity;
     this.operatorToken = opts.operatorToken ?? `op_${randomBytes(18).toString('hex')}`;
-    this.commands = { ...worldCommands, ...socialCommands, ...tradeCommands };
+    this.commands = { ...worldCommands, ...socialCommands, ...tradeCommands, ...partyCommands };
     this.eventSeq = Number(this.store.getMeta('event_seq') ?? '0');
     this.load();
     bindUniques(this.uniques);
@@ -118,6 +121,10 @@ export class Game {
       const t = JSON.parse(row.data) as Trade;
       this.trades.set(t.id, t);
     }
+    for (const row of this.store.all<{ data: string }>('SELECT data FROM parties')) {
+      const pt = JSON.parse(row.data) as Party;
+      this.parties.set(pt.id, pt);
+    }
   }
 
   private spawnWorld() {
@@ -141,6 +148,7 @@ export class Game {
   markBag(b: LootBag) { this.dirtyBags.add(b.id); }
   markUnique(u: UniqueItem) { this.dirtyUniques.add(u.id); }
   markTrade(t: Trade) { this.dirtyTrades.add(t.id); }
+  markParty(pt: Party) { this.dirtyParties.add(pt.id); }
 
   private flushDirty() {
     for (const id of this.dirtyPlayers) {
@@ -161,6 +169,11 @@ export class Game {
       const t = this.trades.get(id);
       if (t) this.store.run('INSERT INTO trades(id, status, data) VALUES(?, ?, ?) ON CONFLICT(id) DO UPDATE SET status = excluded.status, data = excluded.data', id, t.status, JSON.stringify(t));
     }
+    for (const id of this.dirtyParties) {
+      const pt = this.parties.get(id);
+      if (pt) this.store.run('INSERT INTO parties(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data', id, JSON.stringify(pt));
+      else this.store.run('DELETE FROM parties WHERE id = ?', id);
+    }
     if (this.eventSeq !== this.flushedEventSeq) {
       this.store.setMeta('event_seq', String(this.eventSeq));
       this.flushedEventSeq = this.eventSeq;
@@ -168,7 +181,7 @@ export class Game {
     this.clearDirty();
   }
 
-  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyUniques.clear(); this.dirtyTrades.clear(); }
+  private clearDirty() { this.dirtyPlayers.clear(); this.dirtyBags.clear(); this.dirtyUniques.clear(); this.dirtyTrades.clear(); this.dirtyParties.clear(); }
 
   /** After a rollback, restore every touched entity from the database. */
   private reloadDirty() {
@@ -187,6 +200,10 @@ export class Game {
     for (const id of this.dirtyTrades) {
       const row = this.store.get<{ data: string }>('SELECT data FROM trades WHERE id = ?', id);
       if (row) this.trades.set(id, JSON.parse(row.data)); else this.trades.delete(id);
+    }
+    for (const id of this.dirtyParties) {
+      const row = this.store.get<{ data: string }>('SELECT data FROM parties WHERE id = ?', id);
+      if (row) this.parties.set(id, JSON.parse(row.data)); else this.parties.delete(id);
     }
     this.clearDirty();
   }
@@ -240,6 +257,7 @@ export class Game {
       case 'forum': return p.travel === null && p.zone === 'town';
       case 'player': return vis.playerId === p.id;
       case 'dm': return vis.a === p.id || vis.b === p.id;
+      case 'party': return p.partyId === vis.partyId;
       case 'operator': return false;
     }
   }
@@ -482,5 +500,5 @@ export class Game {
 }
 
 function operatorCanSee(vis: Visibility): boolean {
-  return vis.kind === 'zone' || vis.kind === 'forum' || vis.kind === 'operator';
+  return vis.kind === 'zone' || vis.kind === 'forum' || vis.kind === 'party' || vis.kind === 'operator';
 }

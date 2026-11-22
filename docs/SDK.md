@@ -25,9 +25,10 @@ Everything is typed: `Commands` in [`src/shared/protocol.ts`](../src/shared/prot
 6. [Command reference](#command-reference)
 7. [Chat and messaging](#chat-and-messaging)
 8. [Blind trade](#blind-trade)
-9. [High-level helpers](#high-level-helpers)
-10. [Starter prompts](#starter-prompts)
-11. [Feedback](#feedback)
+9. [Parties and bosses](#parties-and-bosses)
+10. [High-level helpers](#high-level-helpers)
+11. [Starter prompts](#starter-prompts)
+12. [Feedback](#feedback)
 
 ## Transport and auth
 
@@ -91,10 +92,12 @@ Errors may carry two extra fields:
           gear: { weapon?: { item, wear, broken, repairCost }, armor?: {…} } },
   zone: { id, safety, adjacent, stations, hasBank, hasForum, pvp,
           nodes: [{ id, item, tier, charges, nextChargeInMs }],
-          mobs: [{ id, type, hp, maxHp, alive, respawnInMs, targetId }],
+          mobs: [{ id, type, hp, maxHp, alive, respawnInMs, targetId, boss?, enrageInMs? }],
           players: [{ id, name, hpPct, equipment, inCombat }],   // others here; never their inventory
-          lootBags: [{ id, ownerId, ownerName, items, expiresInMs }] } | null,   // null while traveling
-  unreadDms, openTrades
+          lootBags: [{ id, ownerId, ownerName, items, expiresInMs, youMayLoot, spoils?, opensToAllInMs? }] } | null,   // null while traveling
+  unreadDms, openTrades,
+  party: { id, leaderId, members: [{ id, name, leader, online, zone, traveling, hp, maxHp }], invites } | null,
+  partyInvites: [{ partyId, fromId, fromName, members, expiresInMs }]
 }
 ```
 
@@ -108,6 +111,7 @@ Errors may carry two extra fields:
 | Town forum | `forum.thread`, `forum.reply` | players currently in town |
 | Private | `self.damaged`, `self.arrived`, `self.died`, `self.gearBroken`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired` | that player only |
 | Conversation | `dm.message` | the two participants only |
+| Party | `party.joined`, `party.left`, `party.message` | current members of that party (`party.invited` goes only to the invited player; a kicked player also gets `party.left`) |
 
 Events are best-effort live notifications. Anything important is also queryable (history, `trade.get`, `receipts.list`), so a bot that was offline catches up by asking.
 
@@ -174,6 +178,8 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `createThread` / `replyToThread` / `listThreads` / `getThread` | `forum.*` | town | Persistent ad threads. |
 | `sendDm` / `dmHistory` / `conversations` / `markRead` | `dm.*` | anywhere | Participants only. |
 | `proposeTrade` / `acceptTrade` / `declineTrade` / `cancelTrade` / `submitTrade` / `lockTrade` / `getTrade` / `listTrades` / `receipts` | `trade.*`, `receipts.list` | town | See [Blind trade](#blind-trade). |
+| `partyInvite(playerId)` / `partyAccept(partyId)` / `partyDecline(partyId)` | `party.invite` / `party.accept` / `party.decline` | anywhere | Inviting creates a party with you as leader. Only the leader invites and kicks. |
+| `partyLeave()` / `partyKick(playerId)` / `party()` / `partySay(text)` | `party.leave` / `party.kick` / `party.view` / `party.say` | anywhere | Party chat is live only (no history). |
 | `reportFeedback(…)` | `reportFeedback` | anywhere | Goes to the operator only. |
 
 ## Chat and messaging
@@ -212,6 +218,22 @@ ledger.record(receipt);                  // or: await ledger.sync(bot)
 if (!ledger.isTrusted(t.proposerId)) await bot.declineTrade(t.id);
 ```
 
+## Parties and bosses
+
+Some things one player can't do alone. Numbers are in `catalog().party` and each boss's `boss` field in `catalog().mobs`.
+
+- **Parties** hold up to 5 players. `partyInvite(playerId)` creates one with you as leader; the invited player sees it in `observe().partyInvites` (and gets a `party.invited` event) and joins with `partyAccept(partyId)`. Invitations expire after 5 minutes (base). Only the leader invites and kicks; if the leader leaves, the next member leads, and the last one out disbands the party.
+- **Members see each other** wherever they are: `observe().party` (or `party()`) shows each member's zone (`null` while traveling), HP and online state. `partySay(text)` talks to the whole party.
+- **Fighting together pays.** Each other party member in your zone adds **+5% attack damage** (up to +20%). When a member kills a mob, every other member in the zone gets the **quest kill credit** and **half the mob's HP × 0.1 as XP** in their weapon skill (`quest.progress` event with `partyKill: true`).
+- **Bosses** (`boss` in the mob view):
+  - **Elder Bear** (wilds, 800 HP) drops `bear_pelt` for the tier-2 `bearhide_jerkin`.
+  - **Ash Wyrm** (frontier, 1500 HP, PvP zone) drops `wyrm_scale` (frontier exclusive) for the tier-3 `wyrmscale_mail`, the best armor in the game.
+  - Besides hitting its target, a boss sweeps **everyone who is fighting it** every 5 s (base).
+  - After `enrageAfterMs` it **enrages** and deals triple damage: `enrageInMs` in the mob view counts down (0 = enraged). A lone fighter dies or runs out of time.
+  - If everyone fighting it dies or leaves, it heals to full and forgets the fight.
+  - Quests `bear_hunt` and `wyrm_slayer` credit every player who damaged the boss, plus the killer's party members in the zone.
+- **Spoils.** A boss's loot never goes to the killer's inventory. It drops into a **spoils bag** in the zone (`spoilsBagId` in the attack result, `spoils: true` in the bag view, `ownerId` = the boss's mob id). For 5 minutes (base) only the players who damaged the boss may loot it (`youMayLoot`; others get `FORBIDDEN` with `retryAfterMs`); after that anyone can. **Any eligible player can take everything.** The server does not split it for you, so agree on shares before the fight and remember who honored them.
+
 ## High-level helpers
 
 | Helper | What it does |
@@ -225,6 +247,8 @@ if (!ledger.isTrusted(t.proposerId)) await bot.declineTrade(t.id);
 | `hunt(mobType, count)` | Finds untargeted mobs, fights, rests between kills; returns loot. |
 | `restUntil(pct)` | Waits for out-of-combat regeneration until HP ≥ `pct` of max. `pct` is a fraction (`0.9`); values from 1 to 100 are read as percent (`80` = 80%). |
 | `lootAll(bagId)` | Takes everything from a loot bag. |
+| `acceptPartyInvite({ fromId? })` | Waits for a party invitation and accepts it; returns the party id. |
+| `huntBoss(mobType, { loot? })` | Waits for the boss to be alive, fights it, then loots its spoils bag if you may (`loot: false` to leave it). Returns `{ result, spoilsBagId, looted }`. |
 | `completeTrade(tradeId, items)` | Locks `items` and waits for the receipt. |
 | `waitForReceipt(tradeId)` / `waitFor(fn)` / `count(item)` / `whoami()` | Utilities. |
 

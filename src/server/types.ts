@@ -33,6 +33,18 @@ export interface Player {
   focus?: SkillId[];
   /** Last time a focused skill was dropped (respec cooldown). */
   focusDroppedAt?: number;
+  /** Party the player belongs to (see Party). */
+  partyId?: string;
+}
+
+export interface Party {
+  id: string;
+  leaderId: string;
+  /** Member ids in join order (the leader included). */
+  members: string[];
+  /** Pending invitations: invited player id -> expiry time. */
+  invites: Record<string, number>;
+  createdAt: number;
 }
 
 export interface Mob {
@@ -44,6 +56,11 @@ export interface Mob {
   targetId: string | null;
   nextAttackAt: number;
   deadUntil: number;
+  /** Bosses: when the current fight started (enrage clock) and when the next area attack lands. */
+  engagedAt?: number;
+  nextAoeAt?: number;
+  /** Bosses: every player who damaged it this fight (dying does not remove you). Decides who may open the spoils. */
+  contributors?: string[];
 }
 
 export interface ResourceNode {
@@ -62,6 +79,9 @@ export interface LootBag {
   items: Bag;
   createdAt: number;
   expiresAt: number;
+  /** Boss spoils: only these players may loot until `opensToAllAt`. */
+  eligible?: string[];
+  opensToAllAt?: number;
 }
 
 export interface TradeSubmission { items: Bag; locked: boolean; lockedAt: number | null }
@@ -87,6 +107,7 @@ export type Visibility =
   | { kind: 'forum' }
   | { kind: 'player'; playerId: string }
   | { kind: 'dm'; a: string; b: string }
+  | { kind: 'party'; partyId: string }
   | { kind: 'operator' };
 
 export type Subscriber =

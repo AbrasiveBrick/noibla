@@ -60,6 +60,9 @@ export const ITEMS: Record<string, ItemDef> = {
   rough_hide: { id: 'rough_hide', name: 'Rough Hide', kind: 'resource', tier: 1, description: 'Dropped by wolves and boars in the wilds.' },
   duskiron_ore: { id: 'duskiron_ore', name: 'Duskiron Ore', kind: 'resource', tier: 3, frontierExclusive: true, description: 'Frontier exclusive. Mined from duskiron veins. Needs a T2 pickaxe.' },
   wraith_essence: { id: 'wraith_essence', name: 'Wraith Essence', kind: 'resource', tier: 3, frontierExclusive: true, description: 'Frontier exclusive. Dropped by wraiths.' },
+  // Boss materials: only bosses drop them, and bosses need a group.
+  bear_pelt: { id: 'bear_pelt', name: 'Bear Pelt', kind: 'resource', tier: 2, description: 'Boss material. Dropped by the Elder Bear in the wilds. Makes bearhide jerkins.' },
+  wyrm_scale: { id: 'wyrm_scale', name: 'Wyrm Scale', kind: 'resource', tier: 3, frontierExclusive: true, description: 'Boss material. Frontier exclusive, dropped by the Ash Wyrm. Makes wyrmscale mail.' },
   // Refined materials
   copper_bar: { id: 'copper_bar', name: 'Copper Bar', kind: 'material', tier: 1, description: 'Smelted copper.' },
   iron_bar: { id: 'iron_bar', name: 'Iron Bar', kind: 'material', tier: 2, description: 'Smelted iron.' },
@@ -96,6 +99,8 @@ export const ITEMS: Record<string, ItemDef> = {
   leather_jerkin: { id: 'leather_jerkin', name: 'Leather Jerkin', kind: 'armor', tier: 1, slot: 'armor', defense: 0.08, hpBonus: 20, abilities: ['evade'], description: 'Light armor. Grants Evade.' },
   iron_mail: { id: 'iron_mail', name: 'Iron Mail', kind: 'armor', tier: 2, slot: 'armor', defense: 0.15, hpBonus: 40, abilities: ['brace'], description: 'Medium armor. Grants Brace.' },
   wraithhide_armor: { id: 'wraithhide_armor', name: 'Wraithhide Armor', kind: 'armor', tier: 3, slot: 'armor', defense: 0.25, hpBonus: 70, abilities: ['evade', 'brace'], description: 'Tier 3 armor woven with wraith essence. Grants Evade and Brace.' },
+  bearhide_jerkin: { id: 'bearhide_jerkin', name: 'Bearhide Jerkin', kind: 'armor', tier: 2, slot: 'armor', defense: 0.12, hpBonus: 50, abilities: ['evade'], description: 'Tier 2 light armor from Elder Bear pelts. Grants Evade.' },
+  wyrmscale_mail: { id: 'wyrmscale_mail', name: 'Wyrmscale Mail', kind: 'armor', tier: 3, slot: 'armor', defense: 0.3, hpBonus: 90, abilities: ['evade', 'brace'], description: 'Tier 3 armor from Ash Wyrm scales, the best in the game. Grants Evade and Brace.' },
 };
 
 export interface AbilityDef {
@@ -171,6 +176,8 @@ export const RECIPES: Record<string, RecipeDef> = {
   // Armor
   leather_jerkin: recipe({ id: 'leather_jerkin', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 1, minLevel: 0, inputs: [{ item: 'leather', qty: 3 }], output: { item: 'leather_jerkin', qty: 1 } }),
   iron_mail: recipe({ id: 'iron_mail', kind: 'craft', station: 'forge', skill: 'armorcraft', tier: 2, minLevel: 1, inputs: [{ item: 'iron_bar', qty: 2 }, { item: 'leather', qty: 2 }], output: { item: 'iron_mail', qty: 1 } }),
+  bearhide_jerkin: recipe({ id: 'bearhide_jerkin', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 2, minLevel: 1, inputs: [{ item: 'bear_pelt', qty: 2 }, { item: 'leather', qty: 2 }], output: { item: 'bearhide_jerkin', qty: 1 } }),
+  wyrmscale_mail: recipe({ id: 'wyrmscale_mail', kind: 'craft', station: 'forge', skill: 'armorcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'wyrm_scale', qty: 3 }, { item: 'duskiron_bar', qty: 1 }, { item: 'leather', qty: 2 }], output: { item: 'wyrmscale_mail', qty: 1 } }),
   wraithhide_armor: recipe({ id: 'wraithhide_armor', kind: 'craft', station: 'workbench', skill: 'armorcraft', tier: 3, minLevel: 2, requiresFocus: true, inputs: [{ item: 'wraith_essence', qty: 2 }, { item: 'leather', qty: 3 }, { item: 'iron_bar', qty: 1 }], output: { item: 'wraithhide_armor', qty: 1 } }),
 };
 
@@ -276,11 +283,27 @@ export const NODE_TYPES: Record<string, NodeDef> = {
 
 /** `skin`: only drops when the killer has a skinning knife equipped (tier >= requiredToolTier(mob tier)). */
 export interface DropDef { item: string; min: number; max: number; chance: number; skin?: boolean }
-export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number }
+/**
+ * Bosses are built for a group. Besides its normal attack on its target, a boss hits every player who damaged it
+ * (and is still in the zone) for `aoeDamage` every `aoeEveryMs`. `enrageAfterMs` after the fight starts, all its
+ * damage is multiplied by `enrageMult`. Its loot drops into a spoils bag (see PARTY) instead of the killer's inventory.
+ */
+export interface BossDef { aoeDamage: number; aoeEveryMs: number; enrageAfterMs: number; enrageMult: number }
+export interface MobDef { id: string; name: string; tier: number; hp: number; damage: number; attackMs: number; silver: [number, number]; drops: DropDef[]; respawnMs: number; boss?: BossDef }
 export const MOB_TYPES: Record<string, MobDef> = {
   wolf: { id: 'wolf', name: 'Wolf', tier: 1, hp: 30, damage: 3, attackMs: 1500, silver: [6, 10], drops: [{ item: 'rough_hide', min: 1, max: 2, chance: 1, skin: true }], respawnMs: 6000 },
   boar: { id: 'boar', name: 'Boar', tier: 1, hp: 50, damage: 5, attackMs: 1500, silver: [12, 20], drops: [{ item: 'rough_hide', min: 2, max: 2, chance: 1, skin: true }], respawnMs: 6000 },
   wraith: { id: 'wraith', name: 'Wraith', tier: 3, hp: 80, damage: 10, attackMs: 1500, silver: [30, 50], drops: [{ item: 'wraith_essence', min: 1, max: 1, chance: 1 }], respawnMs: 8000 },
+  elder_bear: {
+    id: 'elder_bear', name: 'Elder Bear', tier: 2, hp: 800, damage: 14, attackMs: 2000, silver: [80, 120], respawnMs: 10 * 60_000,
+    drops: [{ item: 'bear_pelt', min: 3, max: 4, chance: 1 }, { item: 'rough_hide', min: 4, max: 6, chance: 1 }],
+    boss: { aoeDamage: 8, aoeEveryMs: 5000, enrageAfterMs: 90_000, enrageMult: 3 },
+  },
+  ash_wyrm: {
+    id: 'ash_wyrm', name: 'Ash Wyrm', tier: 3, hp: 1500, damage: 25, attackMs: 2000, silver: [200, 300], respawnMs: 20 * 60_000,
+    drops: [{ item: 'wyrm_scale', min: 3, max: 5, chance: 1 }, { item: 'wraith_essence', min: 2, max: 4, chance: 1 }],
+    boss: { aoeDamage: 15, aoeEveryMs: 5000, enrageAfterMs: 120_000, enrageMult: 3 },
+  },
 };
 
 export interface ZoneDef {
@@ -311,14 +334,14 @@ export const ZONES: Record<ZoneId, ZoneDef> = {
     adjacent: ['town', 'frontier'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
     pvp: false, fullLoot: false,
     nodes: [{ type: 'copper_vein', count: 2 }, { type: 'iron_vein', count: 3 }, { type: 'pine_grove', count: 2 }],
-    mobs: [{ type: 'wolf', count: 3 }, { type: 'boar', count: 3 }],
+    mobs: [{ type: 'wolf', count: 3 }, { type: 'boar', count: 3 }, { type: 'elder_bear', count: 1 }],
   },
   frontier: {
     id: 'frontier', name: 'The Ashen Frontier (Lethal)', safety: 'lethal', description: 'Open PvP. Exclusive duskiron and wraith essence. Death drops everything you carry and wear.',
     adjacent: ['wilds'], stations: [], hasBank: false, hasForum: false, hasQuestBoard: false,
     pvp: true, fullLoot: true,
     nodes: [{ type: 'duskiron_vein', count: 2 }],
-    mobs: [{ type: 'wraith', count: 3 }],
+    mobs: [{ type: 'wraith', count: 3 }, { type: 'ash_wyrm', count: 1 }],
   },
 };
 
@@ -336,6 +359,9 @@ export const QUESTS: Record<string, QuestDef> = {
   ore_run: { id: 'ore_run', name: 'Ore Run', description: 'Mine 6 copper ore.', objective: { kind: 'gather', target: 'copper_ore', count: 6 }, reward: [{ item: 'silver', qty: 15 }] },
   apprentice_smith: { id: 'apprentice_smith', name: 'Apprentice Smith', description: 'Craft a copper sword.', objective: { kind: 'craft', target: 'copper_sword', count: 1 }, reward: [{ item: 'silver', qty: 20 }] },
   frontier_hunt: { id: 'frontier_hunt', name: 'Frontier Hunt', description: 'Kill a wraith in the frontier.', objective: { kind: 'kill', target: 'wraith', count: 1 }, reward: [{ item: 'silver', qty: 60 }] },
+  // Boss quests: every player who damaged the boss, and every party member of the killer in the zone, gets the kill credit.
+  bear_hunt: { id: 'bear_hunt', name: 'Bear Hunt', description: 'Help kill the Elder Bear in the wilds (a group job: everyone who hits it, and the killer\'s party in the zone, gets credit).', objective: { kind: 'kill', target: 'elder_bear', count: 1 }, reward: [{ item: 'silver', qty: 120 }] },
+  wyrm_slayer: { id: 'wyrm_slayer', name: 'Wyrm Slayer', description: 'Help kill the Ash Wyrm in the frontier (a group job: everyone who hits it, and the killer\'s party in the zone, gets credit).', objective: { kind: 'kill', target: 'ash_wyrm', count: 1 }, reward: [{ item: 'silver', qty: 300 }] },
   // Trade contracts: progress counts only what actually changes hands in settled blind trades with other players.
   supply_contract: { id: 'supply_contract', name: 'Supply Contract', description: 'Deliver 4 iron bars to other players through settled trades.', objective: { kind: 'deliver', target: 'iron_bar', count: 4 }, reward: [{ item: 'silver', qty: 40 }] },
   outfitter_contract: { id: 'outfitter_contract', name: 'Outfitter Contract', description: 'Deliver an iron mail to another player through a settled trade.', objective: { kind: 'deliver', target: 'iron_mail', count: 1 }, reward: [{ item: 'silver', qty: 50 }] },
@@ -408,6 +434,23 @@ export const COMBAT = {
   damageBonusMaxLevel: 30,
 };
 
+/**
+ * Parties: up to `maxSize` players who fight together.
+ * - Each other party member in the zone adds `damageBonusPerAlly` to your attack damage (up to `maxDamageBonus`).
+ * - When a party member kills a mob, every other member in the zone gets the quest kill credit and
+ *   `killXpShare` × (mob HP × combat.xpPerDamage) XP in their weapon skill.
+ * - Boss loot drops into a spoils bag that only players who damaged the boss can open for `spoilsReservedMs`;
+ *   after that anyone can. Any eligible player can take everything: share fairly or not.
+ */
+export const PARTY = {
+  maxSize: 5,
+  inviteTtlMs: 5 * 60_000,
+  damageBonusPerAlly: 0.05,
+  maxDamageBonus: 0.2,
+  killXpShare: 0.5,
+  spoilsReservedMs: 5 * 60_000,
+};
+
 /** Fraction of carried (not banked) silver destroyed on any death, before the rest is dropped or kept. */
 export const DEATH_SILVER_LOSS = 0.25;
 
@@ -473,4 +516,4 @@ export function zonePath(from: ZoneId, to: ZoneId): ZoneId[] {
   return [];
 }
 
-export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, starterKit: STARTER_KIT, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };
+export const CATALOG = { zones: ZONES, items: ITEMS, recipes: RECIPES, nodes: NODE_TYPES, mobs: MOB_TYPES, abilities: ABILITIES, quests: QUESTS, skills: SKILLS, timing: TIMING, starters: STARTERS, combat: COMBAT, wear: WEAR, shop: SHOP, deathSilverLoss: DEATH_SILVER_LOSS, tradeSilverFee: TRADE_SILVER_FEE, maxSkillLevel: MAX_SKILL_LEVEL, focus: FOCUS, toolFamilies: TOOL_FAMILIES, party: PARTY, starterKit: STARTER_KIT, affixes: AFFIXES, affixTierMinIlvl: AFFIX_TIER_MIN_ILVL, rarityMaxAffixes: RARITY_MAX_AFFIXES };
