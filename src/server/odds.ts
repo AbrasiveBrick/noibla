@@ -27,6 +27,13 @@ export const SKILL_ODDS = {
 /** Building perks that are chances: the workshop's extra output per unit refined there. */
 export const BUILDING_ODDS = { workshopOutput: 0.1 };
 
+/**
+ * What a pilfer leaves behind, each rolled on its own. `witness`: each other player standing in the region sees it.
+ * `watchtower`: a working one records who stood at the plot. `traces`: the audit log names the culprit, likelier
+ * (`tracesLocked`) while a working storehouse locks the stockpile.
+ */
+export const CRIME_ODDS = { witness: 0.25, watchtower: 0.35, traces: 0.1, tracesLocked: 0.4 };
+
 /** Affix value range [min, max] per tier (index 0 = tier 1). */
 export const AFFIX_RANGES: Record<string, [[number, number], [number, number], [number, number]]> = {
   damage: [[4, 8], [9, 15], [16, 25]],
@@ -81,4 +88,4 @@ export function rollAffix(rng: () => number, base: string, ilvl: number, exclude
 }
 
 /** Operator view of every odds table (dashboard only). */
-export const ODDS = { mobLoot: MOB_LOOT, skill: SKILL_ODDS, buildings: BUILDING_ODDS, affixRanges: AFFIX_RANGES, affixTierWeight: AFFIX_TIER_WEIGHT, orbs: ORB_ODDS };
+export const ODDS = { mobLoot: MOB_LOOT, skill: SKILL_ODDS, buildings: BUILDING_ODDS, crime: CRIME_ODDS, affixRanges: AFFIX_RANGES, affixTierWeight: AFFIX_TIER_WEIGHT, orbs: ORB_ODDS };

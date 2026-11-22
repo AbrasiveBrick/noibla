@@ -177,7 +177,7 @@ function watchtowerLog(g: Game, p: Player, payload: Record<string, any>) {
   const beforeId = optInt(payload, 'beforeId', 1, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
   if (!hasBuilding(s, 'watchtower')) fail('SETTLEMENT_STATE', `${s.name} has no watchtower`, undefined, "build one: settlement.contribute { building: 'watchtower' }");
   const entries: WatchEntry[] = g.store.all<{ id: number; ts: number; player_id: string; name: string; move: WatchEntry['move'] }>(
-    'SELECT id, ts, player_id, name, move FROM watch_log WHERE settlement_id = ? AND id < ? ORDER BY id DESC LIMIT ?', s.id, beforeId, limit,
+    'SELECT COALESCE(seq, id) AS id, ts, player_id, name, move FROM watch_log WHERE settlement_id = ? AND COALESCE(seq, id) < ? ORDER BY watch_log.id DESC LIMIT ?', s.id, beforeId, limit,
   ).map((r) => ({ id: r.id, ts: r.ts, playerId: r.player_id, name: r.name, move: r.move }));
   return { settlementId: s.id, recording: works(s, 'watchtower'), entries };
 }

@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS watch_log (
   move TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS watch_log_settlement ON watch_log(settlement_id, id);
+CREATE TABLE IF NOT EXISTS sightings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, player_id TEXT NOT NULL, data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sightings_player ON sightings(player_id, id);
 CREATE TABLE IF NOT EXISTS trades (id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, trade_id TEXT NOT NULL, counterparty_id TEXT NOT NULL,
@@ -82,6 +86,11 @@ export class Store {
     // Audit rows from before stage 3 have no building.
     const columns = this.db.prepare('PRAGMA table_info(stockpile_log)').all() as { name: string }[];
     if (!columns.some((c) => c.name === 'building')) this.db.exec('ALTER TABLE stockpile_log ADD COLUMN building TEXT');
+    // Rows from before stage 4 have no seq: they keep the row id they were shown with (see nextEntryId).
+    for (const table of ['stockpile_log', 'watch_log']) {
+      const has = (this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === 'seq');
+      if (!has) this.db.exec(`ALTER TABLE ${table} ADD COLUMN seq INTEGER`);
+    }
   }
 
   stmt(sql: string): StatementSync {
@@ -113,6 +122,18 @@ export class Store {
 
   getMeta(key: string): string | undefined { return this.get<{ value: string }>('SELECT value FROM meta WHERE key = ?', key)?.value; }
   setMeta(key: string, value: string) { this.run('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value); }
+
+  /**
+   * The number players see on a settlement's next log entry. Each settlement counts its own: gaps in global row ids
+   * would show every settlement what is written in the others, a pilfer and its evidence included.
+   */
+  nextEntryId(log: 'stockpile_log' | 'watch_log', settlementId: string): number {
+    const key = `seq:${log}:${settlementId}`;
+    const last = this.getMeta(key) ?? this.get<{ id: number | null }>(`SELECT MAX(id) AS id FROM ${log} WHERE settlement_id = ?`, settlementId)?.id ?? 0;
+    const next = Number(last) + 1;
+    this.setMeta(key, String(next));
+    return next;
+  }
 
   /** Adds qty to a cumulative silver ledger counter (observation only; never read by game rules). */
   ledger(kind: string, qty: number) {

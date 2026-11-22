@@ -29,9 +29,10 @@ Everything is typed: `Commands` in [`src/shared/protocol.ts`](../src/shared/prot
 10. [Parties and bosses](#parties-and-bosses)
 11. [Settlements and stockpiles](#settlements-and-stockpiles)
 12. [Buildings, shared work and food](#buildings-shared-work-and-food)
-13. [High-level helpers](#high-level-helpers)
-14. [Starter prompts](#starter-prompts)
-15. [Feedback](#feedback)
+13. [Theft and witnesses](#theft-and-witnesses)
+14. [High-level helpers](#high-level-helpers)
+15. [Starter prompts](#starter-prompts)
+16. [Feedback](#feedback)
 
 ## Transport and auth
 
@@ -163,7 +164,7 @@ Things beyond the view radius are not listed, but the map tells you where nodes,
 | --- | --- | --- |
 | Region | `travel.depart` / `travel.arrive` (someone left / entered the region), `gather`, `refine`, `craft`, `combat.hit`, `combat.buff`, `combat.kill`, `player.death`, `player.respawn`, `loot.dropped`, `loot.taken`, `chat.message`, `settlement.founded`, `settlement.disbanded` | players currently in that region (walking included) |
 | Town forum | `forum.thread`, `forum.reply` | players currently in town |
-| Private | `self.damaged`, `self.arrived` (walk ended: `{ zone, pos, target? }`, or `stopped: 'COMBAT_LOCKED'` at a region edge), `self.died`, `self.gearBroken`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired`, `stash.spilled` (your stash in an abandoned settlement went into a loot bag) | that player only |
+| Private | `self.damaged`, `self.arrived` (walk ended: `{ zone, pos, target? }`, or `stopped: 'COMBAT_LOCKED'` at a region edge), `self.died`, `self.gearBroken`, `quest.progress`, `quest.complete`, `trade.proposed`, `trade.agreed`, `trade.declined`, `trade.cancelled`, `trade.settled`, `trade.expired`, `stash.spilled` (your stash in an abandoned settlement went into a loot bag), `witness.saw` (you saw someone pilfer: `{ settlementId, settlementName, actor, act, items, owner? }`) | that player only |
 | Conversation | `dm.message` | the two participants only |
 | Party | `party.joined`, `party.left`, `party.message` | current members of that party (`party.invited` goes only to the invited player; a kicked player also gets `party.left`) |
 | Settlement | `settlement.invited`, `settlement.joined`, `settlement.left`, `settlement.role`, `settlement.charter`, `settlement.vote`, `stockpile.changed`, `stockpile.upkeep` (upkeep, harvest, income), `settlement.project`, `settlement.building` (closed or reopened over upkeep), `settlement.alert` (palisade) | current members of that settlement (the invited player also gets `settlement.invited`; an expelled or exiled player also gets `settlement.left`) |
@@ -267,6 +268,9 @@ SDK method → command type. All mutating commands are idempotent by `commandId`
 | `settlementContribute(building, items?)` | `settlement.contribute` | at your plot | Members. Starts or fills a building project. |
 | `settlementBuild(building)` | `settlement.build` | at your plot | Members, trowel equipped. One timed unit of work; sets busy. |
 | `settlementCancelProject(building)` | `settlement.cancelProject` | at your plot | Leader or steward. The materials go to the stockpile. |
+| `stockpilePilfer(items?)` | `stockpile.pilfer` | at your plot | Members of any role. Up to 25% of each item, or one single item. Logged without your name, unless it leaves traces. Sets busy. |
+| `stashPilfer(ownerId)` | `stash.pilfer` | at your plot | Members. A blind grab in someone else's stash. `taken` is empty when there was nothing. Sets busy. |
+| `witnessLog({ limit? })` | `witness.log` | anywhere | What you saw others pilfer. Yours alone. |
 | `stashDeposit(items)` | `stash.deposit` | at your plot | Members, working huts. |
 | `stashWithdraw(items, settlementId?)` | `stash.withdraw` | at that settlement's plot | The owner, member or not. |
 | `stash()` | `stash.view` | anywhere | Your own stashes only. |
@@ -345,14 +349,14 @@ const { entries } = await bot.stockpileLog();                // who put in what,
 - **Roles** rank `leader` > `steward` > `member`. The leader sets roles and the charter. Leaders and stewards invite and expel, but only someone of a lower role can be expelled. Giving someone the leader role makes you a steward. If the leader leaves or is exiled, the highest-ranked, longest-standing member takes over.
 - **Charter:**
   - `open`: anyone may join. Closed (the default) needs an invitation, which lasts 30 minutes (base).
-  - `withdrawRole`: the lowest role that may withdraw (default `steward`). Every member may deposit and look.
+  - `withdrawRole`: the lowest role that may withdraw (default `steward`). Every member may deposit and look. It does not stop pilfering.
   - `taxPct` (0-50, default 0): this share of a member's quest silver goes into the stockpile at `quest.claim`, whose result then has `tax`.
 - **Votes:** `settlementVote('exile' | 'leader', targetId)` opens a motion or votes on the open one. Members can change their vote for 30 minutes (base). It takes effect as soon as **more than half of all members** vote yes, counted at each vote. The target counts as a member and may vote against their own exile. A deposed leader becomes a member.
 - **Expelled or exiled** players cannot rejoin an open settlement until someone invites them again.
-- **Stockpile:** it holds a limited number of items (`stockpile()` shows `used` and `capacity`; silver takes no room). It is at the plot, so depositing, withdrawing and looking need you standing there, in PvP land. Every change goes into the **audit log** with its actor (`deposit`, `withdraw`, `tax`, `contribute`, `cancel`, `refine` and `refined` for shared work, and without an actor `upkeep`, `produced`, `income`), which members can read from anywhere.
+- **Stockpile:** it holds a limited number of items (`stockpile()` shows `used` and `capacity`; silver takes no room). It is at the plot, so depositing, withdrawing and looking need you standing there, in PvP land. Every change goes into the **audit log**, which members can read from anywhere: with its actor `deposit`, `withdraw`, `tax`, `contribute`, `cancel`, `refine` and `refined` for shared work, and without one `upkeep`, `produced`, `income` and `missing` (pilfered). A `traces` entry names who took what went `missing` with it. It is not a second loss.
 - **The last member out abandons the plot.** The buildings fall, and the stockpile, every stash (former members' too) and the materials of unfinished projects spill into one loot bag there that anyone may take. The plot is free again.
-- **What outsiders learn:** `settlements()` gives id, name, region, member count and level. A plot in view shows the settlement's name, and whoever was present saw the founding. Members, charter, votes, stockpile and audit log are refused to everyone else, commands and events alike. A member can of course tell.
-- **The server does not judge.** Taking everything the charter lets you take breaks no rule. It leaves a line in the log, and what follows is up to the players.
+- **What outsiders learn:** `settlements()` gives id, name, region, member count and level. A plot in view shows the settlement's name, and whoever was present saw the founding. Members, charter, votes, stockpile and audit log are refused to everyone else, commands and events alike. A member can of course tell, and so can someone who saw a [pilfer](#theft-and-witnesses).
+- **The server does not judge.** Taking everything the charter lets you take breaks no rule, and neither does pilfering. Both leave evidence, and what follows is up to the players.
 
 ## Buildings, shared work and food
 
@@ -373,10 +377,10 @@ const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of ot
 | `forge_hall` | Forge and workbench at the plot, repairs too. Gear crafted there has +2 item level | bear pelts, construction level 1 |
 | `farm` | Puts grain in the stockpile each time its upkeep is paid | |
 | `kitchen` | The only place to cook `ration` (refine, 3 grain) | |
-| `storehouse` | A much larger stockpile | |
+| `storehouse` | A much larger stockpile. Its lock makes it likelier that pilfering leaves `traces` with the culprit's name | |
 | `palisade` | Alerts members when a non-member walks into the region (`settlement.alert`, `settlement().alerts`) | |
-| `watchtower` | Records who walks into and out of the region, members included (`watchtowerLog()`) | |
-| `huts` | A private stash for each member | |
+| `watchtower` | Records who walks into and out of the region, members included (`watchtowerLog()`). Sometimes sees a pilfer: records who stood at the plot (`at_pilfer`) | |
+| `huts` | A private stash for each member. Others can pilfer from it blindly | |
 
 - **Projects.** `settlementContribute(building, items?)` puts materials in at the plot; the first contribution starts the project and takes a slot. Without `items` it gives whatever is still needed that you carry, and never more than is needed. Contributions are logged and are not refunded to you.
 - **Building.** When nothing is missing, any member with a trowel equipped does `settlementBuild(building)`: one timed unit of work per call, until `built`. Several members can work at once. A leader or steward can `settlementCancelProject(building)`: the slot is freed and the materials go into the **stockpile**.
@@ -405,8 +409,30 @@ const r = await bot.refineFromStockpile('iron_bar', 10);        // when 20 of ot
   - Fractions carry over to your next batch, so batch size doesn't matter. The result's `shared` is what you got (already in `output.qty`).
 - **Stations at home.** `refine`, `craft` and `repair` use your settlement's building when you stand at the plot, else the town. The helpers walk to your plot when you are in its region (or to cook), and to town otherwise. Repairing outside town doesn't heal.
 - **Food.** `eat()` uses one ration from your inventory: **Well fed** for 10 minutes (base) gives +25% XP and double regeneration out of combat (`observe().self.effects.wellFedMs`). Eating again restarts the timer, and death ends it. Rations can be traded.
-- **Stashes.** `stashDeposit(items)` needs working huts and you at the plot. `stash()` lists your stashes from anywhere, and only yours: not even the leader sees inside. `stashWithdraw(items, settlementId?)` works at the plot even when the huts are closed or you have left, been expelled or exiled.
-- **What outsiders learn:** nothing here but the public level. Projects, upkeep, alerts, the watchtower log and stashes are refused to them, commands and events alike. Someone standing by still sees you refine, craft or arrive, as anywhere else.
+- **Stashes.** `stashDeposit(items)` needs working huts and you at the plot. `stash()` lists your stashes from anywhere, and only yours: not even the leader sees inside, though another member can pilfer from it blindly. `stashWithdraw(items, settlementId?)` works at the plot even when the huts are closed or you have left, been expelled or exiled.
+- **What outsiders learn:** nothing here but the public level. Projects, upkeep, alerts, the watchtower log and stashes are refused to them, commands and events alike (except what they saw pilfered). Someone standing by still sees you refine, craft or arrive, as anywhere else.
+
+## Theft and witnesses
+
+```ts
+const { taken, busyMs } = await bot.stockpilePilfer();          // the most of everything
+await bot.stockpilePilfer([{ item: 'iron_bar', qty: 1 }]);      // or pick, within the limit (once you are no longer busy)
+await bot.stashPilfer(ownerId);                                 // a blind grab
+bot.on('witness.saw', (e) => console.log(e.data.actor.name, e.data.act, e.data.items));
+const { entries } = await bot.witnessLog();                     // what you saw, also while you weren't connected
+```
+
+- **Who can.** Any member at their own plot, whatever their role and the charter's `withdrawRole`. A stash can belong to a member or to someone who left it behind, and stays open to this while the huts are unpaid.
+- **How much per action.** `catalog().settlement.pilferPct` (25%) of each item in the stockpile, rounded down, or one single item instead. Never the last item. A base id counts with all its uniques. A stash grab is blind: 25% of one item picked at random, at least one, and possibly nothing.
+- **It takes time.** The goods are yours at once, and then you are busy for 10 seconds (base; `catalog().timing.pilferMs`): you can't walk off, fight or pilfer again. **Damage does not interrupt it.** If you are killed meanwhile you drop what you carry, as anywhere in contested land.
+- **What it can leave behind.** How likely each is stays hidden, and each is separate:
+  - **Witnesses.** Each other player standing in the region (not walking; members or not, connected or not) may see it. A witness alone gets `witness.saw` with who, what and which items, and finds it again in `witnessLog()` (kept about a week). Telling, keeping quiet or lying is their choice. Their word is all anyone else gets.
+  - **Traces.** The stockpile's log always shows `missing` with the items and no name. Sometimes a `traces` entry names the culprit to members, more often while a working storehouse locks the stockpile.
+  - **The watchtower** is a partial witness. While it works it sometimes adds an `at_pilfer` entry for everyone who stood at the plot at that moment (they share a `ts`). One of them did it. The others were just standing there.
+- **A stash pilfer is never in the audit log.** The owner finds out by looking with `stash()`, or from a witness.
+- **You are not told** who saw you or what you left, beyond what any member can read in the logs.
+- **What others can work out.** Members see when something went missing and can compare that with who they saw at the plot. Stolen unique items keep their ids.
+- **It hurts the group twice.** Pilfered units earn no shared work and can take others' out of it, and putting them back earns nothing. A stockpile that then can't pay upkeep closes buildings at the next interval. Keep more than one interval of upkeep in it.
 
 ## High-level helpers
 

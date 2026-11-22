@@ -446,6 +446,11 @@ export const TIMING = {
   nodeRegenMs: 6000,
   lootBagTtlMs: 15 * 60_000,
   respawnBusyMs: 1000,
+  /**
+   * stockpile.pilfer and stash.pilfer: the goods are yours at once, then you are busy this long, at the plot and unable
+   * to walk off or fight. Damage does not interrupt it.
+   */
+  pilferMs: 10_000,
 };
 
 export const BASE_HP = 100;
@@ -552,6 +557,12 @@ export const SETTLEMENT = {
    * and what a member gave stops counting when it leaves the stockpile or the member leaves.
    */
   sharedWork: { outputPct: 125, minLevel: 2, building: 'workshop' as BuildingId, restMs: 10 * 60_000 },
+  /**
+   * Pilfering, which any member can do whatever the charter says: one stockpile.pilfer takes up to this percent of each
+   * item (rounded down), or one single item instead, and never the last one. A stash.pilfer is blind: this percent of
+   * one item picked at random, at least one. Others in the region may see it. How likely that is stays hidden.
+   */
+  pilferPct: 25,
   /** Latest palisade alerts kept for settlement.view. */
   alertsKept: 20,
 };
@@ -609,7 +620,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
   storehouse: {
     id: 'storehouse', name: 'Storehouse', tier: 1, minLevel: 0, work: 16, stockpileCapacity: 100_000,
     cost: items({ pine_plank: 80, stone: 80, iron_bar: 5 }), upkeep: items({ pine_plank: 5, stone: 10 }),
-    description: 'A much larger stockpile.',
+    description: 'A much larger stockpile. Its lock makes it likelier that pilfering the stockpile leaves traces that name who did it.',
   },
   palisade: {
     id: 'palisade', name: 'Palisade', tier: 1, minLevel: 0, work: 16,
@@ -619,12 +630,12 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
   watchtower: {
     id: 'watchtower', name: 'Watchtower', tier: 1, minLevel: 0, work: 16,
     cost: items({ pine_plank: 60, stone: 40 }), upkeep: items({ pine_plank: 5, stone: 5 }),
-    description: 'Records who walks into and out of the region, members included. Members read it with watchtower.log.',
+    description: 'Records who walks into and out of the region, members included. It is a partial witness to pilfering: sometimes it records who stood at the plot, not which of them did it. Members read it with watchtower.log.',
   },
   huts: {
     id: 'huts', name: 'Huts', tier: 1, minLevel: 0, work: 16, stashCapacity: 2000,
     cost: items({ pine_plank: 50, stone: 30, leather: 10 }), upkeep: items({ pine_plank: 5, stone: 10 }),
-    description: 'A private stash for each member at the plot.',
+    description: 'A private stash for each member at the plot. Only its owner sees inside, but other members can pilfer from it blindly.',
   },
 };
 

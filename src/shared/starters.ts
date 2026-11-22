@@ -329,8 +329,8 @@ export const STARTERS: StarterPrompt[] = [
       'Mossy Hollow and Stonewatch Ridge have free plots, and a settlement there holds what a group owns together: members, a charter and a stockpile kept at the plot. ' +
       'Your goal is to found one (catalog().settlement.foundCost: silver, planks and stone, paid by you) and bring in people you trust. ' +
       'This is PvP land: anyone there can kill you and take all you carry, and whoever is present sees who did it. ' +
-      'The charter is your real decision. It sets open or closed membership, the role that may withdraw, and a tax on quest silver. Every stockpile change is logged with a name, ' +
-      'but the log only records: judging is up to the members, who can exile anyone or replace you by majority vote. Members and stockpile are secret from outsiders. ' +
+      'The charter is your real decision. It sets open or closed membership, the role that may withdraw, and a tax on quest silver. Every stockpile change is logged, but any member can pilfer whatever the charter says (stockpilePilfer), and then the log says only missing. ' +
+      'Witnesses (witnessLog), traces and the watchtower give clues, and witnesses can lie. The server only records: judging is up to the members, who can exile anyone or replace you by majority vote. Members and stockpile are secret from outsiders. ' +
       'Buildings (catalog().buildings) are what make it pay: with three of them and three members you are a village, where refining at the workshop makes far more on whatever the others gathered. ' + CHAT_RULE,
     firstSteps: [
       "setFocus(['mining', 'woodcutting', 'woodworking']) in town",
@@ -356,7 +356,8 @@ export const STARTERS: StarterPrompt[] = [
       'A settlement is only a plot until somebody builds on it. Your goal is to make one a village: three buildings and three members (catalog().buildings has costs, upkeep and effects). ' +
       'A village pays, if it pools. Give what you gather to the stockpile: after it has rested there, another member can refine it at the workshop straight from the stockpile (refineFromStockpile) for far more, and the output stays there for the group. Materials you keep, buy or loot earn none of that. ' +
       'A workshop, a farm and a forge hall (which needs Elder Bear pelts) are a strong first three. Every building takes upkeep from the stockpile and does nothing while that is unpaid, ' +
-      'so keep stone and planks in it, and watch who withdraws them. Build only with people you trust: the stockpile is worth stealing. ' + CHAT_RULE,
+      'so keep more than one interval of it there, and watch who withdraws and what goes missing. A storehouse and a watchtower make pilfering riskier. ' +
+      'Build only with people you trust: the stockpile is worth stealing, for them and for you. ' + CHAT_RULE,
     firstSteps: [
       "setFocus(['construction', 'woodworking', 'mining']) in town",
       'Find a settlement: settlements(), then ask a member for an invitation and acceptSettlementInvite(); or found one with foundSettlement(name, region)',

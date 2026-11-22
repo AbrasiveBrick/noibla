@@ -3,7 +3,7 @@
 
 import { BUILDINGS, ITEMS, RECIPES, SETTLEMENT, type BuildingDef, type BuildingId, type ItemStack, type RecipeDef, type StationId, type ZoneId } from '../shared/catalog.ts';
 import { MAP_RULES, dist, plotOf } from '../shared/map.ts';
-import type { BuildingView, ProjectView, SharedStockView, SharedWorkView } from '../shared/protocol.ts';
+import type { BuildingView, ProjectView, SharedStockView, SharedWorkView, WatchEntry } from '../shared/protocol.ts';
 import type { Game } from './game.ts';
 import type { Player, Settlement, SharedWork } from './types.ts';
 import { toBag, toStacks, type Bag } from './util.ts';
@@ -235,15 +235,18 @@ export function takeShared(g: Game, s: Settlement, p: Player, r: RecipeDef, coun
 
 // ---------- palisade & watchtower ----------
 
+export function logWatch(g: Game, s: Settlement, ts: number, p: Player, move: WatchEntry['move']) {
+  const seq = g.store.nextEntryId('watch_log', s.id);
+  g.store.run('INSERT INTO watch_log(settlement_id, ts, player_id, name, move, seq) VALUES(?, ?, ?, ?, ?, ?)', s.id, ts, p.id, p.name, move, seq);
+}
+
 /** Someone walked over a region border. */
 export function noteCrossing(g: Game, p: Player, from: ZoneId, to: ZoneId) {
   const ts = g.now();
   for (const s of g.settlements.values()) {
     if (s.zone !== from && s.zone !== to) continue;
     const move = s.zone === to ? 'arrive' : 'depart';
-    if (works(s, 'watchtower')) {
-      g.store.run('INSERT INTO watch_log(settlement_id, ts, player_id, name, move) VALUES(?, ?, ?, ?, ?)', s.id, ts, p.id, p.name, move);
-    }
+    if (works(s, 'watchtower')) logWatch(g, s, ts, p, move);
     if (move === 'arrive' && !s.members[p.id] && works(s, 'palisade')) {
       g.markSettlement(s);
       s.alerts = [...s.alerts, { ts, playerId: p.id, name: p.name }].slice(-SETTLEMENT.alertsKept);
