@@ -5,7 +5,7 @@ import { world, wait } from './helpers.ts';
 
 test('catalog: frontier exclusives only originate in the frontier and feed higher-tier recipes', () => {
   const exclusives = Object.values(ITEMS).filter((i) => i.frontierExclusive).map((i) => i.id);
-  assert.deepEqual(exclusives.sort(), ['duskiron_ore', 'wraith_essence']);
+  assert.deepEqual(exclusives.sort(), ['duskiron_ore', 'wraith_essence', 'wyrm_scale']);
   for (const id of exclusives) {
     assert.ok(!Object.values(RECIPES).some((r) => r.output.item === id), `${id} must not be craftable`);
     assert.ok(!Object.values(QUESTS).some((q) => q.reward.some((s) => s.item === id)), `${id} must not be a quest reward`);

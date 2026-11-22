@@ -174,6 +174,7 @@
           <label class="chk"><input type="checkbox" value="trade"> Trades</label>
           <label class="chk"><input type="checkbox" value="bank"> Bank &amp; quests</label>
           <label class="chk"><input type="checkbox" value="dm"> Private messages</label>
+          <label class="chk"><input type="checkbox" value="party"> Parties</label>
           <label class="chk"><input type="checkbox" value="system"> Presence</label>
           <button type="button" id="fTypeAll" class="link">All events</button>
         </div>
@@ -233,6 +234,7 @@
     'trade.closed': 'trade', 'trade.activity': 'trade', bank: 'bank', quest: 'bank', shop: 'bank', repair: 'bank',
     'player.online': 'system', 'player.offline': 'system', 'dm.sent': 'dm',
     'command.failed': 'debug', feedback: 'debug',
+    party: 'party', 'party.joined': 'party', 'party.left': 'party', 'party.message': 'party',
   };
   // High-volume activity that is rolled up per bot by default.
   const ROUTINE = new Set(['combat.hit', 'combat.buff', 'combat.kill', 'gather', 'travel.depart', 'travel.arrive', 'bank', 'player.online', 'player.offline']);
@@ -305,10 +307,12 @@
       case 'craft': return `<b>${esc(d.name)}</b> crafted ${stacks([d.output])} at the ${esc(d.station)}`;
       case 'combat.hit': return `<b>${esc(d.attackerName)}</b> hit ${esc(d.targetName)} with ${esc(d.ability)} for ${d.damage}${d.dodged ? ' (dodged)' : ''}${d.pvp ? ' · <b>PvP</b>' : ''}`;
       case 'combat.buff': return `<b>${esc(d.name)}</b> used ${esc(d.ability)}`;
-      case 'combat.kill': return `<b>${esc(d.killerName)}</b> killed a ${esc(d.targetType)} · loot ${stacks(d.loot)}`;
+      case 'combat.kill': return `<b>${esc(d.killerName)}</b> killed a ${esc(d.targetType)} · loot ${stacks(d.loot)}${d.spoilsBagId ? ' <b>(boss spoils bag)</b>' : ''}`;
       case 'player.death': return `<b>${esc(d.victimName)}</b> was killed by ${esc(d.killerName)} in ${zoneTag(d.zone)} — ${d.fullLoot ? `dropped ${stacks(d.dropped)}` : 'kept their items (safe zone)'}${d.silverLost ? ` · ${d.silverLost} silver destroyed` : ''}`;
       case 'player.respawn': return `<b>${esc(d.name)}</b> respawned in town`;
-      case 'loot.dropped': return `Loot bag of <b>${esc(d.ownerName)}</b> on the ground: ${stacks(d.items)}`;
+      case 'loot.dropped': return d.spoils
+        ? `<b>${esc(d.ownerName)}</b> spoils on the ground, reserved for ${d.eligible.map(esc).join(', ')}: ${stacks(d.items)}`
+        : `Loot bag of <b>${esc(d.ownerName)}</b> on the ground: ${stacks(d.items)}`;
       case 'loot.taken': return `<b>${esc(d.looterName)}</b> looted ${stacks(d.items)} from ${esc(d.ownerName)}'s bag`;
       case 'loot.expired': return `A loot bag decayed: ${stacks(d.items)}`;
       case 'chat.message': return `<b>${esc(d.message.authorName)}</b> <span class="muted">[${esc(d.message.channel)}]</span> <span class="quote">“${esc(d.message.text)}”</span>`;
@@ -330,6 +334,10 @@
       case 'player.online': return `<b>${esc(d.name)}</b> came online`;
       case 'player.offline': return `<b>${esc(d.name)}</b> went offline`;
       case 'command.failed': return `<b>${esc(d.name)}</b> ${esc(d.type)} failed: ${esc(d.code)}`;
+      case 'party': return `<b>${esc(d.name)}</b> party ${esc(d.action)}${d.targetName ? ` ${esc(d.targetName)}` : ''} <span class="muted">(${(d.members || []).map(esc).join(', ')})</span>`;
+      case 'party.joined': return `<b>${esc(d.name)}</b> joined a party`;
+      case 'party.left': return `<b>${esc(d.name)}</b> ${d.kicked ? 'was kicked from' : 'left'} a party`;
+      case 'party.message': return `<b>${esc(d.message.authorName)}</b> <span class="muted">[party]</span> <span class="quote">“${esc(d.message.text)}”</span>`;
       case 'feedback': return `<b>${esc(d.name)}</b> sent feedback (${esc(d.category)}): ${esc(d.summary)}`;
       default: return `${a} ${esc(ev.type)}`;
     }
