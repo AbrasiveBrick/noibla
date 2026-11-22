@@ -272,3 +272,33 @@ test('being alone in a party never blocks joining another: declined, expired, cr
     assert.equal((await e.observe()).partyInvites[0].partyId, mine.id);
   } finally { await w.close(); }
 });
+
+test('huntBoss reports no loot, rather than throwing, when a teammate empties the spoils first', async () => {
+  for (const when of ['before looting', 'while walking to the bag'] as const) {
+    const w = await world();
+    try {
+      const c = await w.bot('Slow');
+      const C = await c.whoami();
+      await c.travelTo('wilds');
+      const bear = bossOf(w, 'elder_bear');
+      await c.goTo(bear.id);
+      raw(w, C.playerId).hp = 5000;
+      bear.hp = 1;
+      const lootAll = c.lootAll.bind(c);
+      const goTo = c.goTo.bind(c);
+      c.lootAll = async (bagId) => {
+        if (when === 'before looting') w.server.game.bags.delete(bagId);
+        else {
+          const bag = w.server.game.bags.get(bagId)!;
+          bag.x = bag.x! + 4; // out of reach, so lootAll walks to it
+          c.goTo = async (target, o) => { w.server.game.bags.delete(bagId); return goTo(target, o); };
+        }
+        return lootAll(bagId);
+      };
+      const r = await c.huntBoss('elder_bear');
+      assert.equal(r.result, 'killed', when);
+      assert.ok(r.spoilsBagId, when);
+      assert.deepEqual(r.looted, [], when);
+    } finally { await w.close(); }
+  }
+});

@@ -317,12 +317,12 @@ Some things one player can't do alone. The numbers are in `catalog().party` and 
 - **Members see each other** wherever they are: `observe().party` (or `party()`) shows each member's region, position, HP and online state. `partySay(text)` talks to the whole party.
 - **Fighting together pays.** Each other party member in your region adds **+5% attack damage** (up to +20%). When a member kills a mob, every other member in the region gets the **quest kill credit** and XP in their weapon skill worth half of what the kill's damage gave (`quest.progress` event with `partyKill: true`).
 - **Bosses** (`boss: true` in the mob view):
-  - The **Elder Bear** (wilds, 800 HP) drops `bear_pelt` for the tier-2 `bearhide_jerkin`.
+  - The **Elder Bear** (wilds, 825 HP) drops `bear_pelt` for the tier-2 `bearhide_jerkin`.
   - The **Ash Wyrm** (frontier, 1500 HP, PvP region) drops `wyrm_scale` (frontier exclusive) for the tier-3 `wyrmscale_mail`, the best armor in the game.
-  - Besides hitting its target, a boss **sweeps everyone fighting it** within `aoeRadius` tiles every 5 s (base).
-  - **Nobody kills a boss alone.** One player can deal at most `maxSharePerPlayer` of its HP per fight (75%: 600 on the bear, 1125 on the wyrm), whatever their gear. The attack result's `note` says when you reach that; further hits deal 0 and give no XP, so someone else must deal the rest. Dying and coming back doesn't reset your count; only a boss reset does.
-  - After `enrageAfterMs` (base: 25 s for the bear, 30 s for the wyrm) it **enrages** and deals triple damage: `enrageInMs` in the mob view counts down (0 = enraged). Bring enough damage to finish in time, or enough HP to outlast the last seconds.
-  - Rough sizes, for players who use Brace and Evade: the bear takes two in iron gear, or three in copper with level 3 swords. The wyrm takes two in tier-3 gear with level 10 swords, three in tier-3 at any level, or four in iron.
+  - Besides hitting its target, a boss **sweeps everyone fighting it** within `aoeRadius` tiles every `aoeEveryMs` (base: 13 s for the bear, 5 s for the wyrm).
+  - After `enrageAfterMs` (base: 12 s for the bear, 30 s for the wyrm) it **enrages** and deals triple damage: `enrageInMs` in the mob view counts down (0 = enraged). Bring enough damage to finish soon after, or enough HP to outlast the last seconds.
+  - **Bring a group, unless you are really maxed out.** Tier-3 gear and a level 30 weapon skill are not enough alone: a solo kill also takes good affixes on that gear.
+  - Rough sizes for a group: the bear takes three in iron gear, four in copper with level 3 swords, or two in tier-3 gear. The wyrm takes three in tier-3 gear, four in iron, or two in tier-3 with level 10 swords who time Evade and Brace themselves (`fight()` only buffs below half HP).
   - If everyone fighting it dies or leaves its region, it heals to full, walks home and forgets the fight.
   - Quests `bear_hunt` and `wyrm_slayer` credit every player who damaged the boss, plus the killer's party members in the region.
 - **Spoils.** A boss's loot never goes to the killer's inventory. It drops into a **spoils bag** where the boss died (`spoilsBagId` in the attack result, `spoils: true` in the bag view, `ownerId` = the boss's mob id). For 5 minutes (base) only the players who damaged the boss may loot it (`youMayLoot`; others get `FORBIDDEN` with `retryAfterMs`); after that anyone can. **Any eligible player can take everything.** The server does not split it for you, so agree on shares before the fight and remember who honored them.
@@ -424,7 +424,7 @@ const r = await bot.refine('iron_bar', 10);                     // at the plot; 
 | `acceptSettlementInvite({ settlementId? })` | Waits for a settlement invitation and joins; returns the settlement id. |
 | `goToStockpile()` | Walks to your settlement's plot. |
 | `buildBuilding(building)` | At the plot: contributes what you carry, then builds until it stands. Returns `{ built, needs }`. |
-| `huntBoss(mobType, { loot? })` | Walks to the boss in your region, waits for it to be alive, fights it, then loots its spoils bag if you may (`loot: false` leaves it). Returns `{ result, spoilsBagId, looted }`. |
+| `huntBoss(mobType, { loot? })` | Walks to the boss in your region, waits for it to be alive, fights it, then loots its spoils bag if you may (`loot: false` leaves it). Returns `{ result, spoilsBagId, looted }`; `looted` is empty when someone emptied the bag first. |
 | `completeTrade(tradeId, items)` | Locks `items` and waits for the receipt. |
 | `waitForReceipt(tradeId)` / `waitFor(fn)` / `count(item)` / `whoami()` | Utilities. |
 

@@ -784,7 +784,7 @@ export class GameClient {
 
   /**
    * Walks to the boss of type `mobType` in your region, waits for it to be alive, fights it until it dies or we die,
-   * then loots its spoils bag if we may (`loot: false` leaves it). Bosses are built for groups: hunt them with a party.
+   * then loots its spoils bag if we may (`loot: false` leaves it). Bosses are built for groups: hunt them with a party (unless you are really maxed out).
    */
   async huntBoss(mobType: string, o: { timeoutMs?: number; waitForSpawnMs?: number; loot?: boolean } = {}): Promise<{ result: FightOutcome['result']; spoilsBagId: string | null; looted: ItemStack[] }> {
     const start = await this.waitReady();
@@ -800,8 +800,14 @@ export class GameClient {
     if (r.result === 'died') return { result: r.result, spoilsBagId: null, looted: [] };
     const bag = (await this.observe()).zone.lootBags.find((b) => b.ownerId === home.id && b.spoils);
     if (!bag || o.loot === false || !bag.youMayLoot) return { result: r.result, spoilsBagId: bag?.id ?? null, looted: [] };
-    const res = await this.lootAll(bag.id);
-    return { result: r.result, spoilsBagId: bag.id, looted: res.taken };
+    try {
+      const res = await this.lootAll(bag.id);
+      return { result: r.result, spoilsBagId: bag.id, looted: res.taken };
+    } catch (e) {
+      // Another fighter emptied the bag first: it is gone, for loot (NOT_FOUND) and as a walk target (BAD_REQUEST).
+      if (e instanceof CommandError && (e.code === 'NOT_FOUND' || (e.command === 'move' && e.code === 'BAD_REQUEST'))) return { result: r.result, spoilsBagId: bag.id, looted: [] };
+      throw e;
+    }
   }
 
   /** Walks to a loot bag if needed and takes everything from it. */

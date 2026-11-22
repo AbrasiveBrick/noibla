@@ -13,7 +13,7 @@ import {
 } from '../src/shared/catalog.ts';
 import { dist, regionAt, walkable, type Pos } from '../src/shared/map.ts';
 import type { CommandError } from '../src/sdk/index.ts';
-import { BUILDING_ODDS, rollAffix } from '../src/server/odds.ts';
+import { AFFIX_RANGES, BUILDING_ODDS, rollAffix } from '../src/server/odds.ts';
 import { operatorState } from '../src/server/operator.ts';
 import { Game, type GameOptions } from '../src/server/game.ts';
 import { killPlayer } from '../src/server/world.ts';
@@ -721,7 +721,7 @@ test('a failed write leaves projects, stashes and the stockpile as they were', (
  * One whole boss fight on the real rules. `stand`: attack to the end, with every buff timed as well as a player can.
  * `kite`: also run to the far side of the region below half HP, to rest where regeneration (which food doubles) works.
  */
-function bossFight(type: string, build: { sword: string; armor: string; level: number }, size: number, fed: boolean, tactic: 'stand' | 'kite') {
+function bossFight(type: string, build: { sword: string; armor: string; level: number; good?: boolean }, size: number, fed: boolean, tactic: 'stand' | 'kite', lagMs = 0) {
   const f = fake();
   try {
     const boss = [...f.g.mobs.values()].find((m) => m.type === type)!;
@@ -733,9 +733,17 @@ function bossFight(type: string, build: { sword: string; armor: string; level: n
     const ids = Array.from({ length: size }, (_, i) => f.g.register(`Hunter${i}`).playerId);
     for (const id of ids) {
       const p = f.p(id);
-      f.give(id, { [build.sword]: 1, [build.armor]: 1 });
-      f.ok(id, 'equip', { item: build.sword });
-      f.ok(id, 'equip', { item: build.armor });
+      for (const [k, base] of [build.sword, build.armor].entries()) {
+        let item = base;
+        if (build.good) {
+          // Four affixes in the middle of tier 2, at the item level a forge hall gives.
+          item = `${base}${UNIQUE_SEP}${k}${id.slice(2, 10)}`;
+          const affixes = Object.values(AFFIXES).filter((a) => a.group === 'combat').map((a) => ({ id: a.id, tier: 2, value: Math.floor((AFFIX_RANGES[a.id][1][0] + AFFIX_RANGES[a.id][1][1]) / 2) }));
+          f.g.uniques.set(item, { id: item, base, ilvl: 30 + build.level + BUILDINGS.forge_hall.ilvlBonus!, rarity: 'rare', affixes, mods: 4, corrupted: false, craftedBy: 'test', craftedAt: 1 });
+        }
+        f.give(id, { [item]: 1 });
+        f.ok(id, 'equip', { item });
+      }
       p.focus = ['swords'];
       p.skills.swords = 10 * build.level * build.level;
       f.put(id, boss);
@@ -752,7 +760,7 @@ function bossFight(type: string, build: { sword: string; armor: string; level: n
         const p = f.p(id);
         if (p.zone !== boss.zone || p.stats.deaths) continue;
         standing++;
-        if (p.busyUntil > f.now()) continue;
+        if (p.busyUntil + lagMs > f.now()) continue;
         const hp = p.hp / f.g.maxHp(p);
         if (tactic === 'kite' && boss.engagedAt !== undefined && hp < 0.5) {
           if (!p.travel) send(id, 'move', dist(p.pos, far) > 2 ? { x: far.x, y: far.y } : { x: boss.home.x, y: boss.home.y });
@@ -771,26 +779,33 @@ function bossFight(type: string, build: { sword: string; armor: string; level: n
         if (r.ok && r.result.killed) return true;
       }
       if (!standing) return false;
-      f.pass(50);
+      f.pass(25);
     }
     return false;
   } finally { f.g.close(); }
 }
 
-test('bosses: food and buildings never let an ordinary player kill one alone', () => {
-  // Ordinary: no affixes. The forge hall's item level only brings affix tiers two crafting levels earlier, so the buff
-  // that could matter in a fight is Well fed.
-  const ordinary = [
+test('bosses: food and buildings never let a player who is not maxed out kill one alone', () => {
+  // The builds test/bosses.test.ts calls not maxed out, up to the strongest. The forge hall's +2 item level only
+  // brings affix tiers two crafting levels earlier, so the good affixes stand in for it; the rest is Well fed.
+  const notMaxed = [
     { sword: 'copper_sword', armor: 'leather_jerkin', level: 3 },
-    { sword: 'iron_sword', armor: 'iron_mail', level: 0 },
-    { sword: 'iron_sword', armor: 'bearhide_jerkin', level: 10 },
-    { sword: 'duskiron_sword', armor: 'wraithhide_armor', level: 0 },
+    { sword: 'copper_sword', armor: 'leather_jerkin', level: 30 },
+    { sword: 'iron_sword', armor: 'iron_mail', level: 30 },
+    { sword: 'iron_sword', armor: 'bearhide_jerkin', level: 30 },
     { sword: 'duskiron_sword', armor: 'wraithhide_armor', level: 10 },
+    { sword: 'duskiron_sword', armor: 'wraithhide_armor', level: 30 },
+    { sword: 'duskiron_sword', armor: 'wraithhide_armor', level: 15, good: true },
+    { sword: 'duskiron_sword', armor: 'wyrmscale_mail', level: 30 },
   ];
   for (const type of ['elder_bear', 'ash_wyrm']) {
-    for (const build of ordinary) {
+    const maxedOut = { sword: 'duskiron_sword', armor: 'wyrmscale_mail', level: 30, good: true };
+    assert.equal(bossFight(type, maxedOut, 1, true, 'stand'), true, `this fight script can win: a maxed player solos the ${type}`);
+    for (const build of notMaxed) {
       for (const tactic of ['stand', 'kite'] as const) {
-        assert.equal(bossFight(type, build, 1, true, tactic), false, `${build.sword}/${build.armor} level ${build.level} (${tactic}) soloed the ${type} Well fed`);
+        for (const lag of [0, 100]) {
+          assert.equal(bossFight(type, build, 1, true, tactic, lag), false, `${build.sword}/${build.armor} level ${build.level}${build.good ? ' with affixes' : ''} (${tactic}, ${lag} ms lag) soloed the ${type} Well fed`);
+        }
       }
     }
   }
